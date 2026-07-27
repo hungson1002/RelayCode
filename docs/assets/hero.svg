@@ -1,0 +1,37 @@
+<svg width="1200" height="520" viewBox="0 0 1200 520" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="520" rx="32" fill="#17191B"/>
+  <rect x="1" y="1" width="1198" height="518" rx="31" stroke="#3B3E42" stroke-width="2"/>
+  <circle cx="110" cy="103" r="52" fill="#202225" stroke="#414448" stroke-width="2"/>
+  <path d="M128 121C111 138 83 138 66 121C49 104 49 76 66 59C83 42 111 42 128 59" stroke="#F4F5F5" stroke-width="9" stroke-linecap="round"/>
+  <path d="M96 91L137 50M119 50H138V69" stroke="#69D8BE" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="184" y="92" fill="#F4F5F5" font-family="Segoe UI, Arial, sans-serif" font-size="45" font-weight="700">Lối</text>
+  <text x="184" y="127" fill="#9FA3A8" font-family="Segoe UI, Arial, sans-serif" font-size="20">AI Coding Agent</text>
+  <text x="64" y="224" fill="#F4F5F5" font-family="Segoe UI, Arial, sans-serif" font-size="42" font-weight="650">One workspace. Any model.</text>
+  <text x="64" y="267" fill="#A9ADB2" font-family="Segoe UI, Arial, sans-serif" font-size="20">Plan, edit, run, review — while you stay in control.</text>
+  <g font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="600">
+    <rect x="64" y="319" width="104" height="38" rx="19" fill="#F1F2F3"/><text x="94" y="343" fill="#181A1C">Agent</text>
+    <rect x="180" y="319" width="94" height="38" rx="19" fill="#25282B" stroke="#44484D"/><text x="211" y="343" fill="#D7D9DB">Chat</text>
+    <rect x="286" y="319" width="90" height="38" rx="19" fill="#25282B" stroke="#44484D"/><text x="318" y="343" fill="#D7D9DB">Plan</text>
+  </g>
+  <text x="64" y="419" fill="#69D8BE" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">Mọi model. Một lối làm việc.</text>
+  <g transform="translate(690 60)">
+    <rect width="446" height="400" rx="22" fill="#202225" stroke="#414448" stroke-width="2"/>
+    <circle cx="27" cy="28" r="5" fill="#69D8BE"/>
+    <text x="42" y="34" fill="#D8DADC" font-family="Segoe UI, Arial, sans-serif" font-size="14">Connected</text>
+    <text x="316" y="34" fill="#8E9398" font-family="Segoe UI, Arial, sans-serif" font-size="13">History   Settings</text>
+    <line x1="0" y1="57" x2="446" y2="57" stroke="#34373B"/>
+    <rect x="86" y="88" width="330" height="54" rx="16" fill="#2B2D30"/>
+    <text x="110" y="121" fill="#E3E4E5" font-family="Segoe UI, Arial, sans-serif" font-size="15">Add validation and run the tests</text>
+    <text x="28" y="190" fill="#8F9499" font-family="Segoe UI, Arial, sans-serif" font-size="12">EDITED FILES · RAN COMMANDS</text>
+    <text x="28" y="229" fill="#E8E9EA" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">Validation is ready.</text>
+    <text x="28" y="260" fill="#B7BBC0" font-family="Segoe UI, Arial, sans-serif" font-size="14">Tests passed and the changes are staged for review.</text>
+    <rect x="28" y="292" width="390" height="52" rx="12" fill="#282A2D" stroke="#3E4145"/>
+    <text x="45" y="323" fill="#D6D8DA" font-family="Segoe UI, Arial, sans-serif" font-size="14">3 files changed</text>
+    <text x="171" y="323" fill="#69D8BE" font-family="Segoe UI, Arial, sans-serif" font-size="14">+48</text>
+    <text x="211" y="323" fill="#F08C8C" font-family="Segoe UI, Arial, sans-serif" font-size="14">−12</text>
+    <rect x="335" y="304" width="67" height="28" rx="8" fill="#F0F1F2"/>
+    <text x="349" y="323" fill="#181A1C" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="600">Review</text>
+    <rect x="28" y="361" width="390" height="20" rx="10" fill="#2C2E31"/>
+    <rect x="28" y="361" width="224" height="20" rx="10" fill="#34373A"/>
+  </g>
+</svg>

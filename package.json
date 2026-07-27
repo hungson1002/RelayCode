@@ -1,0 +1,284 @@
+{
+  "name": "loi-agent",
+  "displayName": "Lối — AI Coding Agent",
+  "description": "A focused AI coding workspace with Agent, Chat, Plan, multi-provider routing, MCP tools and safe reviewable changes.",
+  "version": "1.0.0",
+  "publisher": "local",
+  "icon": "media/icon.png",
+  "license": "MIT",
+  "author": {
+    "name": "Lối"
+  },
+  "keywords": [
+    "ai",
+    "assistant",
+    "codex",
+    "chat",
+    "agent",
+    "9router",
+    "openai",
+    "anthropic",
+    "claude",
+    "ollama",
+    "local-first",
+    "mcp",
+    "telemetry"
+  ],
+  "engines": {
+    "vscode": "^1.100.0",
+    "node": ">=20.0.0"
+  },
+  "categories": [
+    "AI",
+    "Machine Learning",
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:nineRouter.chatView",
+    "onCommand:nineRouter.openChat",
+    "onCommand:nineRouter.configure",
+    "onCommand:nineRouter.openDashboard"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nineRouter.openChat",
+        "title": "Open Chat",
+        "category": "Lối",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "nineRouter.configure",
+        "title": "Configure Provider",
+        "category": "Lối",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nineRouter.newThread",
+        "title": "New Thread",
+        "category": "Lối",
+        "icon": "$(add)"
+      },
+      {
+        "command": "nineRouter.openDashboard",
+        "title": "Open Provider Dashboard",
+        "category": "Lối",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "nineRouter.showLogs",
+        "title": "Show Agent Logs",
+        "category": "Lối",
+        "icon": "$(output)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nineRouter",
+          "title": "Lối",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "nineRouter": [
+        {
+          "type": "webview",
+          "id": "nineRouter.chatView",
+          "name": "AI Coding Agent"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "nineRouter.newThread",
+          "when": "view == nineRouter.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nineRouter.configure",
+          "when": "view == nineRouter.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "nineRouter.openDashboard",
+          "when": "view == nineRouter.chatView",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Lối — AI Coding Agent",
+      "properties": {
+        "nineRouter.language": {
+          "type": "string",
+          "enum": [
+            "vi",
+            "en"
+          ],
+          "enumDescriptions": [
+            "Tiếng Việt",
+            "English"
+          ],
+          "default": "vi",
+          "description": "Interface language used by the Lối sidebar."
+        },
+        "nineRouter.provider": {
+          "type": "string",
+          "enum": [
+            "9router",
+            "openai",
+            "anthropic",
+            "openai-compatible",
+            "ollama",
+            "lm-studio"
+          ],
+          "default": "9router",
+          "enumDescriptions": [
+            "🔷 9Router - Local-first routing with multi-model support",
+            "🤖 OpenAI - GPT-4, GPT-3.5 and more",
+            "🧠 Anthropic - Claude family models",
+            "🔌 OpenAI-Compatible - Custom endpoints (Together, Groq, etc.)",
+            "🦙 Ollama - Local models running on your machine",
+            "🎨 LM Studio - Local model server with UI"
+          ],
+          "description": "🌐 AI provider for chat and Agent mode. Choose your preferred model source."
+        },
+        "nineRouter.endpoint": {
+          "type": "string",
+          "default": "http://localhost:20128/v1",
+          "description": "🔗 9Router OpenAI-compatible API endpoint URL."
+        },
+        "nineRouter.defaultMode": {
+          "type": "string",
+          "enum": [
+            "chat",
+            "agent"
+          ],
+          "default": "agent",
+          "enumDescriptions": [
+            "💬 Chat - Direct conversation with AI",
+            "🤖 Agent - AI with workspace tool access"
+          ],
+          "description": "🎯 Default mode when opening the chat view."
+        },
+        "nineRouter.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "🎭 Default model ID to select on startup. Leave empty for provider default. Supports custom 9Router model names."
+        },
+        "nineRouter.fallbackModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Model IDs tried in order when the selected model fails before producing a response."
+        },
+        "nineRouter.monthlyCostLimit": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Estimated monthly cost limit in USD. 0 disables the limit."
+        },
+        "nineRouter.commandAllowList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Optional command prefixes Agent may run."
+        },
+        "nineRouter.commandDenyList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "format-volume",
+            "diskpart",
+            "shutdown",
+            "remove-item -recurse"
+          ],
+          "description": "Command fragments Agent must never run, including in Full access."
+        },
+        "nineRouter.planBeforeRun": {
+          "type": "boolean",
+          "default": false,
+          "description": "Ask Agent to state a short plan before using tools."
+        },
+        "nineRouter.notifyOnComplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show an IDE notification when an Agent task completes."
+        },
+        "nineRouter.sandboxImage": {
+          "type": "string",
+          "default": "node:22-bookworm",
+          "description": "Docker/Podman image used for isolated Agent commands."
+        },
+        "nineRouter.sandboxMemory": {
+          "type": "string",
+          "default": "1g",
+          "description": "Container memory limit, for example 1g or 2048m."
+        },
+        "nineRouter.sandboxCpus": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0.25,
+          "description": "Container CPU limit."
+        },
+        "nineRouter.sandboxNetwork": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow network access inside Agent sandbox."
+        },
+        "nineRouter.contextMaxChars": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 16000,
+          "description": "Maximum context characters sent in one request before automatic compaction."
+        },
+        "nineRouter.confirmFallback": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before switching to a fallback model."
+        },
+        "nineRouter.codexCommand": {
+          "type": "string",
+          "default": "codex",
+          "description": "⚙️ Codex CLI executable name or path for Agent mode operations."
+        },
+        "nineRouter.routerCommand": {
+          "type": "string",
+          "default": "9router",
+          "description": "🚀 9Router CLI executable name or path. Used to start the local server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && npm run build",
+    "package": "npm run check && vsce package --no-dependencies --allow-missing-repository --no-rewrite-relative-links"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "sharp": "^0.35.3",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}

@@ -1,0 +1,35 @@
+# Dependencies and generated builds
+node_modules/
+dist/
+out/
+coverage/
+.nyc_output/
+.vitest/
+*.tsbuildinfo
+*.vsix
+
+# Local test and editor state
+.vscode-test/
+.idea/
+.history/
+*.code-workspace
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Logs, caches and temporary files
+*.log
+*.tmp
+*.temp
+.cache/
+.turbo/
+.eslintcache
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini

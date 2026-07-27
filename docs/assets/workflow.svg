@@ -1,0 +1,39 @@
+<svg width="1200" height="270" viewBox="0 0 1200 270" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="270" rx="24" fill="#1B1D1F"/>
+  <rect x="1" y="1" width="1198" height="268" rx="23" stroke="#3A3D41" stroke-width="2"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <g transform="translate(48 58)">
+      <rect width="190" height="152" rx="18" fill="#242629" stroke="#404348"/>
+      <text x="22" y="35" fill="#69D8BE" font-size="13" font-weight="700">01 · ASK</text>
+      <text x="22" y="76" fill="#F0F1F2" font-size="20" font-weight="650">Describe the task</text>
+      <text x="22" y="107" fill="#9FA4A9" font-size="14">Add files, images</text>
+      <text x="22" y="130" fill="#9FA4A9" font-size="14">or workspace context.</text>
+    </g>
+    <path d="M253 134H292" stroke="#555A60" stroke-width="2"/><path d="M283 125L292 134L283 143" stroke="#69D8BE" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(307 58)">
+      <rect width="190" height="152" rx="18" fill="#242629" stroke="#404348"/>
+      <text x="22" y="35" fill="#69D8BE" font-size="13" font-weight="700">02 · WORK</text>
+      <text x="22" y="76" fill="#F0F1F2" font-size="20" font-weight="650">Agent takes action</text>
+      <text x="22" y="107" fill="#9FA4A9" font-size="14">Reads, edits and runs</text>
+      <text x="22" y="130" fill="#9FA4A9" font-size="14">inside your policy.</text>
+    </g>
+    <path d="M512 134H551" stroke="#555A60" stroke-width="2"/><path d="M542 125L551 134L542 143" stroke="#69D8BE" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(566 58)">
+      <rect width="190" height="152" rx="18" fill="#242629" stroke="#404348"/>
+      <text x="22" y="35" fill="#69D8BE" font-size="13" font-weight="700">03 · REVIEW</text>
+      <text x="22" y="76" fill="#F0F1F2" font-size="20" font-weight="650">Inspect every change</text>
+      <text x="22" y="107" fill="#9FA4A9" font-size="14">See files, hunks,</text>
+      <text x="22" y="130" fill="#9FA4A9" font-size="14">commands and output.</text>
+    </g>
+    <path d="M771 134H810" stroke="#555A60" stroke-width="2"/><path d="M801 125L810 134L801 143" stroke="#69D8BE" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(825 58)">
+      <rect width="327" height="152" rx="18" fill="#242629" stroke="#404348"/>
+      <text x="22" y="35" fill="#69D8BE" font-size="13" font-weight="700">04 · DECIDE</text>
+      <text x="22" y="76" fill="#F0F1F2" font-size="20" font-weight="650">Accept or undo</text>
+      <rect x="22" y="99" width="118" height="34" rx="9" fill="#F0F1F2"/>
+      <text x="54" y="121" fill="#181A1C" font-size="13" font-weight="650">Accept</text>
+      <rect x="152" y="99" width="100" height="34" rx="9" fill="#2C2F32" stroke="#4B4F54"/>
+      <text x="184" y="121" fill="#D7D9DB" font-size="13" font-weight="650">Undo</text>
+    </g>
+  </g>
+</svg>
