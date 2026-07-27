@@ -5,9 +5,15 @@ import type { ProviderClient } from './provider';
 import type { ExternalAgentTool } from './mcpManager';
 import type { StreamCallbacks } from './types';
 import { validateCommandPolicy } from './safetyPolicy';
+import { countLineChanges } from './diffHunks';
+import { requiresWorkspaceMutation } from './agentIntent';
 
 const tools: Array<Record<string, unknown>> = [
   tool('read_file', 'Đọc một file trong workspace.', { path: stringField('Đường dẫn tương đối') }, ['path']),
+  tool('read_skill_file', 'Đọc file tham chiếu nằm trong một skill đang được kích hoạt.', {
+    skill: stringField('Tên skill đã được kích hoạt'),
+    path: stringField('Đường dẫn tương đối tính từ thư mục chứa SKILL.md')
+  }, ['skill', 'path']),
   tool('list_files', 'Liệt kê file trong workspace theo glob.', { pattern: stringField('Glob, ví dụ src/**/*.ts') }, ['pattern']),
   tool('search_text', 'Tìm một chuỗi trong các file của workspace.', { query: stringField('Chuỗi cần tìm'), pattern: stringField('Glob tùy chọn, ví dụ **/*.ts') }, ['query']),
   tool('write_file', 'Ghi toàn bộ nội dung file trong workspace.', { path: stringField('Đường dẫn tương đối'), content: stringField('Nội dung mới') }, ['path', 'content']),
@@ -33,17 +39,27 @@ export class AgentRuntime {
     private readonly readOnly = false,
     private readonly externalTools: ExternalAgentTool[] = [],
     private readonly commandPolicy: { allow: string[]; deny: string[] } = { allow: [], deny: [] },
-    private readonly commandRunner?: (command: string, toolName: string, callbacks: StreamCallbacks, signal?: AbortSignal) => Promise<string>
+    private readonly commandRunner?: (command: string, toolName: string, callbacks: StreamCallbacks, signal?: AbortSignal) => Promise<string>,
+    private readonly runtimeInstructions = '',
+    private readonly conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [],
+    private readonly beforeFirstMutation?: () => Promise<void>,
+    private readonly activeSkills: Array<{ name: string; path: string }> = []
   ) {}
+  private mutationPreparation: Promise<void> | undefined;
 
   public async run(prompt: unknown, model: string, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<void> {
+    const mutationRequired = !this.readOnly && requiresWorkspaceMutation(prompt);
+    let successfulMutations = 0;
+    let completionWithoutActionCount = 0;
+    const baseInstruction = this.readOnly
+      ? 'Bạn là coding planner trong IDE. Đọc workspace và lập kế hoạch cụ thể. Không được sửa file hoặc chạy lệnh trong Plan mode. Trả lời bằng Markdown ngắn gọn.'
+      : 'Bạn là coding agent trong IDE. Dùng tools để kiểm tra workspace trước khi kết luận. Chỉ thao tác trong workspace. Nếu người dùng yêu cầu tạo, sửa, thêm hoặc xóa file, bạn bắt buộc phải gọi write_file hoặc apply_patch và kiểm tra kết quả; không được chỉ tuyên bố đã hoàn tất. Sau khi sửa, chạy kiểm tra phù hợp. Phản hồi cuối phải ngắn gọn: nói chính xác kết quả trước, liệt kê những file hoặc nội dung đã thay đổi bằng bullet tròn, dùng chữ đậm cho ý chính, bọc tên hàm/lệnh trong backtick, và viết đường dẫn file dạng liên kết Markdown [tên file](đường/dẫn/file:line) để người dùng có thể bấm mở. Không dùng emoji hoặc icon trang trí trong câu trả lời. Nếu chưa thực hiện được, nói rõ chưa hoàn thành và nguyên nhân. Không thuật lại từng bước suy luận hay lặp lại log công cụ.';
     const messages: Array<Record<string, unknown>> = [
       {
         role: 'system',
-        content: this.readOnly
-          ? 'Bạn là coding planner trong IDE. Đọc workspace và lập kế hoạch cụ thể. Không được sửa file hoặc chạy lệnh trong Plan mode. Trả lời bằng Markdown ngắn gọn.'
-          : 'Bạn là coding agent trong IDE. Dùng tools để kiểm tra workspace trước khi kết luận. Chỉ thao tác trong workspace. Sau khi sửa, chạy kiểm tra phù hợp. Phản hồi cuối phải ngắn gọn: nói kết quả trước, liệt kê những gì đã làm bằng bullet tròn, dùng chữ đậm cho ý chính, bọc tên hàm/lệnh trong backtick, và viết đường dẫn file dạng liên kết Markdown [tên file](đường/dẫn/file:line) để người dùng có thể bấm mở. Không thuật lại từng bước suy luận hay lặp lại log công cụ.'
+        content: [baseInstruction, this.runtimeInstructions].filter(Boolean).join('\n\n')
       },
+      ...this.conversationHistory.slice(-12).map((message) => ({ role: message.role, content: message.content.slice(0, 16_000) })),
       { role: 'user', content: prompt }
     ];
     for (let step = 0; step < 16; step++) {
@@ -51,7 +67,20 @@ export class AgentRuntime {
       const response = await this.client.completeWithTools(model, messages, [...tools, ...this.externalTools.map((item) => item.definition)], signal);
       callbacks.onMetrics?.(response.metrics);
       if (!response.toolCalls.length) {
-        callbacks.onDelta(response.content || 'Đã hoàn tất.');
+        if (mutationRequired && successfulMutations === 0) {
+          completionWithoutActionCount++;
+          if (completionWithoutActionCount >= 3) {
+            throw new Error('Agent chưa tạo hoặc sửa file nào sau 3 lần yêu cầu thực hiện. Model hiện tại có thể không hỗ trợ tool calling ổn định; hãy thử model Agent/agentic khác.');
+          }
+          messages.push({ role: 'assistant', content: response.content || null });
+          messages.push({
+            role: 'user',
+            content: 'Bạn chưa tạo hoặc sửa file nào. Hãy tiếp tục ngay bằng write_file hoặc apply_patch. Chỉ kết luận hoàn thành sau khi tool trả về thành công.'
+          });
+          callbacks.onStatus('Agent chưa tạo thay đổi · đang yêu cầu model tiếp tục');
+          continue;
+        }
+        callbacks.onDelta(response.content || 'Không có nội dung phản hồi từ model.');
         callbacks.onStatus('Hoàn tất');
         return;
       }
@@ -68,6 +97,9 @@ export class AgentRuntime {
         let result: string;
         try { result = await this.execute(call.name, args, callbacks, signal); }
         catch (error) { result = `ERROR: ${error instanceof Error ? error.message : String(error)}`; }
+        if ((call.name === 'write_file' || call.name === 'apply_patch') && !/^(ERROR|DENIED):?/i.test(result)) {
+          successfulMutations++;
+        }
         messages.push({ role: 'tool', tool_call_id: call.id, content: result.slice(0, 30_000) });
       }
     }
@@ -80,6 +112,7 @@ export class AgentRuntime {
     if (name === 'run_tests') return `Đang chạy kiểm tra: ${short(args.command, 'npm test')}`;
     if (name === 'write_file' || name === 'apply_patch') return `Đang sửa file: ${short(args.path, 'workspace')}`;
     if (name === 'read_file') return `Đang đọc file: ${short(args.path, 'workspace')}`;
+    if (name === 'read_skill_file') return `Đang đọc tài nguyên skill: ${short(args.skill, 'skill')} / ${short(args.path, 'file')}`;
     if (name === 'list_files') return `Đang xem cấu trúc dự án: ${short(args.pattern, '**/*')}`;
     if (name === 'search_text') return `Đang tìm trong dự án: ${short(args.query, 'nội dung')}`;
     const external = this.externalTools.find((item) => (item.definition.function as { name?: string } | undefined)?.name === name);
@@ -97,6 +130,21 @@ export class AgentRuntime {
     if (name === 'read_file') {
       const uri = this.workspaceUri(String(args.path ?? ''));
       return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    }
+    if (name === 'read_skill_file') {
+      const skillName = String(args.skill ?? '').trim().toLowerCase();
+      const resourcePath = String(args.path ?? '').trim();
+      const skill = this.activeSkills.find((item) => item.name.toLowerCase() === skillName);
+      if (!skill) return `DENIED: Skill "${skillName || 'unknown'}" chưa được kích hoạt trong cuộc trò chuyện này.`;
+      if (!resourcePath) return 'ERROR: path cannot be empty.';
+      const root = resolve(dirname(skill.path));
+      const target = resolve(root, resourcePath);
+      if (target !== root && !target.startsWith(`${root}${sep}`)) {
+        return 'DENIED: Đường dẫn nằm ngoài thư mục skill.';
+      }
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(target));
+      if (bytes.byteLength > 120_000) return 'ERROR: Tài nguyên skill lớn hơn giới hạn 120 KB.';
+      return new TextDecoder().decode(bytes);
     }
     if (name === 'list_files') {
       const uris = await vscode.workspace.findFiles(String(args.pattern ?? '**/*'), '**/{node_modules,.git,dist,out}/**', 300);
@@ -124,13 +172,10 @@ export class AgentRuntime {
       let original: Uint8Array; let existed = true;
       try { original = await vscode.workspace.fs.readFile(uri); } catch { original = new Uint8Array(); existed = false; }
       const updated = new TextEncoder().encode(String(args.content ?? ''));
+      await this.prepareMutation();
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(uri.fsPath)));
       await vscode.workspace.fs.writeFile(uri, updated);
-      const before = new TextDecoder().decode(original).split(/\r?\n/);
-      const after = new TextDecoder().decode(updated).split(/\r?\n/);
-      let added = 0; let removed = 0;
-      const max = Math.max(before.length, after.length);
-      for (let index = 0; index < max; index++) { if (before[index] !== after[index]) { if (after[index] !== undefined) added++; if (before[index] !== undefined) removed++; } }
+      const { added, removed } = countLineChanges(original, updated);
       this.onChange({ path: uri.fsPath, original, updated, existed, added, removed });
       return 'File saved.';
     }
@@ -146,10 +191,9 @@ export class AgentRuntime {
       if (occurrences !== 1) return `ERROR: expected exactly one match, found ${occurrences}.`;
       const original = new TextEncoder().encode(current);
       const updated = new TextEncoder().encode(current.replace(oldText, newText));
+      await this.prepareMutation();
       await vscode.workspace.fs.writeFile(uri, updated);
-      const before = current.split(/\r?\n/); const after = new TextDecoder().decode(updated).split(/\r?\n/);
-      let added = 0; let removed = 0; const max = Math.max(before.length, after.length);
-      for (let index = 0; index < max; index++) { if (before[index] !== after[index]) { if (after[index] !== undefined) added++; if (before[index] !== undefined) removed++; } }
+      const { added, removed } = countLineChanges(original, updated);
       this.onChange({ path: uri.fsPath, original, updated, existed: true, added, removed });
       return 'Patch applied.';
     }
@@ -178,6 +222,11 @@ export class AgentRuntime {
 
   private commandPolicyError(command: string): string | undefined {
     return validateCommandPolicy(command, this.commandPolicy);
+  }
+
+  private prepareMutation(): Promise<void> {
+    if (!this.mutationPreparation) this.mutationPreparation = this.beforeFirstMutation?.() ?? Promise.resolve();
+    return this.mutationPreparation;
   }
 
   private runStreamingCommand(command: string, toolName: string, callbacks: StreamCallbacks, signal?: AbortSignal): Promise<string> {

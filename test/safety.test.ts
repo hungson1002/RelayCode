@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { validateCommandPolicy } from '../src/safetyPolicy';
-import { applyForward, applyReverse, createDiffHunks } from '../src/diffHunks';
-import { buildContainerArgs } from '../src/sandboxArgs';
+import { applyForward, applyReverse, countLineChanges, createDiffHunks } from '../src/diffHunks';
 
 const encode = (value: string) => new TextEncoder().encode(value);
 const decode = (value: Uint8Array) => new TextDecoder().decode(value);
@@ -19,17 +18,25 @@ describe('Agent safety policy', () => {
   });
 });
 
-describe('Sandbox command construction', () => {
-  it('disables network and drops capabilities by default', () => {
-    const args = buildContainerArgs('C:\\work', { image: 'node:22-bookworm', memory: '1g', cpus: 2, network: false }, 'npm test');
-    expect(args).toContain('none');
-    expect(args).toContain('ALL');
-    expect(args).toContain('node:22-bookworm');
-    expect(args.at(-1)).toBe('npm test');
-  });
-});
-
 describe('Diff hunks', () => {
+  it('counts insertions and deletions using an actual edit script', () => {
+    expect(countLineChanges(encode('two\nthree\n'), encode('one\ntwo\nthree\n'))).toEqual({ added: 1, removed: 0 });
+    expect(countLineChanges(encode('one\ntwo\nthree\n'), encode('one\nthree\n'))).toEqual({ added: 0, removed: 1 });
+    expect(countLineChanges(encode('one\ntwo\n'), encode('one\nTWO\n'))).toEqual({ added: 1, removed: 1 });
+  });
+
+  it('does not count a trailing newline as a changed content line', () => {
+    expect(countLineChanges(encode('one'), encode('one\n'))).toEqual({ added: 0, removed: 0 });
+  });
+
+  it('counts a small insertion accurately in files beyond the hunk LCS threshold', () => {
+    const lines = Array.from({ length: 1_600 }, (_, index) => `line ${index}`);
+    expect(countLineChanges(
+      encode(`${lines.join('\n')}\n`),
+      encode(`inserted\n${lines.join('\n')}\n`)
+    )).toEqual({ added: 1, removed: 0 });
+  });
+
   it('accepts and undoes an individual hunk', () => {
     const original = encode('one\ntwo\nthree\n');
     const updated = encode('one\nTWO\nthree\nfour\n');

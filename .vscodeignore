@@ -1,9 +1,16 @@
+.git/**
 .github/**
 .vscode/**
+.codegraph/**
 src/**
 test/**
+scripts/**
+landing-page/**
 node_modules/**
 coverage/**
+*.vsix
+.gitignore
 tsconfig.json
 esbuild.mjs
-*.vsix
+vitest.config.*
+dist/**/*.map

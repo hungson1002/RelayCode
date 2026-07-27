@@ -27,7 +27,7 @@ Lối dành cho người muốn sử dụng coding agent đa model nhưng vẫn 
 | **Theo dõi khi thực hiện** | Xem lệnh, output terminal, tool call và tiến trình ngay trong cuộc trò chuyện. |
 | **Xem lại thay đổi** | Kiểm tra từng file hoặc từng hunk, sau đó Accept hay Undo theo file, tác vụ hoặc toàn bộ. |
 | **Chính sách quyền** | Hỏi trước, cho phép sửa file hoặc bật Full access với bước xác nhận rõ ràng. |
-| **Chạy an toàn hơn** | Workspace Trust, chính sách lệnh, Git checkpoint và sandbox Docker/Podman tùy chọn. |
+| **Chạy an toàn hơn** | Workspace Trust, chính sách lệnh, Git checkpoint chạy nền và thay đổi chờ duyệt. |
 | **Công cụ MCP** | Kết nối dịch vụ qua OAuth, API key, HTTP hoặc MCP stdio chạy local. |
 | **Kiểm tra model** | Xem model nào hoạt động, lưu yêu thích và thiết lập fallback có xác nhận. |
 | **Theo dõi sử dụng** | Xem token, chi phí ước tính, độ trễ và thông tin rate limit nếu provider cung cấp. |
@@ -90,11 +90,23 @@ Khung chat hỗ trợ file, ảnh dán từ clipboard và context nhanh:
 @problems
 ```
 
+Gõ `$` để tìm skill đã cài. Lối đọc các gói `SKILL.md` chuẩn từ `.agents/skills` trong workspace và `~/.agents/skills` của người dùng. Nội dung đầy đủ của skill chỉ được nạp khi bạn gọi rõ tên, ví dụ:
+
+```text
+$design-frontend Tạo landing page đẹp bằng HTML và CSS thuần.
+```
+
+Lối cũng đọc `AGENTS.md` ở cấp người dùng và project, bao gồm file gần nhất áp dụng cho file đang mở.
+
 Các lệnh nhanh:
 
 ```text
 /new
+/skills
 /models
+/plan
+/review
+/status
 /diagnostics
 /mcp
 /settings
@@ -103,6 +115,8 @@ Các lệnh nhanh:
 ```
 
 Sau khi hoàn thành, Lối hiển thị số file đã thay đổi cùng tổng dòng thêm và xóa. Bạn có thể mở **Review** để xem full diff hoặc từng hunk, sau đó chọn **Accept** hay **Undo**. Nếu Agent vừa tạo file mới, Undo sẽ xóa file đó.
+
+Phiên Agent giữ lại các lượt gần nhất nên câu tiếp nối như “tiếp tục đi” vẫn có ngữ cảnh của tác vụ hiện tại. Khi provider im lặng, timeline sẽ hiện thời gian đang chờ; bạn có thể đổi giới hạn bằng `nineRouter.agentInactivityTimeoutSeconds`.
 
 ## Quyền và an toàn
 
@@ -116,21 +130,9 @@ Các lớp bảo vệ quan trọng:
 
 - Workspace phải được Trust trước khi chạy Agent, terminal hoặc MCP.
 - Deny list chặn các đoạn lệnh phá hoại đã cấu hình ngay cả khi dùng Full access.
-- Nếu workspace là Git repository, Lối cố gắng tạo checkpoint trước mỗi tác vụ Agent.
+- Nếu workspace là Git repository, Lối tạo checkpoint chạy nền ngay trước lần sửa file đầu tiên khi có thể.
 - Thay đổi chờ duyệt được lưu để khôi phục sau khi IDE reload.
 - API key và token MCP được lưu bằng VS Code `SecretStorage`.
-
-## Chạy trong sandbox
-
-Lối có thể sao chép workspace sang thư mục tạm và chạy lệnh trong Docker hoặc Podman:
-
-- **Sandbox bắt buộc** — không chạy nếu thiếu container runtime.
-- **Sandbox ưu tiên** — dùng sandbox khi có và hỏi trước khi chuyển sang chạy trực tiếp.
-- **Chạy trực tiếp** — làm việc trong workspace thật theo mức quyền đang chọn.
-
-Container được bỏ bớt Linux capabilities, giới hạn CPU/RAM/PID và tắt mạng theo mặc định. Thay đổi trong sandbox chỉ được đưa vào workspace thật sau khi bạn Accept.
-
-> Docker hoặc Podman không bắt buộc. Chế độ chạy trực tiếp vẫn hoạt động khi máy không có container runtime.
 
 ## MCP
 
@@ -159,7 +161,6 @@ Xem đầy đủ tại <a href="https://github.com/hungson1002/Loi-Code/blob/mai
 
 - Muốn ước tính chi phí cloud, bạn cần nhập giá input/output trong hồ sơ provider.
 - Kiểm tra model sẽ gửi một request nhỏ và có thể sử dụng quota.
-- Sandbox tắt mạng không thể tải dependency còn thiếu.
 - Khả năng OAuth phụ thuộc chính sách của từng nhà cung cấp MCP.
 - Chất lượng Agent và khả năng dùng tool phụ thuộc model.
 

@@ -184,9 +184,11 @@ export class RouterClient {
     try {
       const body = JSON.parse(text) as { error?: { message?: string } | string; message?: string };
       const detail = typeof body.error === 'string' ? body.error : body.error?.message;
-      return detail || body.message || `9Router trả về HTTP ${response.status}.`;
+      const message = detail || body.message;
+      return message ? `HTTP ${response.status} · ${message}` : `9Router trả về HTTP ${response.status}.`;
     } catch {
-      return text.slice(0, 300) || `9Router trả về HTTP ${response.status}.`;
+      const message = text.slice(0, 300);
+      return message ? `HTTP ${response.status} · ${message}` : `9Router trả về HTTP ${response.status}.`;
     }
   }
 }

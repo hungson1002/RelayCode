@@ -10,6 +10,37 @@ export interface DiffHunk {
 
 type Op = { type: 'equal' | 'delete' | 'insert'; line: string };
 
+export interface LineChangeStats {
+  added: number;
+  removed: number;
+}
+
+export function countLineChanges(original: Uint8Array, updated: Uint8Array): LineChangeStats {
+  const before = lines(original);
+  const after = lines(updated);
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < before.length - prefix
+    && suffix < after.length - prefix
+    && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) suffix++;
+  const beforeLength = before.length - prefix - suffix;
+  const afterLength = after.length - prefix - suffix;
+  if (!beforeLength) return { added: afterLength, removed: 0 };
+  if (!afterLength) return { added: 0, removed: beforeLength };
+  const distance = shortestEditDistance(
+    before.slice(prefix, prefix + beforeLength),
+    after.slice(prefix, prefix + afterLength)
+  );
+  const delta = afterLength - beforeLength;
+  return {
+    added: (distance + delta) / 2,
+    removed: (distance - delta) / 2
+  };
+}
+
 export function createDiffHunks(original: Uint8Array, updated: Uint8Array): DiffHunk[] {
   const before = lines(original);
   const after = lines(updated);
@@ -98,6 +129,31 @@ function diff(before: string[], after: string[]): Op[] {
   while (left < before.length) ops.push({ type: 'delete', line: before[left++]! });
   while (right < after.length) ops.push({ type: 'insert', line: after[right++]! });
   return ops;
+}
+
+function shortestEditDistance(before: string[], after: string[]): number {
+  const maximum = before.length + after.length;
+  const offset = maximum + 1;
+  const furthest = new Int32Array((maximum * 2) + 3);
+  furthest.fill(-1);
+  furthest[offset + 1] = 0;
+  for (let distance = 0; distance <= maximum; distance++) {
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const index = offset + diagonal;
+      let x = diagonal === -distance
+        || (diagonal !== distance && furthest[index - 1]! < furthest[index + 1]!)
+        ? furthest[index + 1]!
+        : furthest[index - 1]! + 1;
+      let y = x - diagonal;
+      while (x < before.length && y < after.length && before[x] === after[y]) {
+        x++;
+        y++;
+      }
+      furthest[index] = x;
+      if (x >= before.length && y >= after.length) return distance;
+    }
+  }
+  return maximum;
 }
 
 function lines(value: Uint8Array): string[] {

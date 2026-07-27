@@ -134,7 +134,7 @@ export class RouterProcessManager implements vscode.Disposable {
       port,
       '--host',
       '127.0.0.1',
-      '--no-browser',
+      '--tray',
       '--skip-update'
     ];
 

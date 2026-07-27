@@ -25,7 +25,7 @@ export class GitCheckpointManager {
   public async create(workspaceRoot: string): Promise<GitCheckpoint | undefined> {
     try {
       const root = (await git(workspaceRoot, ['rev-parse', '--show-toplevel'])).trim();
-      let hash = (await git(root, ['stash', 'create', `9Router checkpoint ${new Date().toISOString()}`])).trim();
+      let hash = (await git(root, ['stash', 'create', `Loi Agent checkpoint ${new Date().toISOString()}`])).trim();
       if (!hash) hash = (await git(root, ['rev-parse', 'HEAD'])).trim();
       const checkpoint: GitCheckpoint = {
         id: `checkpoint-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,

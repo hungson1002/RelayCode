@@ -27,7 +27,7 @@ It is designed for developers who want a model-agnostic coding agent without giv
 | **Visible execution** | Follow commands, terminal output, tool calls and task progress directly in the conversation. |
 | **Reviewable edits** | Inspect changed files and individual hunks, then Accept or Undo per file, task or change set. |
 | **Approval policies** | Ask for approval, allow edits or enable Full access with an explicit confirmation. |
-| **Safer runs** | Workspace Trust, command policies, Git checkpoints and optional Docker/Podman isolation. |
+| **Safer runs** | Workspace Trust, command policies, lazy Git checkpoints and reviewable changes. |
 | **MCP tools** | Connect supported services through OAuth, API keys, HTTP or local stdio MCP servers. |
 | **Model health** | Check which models respond, keep favorites and configure confirmed fallback routing. |
 | **Usage visibility** | Inspect tokens, estimated cost, latency and available rate-limit headers. |
@@ -90,11 +90,23 @@ The composer supports files, pasted images and quick workspace context:
 @problems
 ```
 
+Type `$` to search installed agent skills. Lối discovers standard `SKILL.md` packages from `.agents/skills` in the workspace and `~/.agents/skills` for the user. A skill's full instructions are loaded only when you mention it, for example:
+
+```text
+$design-frontend Build a polished landing page in plain HTML and CSS.
+```
+
+Lối also reads global and project-scoped `AGENTS.md` files, including the closest applicable file for the active editor.
+
 Useful slash commands:
 
 ```text
 /new
+/skills
 /models
+/plan
+/review
+/status
 /diagnostics
 /mcp
 /settings
@@ -103,6 +115,8 @@ Useful slash commands:
 ```
 
 After a task, Lối shows the number of changed files and total additions/removals. Use **Review** for the full diff or individual hunks, then choose **Accept** or **Undo**. Undoing a newly created file removes that file.
+
+Agent sessions retain recent turns, so follow-ups such as “continue” preserve the current task context. While a provider is silent, the activity timeline shows elapsed wait time; the inactivity limit is configurable with `nineRouter.agentInactivityTimeoutSeconds`.
 
 ## Permissions and safety
 
@@ -116,21 +130,9 @@ Important safeguards:
 
 - VS Code Workspace Trust is required for Agent, terminal and MCP execution.
 - A deny list blocks configured destructive command fragments even in Full access.
-- Git repositories receive a checkpoint before Agent tasks when possible.
+- Git repositories receive a background checkpoint immediately before the first file mutation when possible.
 - Pending changes stay reviewable and can be recovered after an IDE reload.
 - Provider and MCP credentials are stored in VS Code `SecretStorage`.
-
-## Sandbox execution
-
-Lối can stage the workspace in a temporary directory and run commands inside Docker or Podman:
-
-- **Sandbox required** — refuse to run if no container runtime is available.
-- **Sandbox preferred** — use isolation when available and ask before falling back.
-- **Direct** — work in the real workspace under the selected approval policy.
-
-The container drops Linux capabilities, applies CPU/RAM/PID limits and disables network access by default. Sandbox changes are copied to the real workspace only after you accept them.
-
-> Docker or Podman is optional. Direct mode works without either runtime.
 
 ## MCP
 
@@ -159,7 +161,6 @@ Read the complete policy in <a href="https://github.com/hungson1002/Loi-Code/blo
 
 - Cloud cost estimates require input/output prices in the provider profile.
 - Model checks make a minimal request and may consume quota.
-- A network-disabled sandbox cannot download missing dependencies.
 - OAuth availability depends on each MCP provider's authorization policy.
 - Agent quality and tool support vary by model.
 

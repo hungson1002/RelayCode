@@ -2,8 +2,10 @@
   <rect width="1200" height="520" rx="32" fill="#17191B"/>
   <rect x="1" y="1" width="1198" height="518" rx="31" stroke="#3B3E42" stroke-width="2"/>
   <circle cx="110" cy="103" r="52" fill="#202225" stroke="#414448" stroke-width="2"/>
-  <path d="M128 121C111 138 83 138 66 121C49 104 49 76 66 59C83 42 111 42 128 59" stroke="#F4F5F5" stroke-width="9" stroke-linecap="round"/>
-  <path d="M96 91L137 50M119 50H138V69" stroke="#69D8BE" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(110 103) scale(.82) translate(-94 -90)">
+    <path d="M128 121C111 138 83 138 66 121C49 104 49 76 66 59C83 42 111 42 128 59" stroke="#F4F5F5" stroke-width="9" stroke-linecap="round"/>
+    <path d="M96 91L137 50M119 50H138V69" stroke="#69D8BE" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
   <text x="184" y="92" fill="#F4F5F5" font-family="Arial, sans-serif" font-size="43" font-weight="700">Lối</text>
   <text x="184" y="127" fill="#9FA3A8" font-family="Segoe UI, Arial, sans-serif" font-size="20">AI Coding Agent</text>
   <text x="64" y="224" fill="#F4F5F5" font-family="Arial, sans-serif" font-size="40" font-weight="700">One workspace. Any model.</text>

@@ -216,26 +216,12 @@
           "default": true,
           "description": "Show an IDE notification when an Agent task completes."
         },
-        "nineRouter.sandboxImage": {
-          "type": "string",
-          "default": "node:22-bookworm",
-          "description": "Docker/Podman image used for isolated Agent commands."
-        },
-        "nineRouter.sandboxMemory": {
-          "type": "string",
-          "default": "1g",
-          "description": "Container memory limit, for example 1g or 2048m."
-        },
-        "nineRouter.sandboxCpus": {
+        "nineRouter.agentInactivityTimeoutSeconds": {
           "type": "number",
-          "default": 2,
-          "minimum": 0.25,
-          "description": "Container CPU limit."
-        },
-        "nineRouter.sandboxNetwork": {
-          "type": "boolean",
-          "default": false,
-          "description": "Allow network access inside Agent sandbox."
+          "default": 180,
+          "minimum": 60,
+          "maximum": 900,
+          "description": "Stop a provider request after this many seconds without a completed model, tool or terminal event. Non-streaming Agent tool calls may legitimately take more than 60 seconds; progress heartbeats remain visible while waiting."
         },
         "nineRouter.contextMaxChars": {
           "type": "number",
@@ -247,11 +233,6 @@
           "type": "boolean",
           "default": true,
           "description": "Ask before switching to a fallback model."
-        },
-        "nineRouter.codexCommand": {
-          "type": "string",
-          "default": "codex",
-          "description": "⚙️ Codex CLI executable name or path for Agent mode operations."
         },
         "nineRouter.routerCommand": {
           "type": "string",
