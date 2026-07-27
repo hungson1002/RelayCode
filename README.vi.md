@@ -1,9 +1,9 @@
 <div align="center">
-  <img src="./docs/assets/hero.png" alt="Lối — AI Coding Agent" width="100%">
+  <img src="https://raw.githubusercontent.com/hungson1002/Loi-Code/main/docs/assets/hero.png" alt="Lối — AI Coding Agent" width="100%">
   <br><br>
   <strong>Không gian lập trình AI cho VS Code và Antigravity — dùng model của bạn, công cụ của bạn và luôn giữ quyền kiểm soát.</strong>
   <br><br>
-  <a href="./README.md">English</a> · <a href="./README.vi.md">Tiếng Việt</a>
+  <a href="https://github.com/hungson1002/Loi-Code/blob/main/README.md">English</a> · <a href="https://github.com/hungson1002/Loi-Code/blob/main/README.vi.md">Tiếng Việt</a>
 </div>
 
 ---
@@ -15,7 +15,7 @@ Lối đưa ba chế độ **Agent**, **Chat** và **Plan** vào một sidebar t
 Lối dành cho người muốn sử dụng coding agent đa model nhưng vẫn nhìn thấy và kiểm soát mọi thay đổi.
 
 <p align="center">
-  <img src="./docs/assets/workflow.png" alt="Quy trình giao việc, thực hiện, xem lại và chấp nhận hoặc hoàn tác" width="100%">
+  <img src="https://raw.githubusercontent.com/hungson1002/Loi-Code/main/docs/assets/workflow.png" alt="Quy trình giao việc, thực hiện, xem lại và chấp nhận hoặc hoàn tác" width="100%">
 </p>
 
 ## Chức năng nổi bật
@@ -51,7 +51,7 @@ Provider local thường không cần API key, nhưng server local phải đang 
 
 ### Cài từ bản phát hành
 
-1. Tải `loi-agent-1.0.0.vsix` trong mục Releases của repository.
+1. Tải `loi-agent-1.0.0.vsix` tại [trang phát hành của Lối](https://github.com/hungson1002/Loi-Code/releases).
 2. Mở VS Code hoặc Antigravity.
 3. Chạy **Extensions: Install from VSIX…** trong Command Palette.
 4. Chọn file vừa tải và reload IDE.
@@ -59,8 +59,8 @@ Provider local thường không cần API key, nhưng server local phải đang 
 ### Chạy từ source
 
 ```powershell
-git clone https://github.com/TEN_GITHUB_CUA_BAN/loi-ai-coding-agent.git
-cd loi-ai-coding-agent
+git clone https://github.com/hungson1002/Loi-Code.git
+cd Loi-Code
 npm install
 npm run check
 ```
@@ -153,7 +153,7 @@ Một số dịch vụ chỉ cho phép OAuth với ứng dụng đã được ph
 - Credential được lưu trong `SecretStorage` và không xuất hiện trong gói chẩn đoán.
 - Lịch sử chat, telemetry và thay đổi chờ duyệt nằm trên máy local.
 
-Xem đầy đủ tại <a href="./PRIVACY.md">PRIVACY.md</a>.
+Xem đầy đủ tại <a href="https://github.com/hungson1002/Loi-Code/blob/main/PRIVACY.md">PRIVACY.md</a>.
 
 ## Giới hạn hiện tại
 
@@ -177,4 +177,4 @@ Dự án yêu cầu Node.js 20+ và VS Code 1.100+.
 
 ## Giấy phép
 
-<a href="./LICENSE">MIT</a>
+<a href="https://github.com/hungson1002/Loi-Code/blob/main/LICENSE">MIT</a>

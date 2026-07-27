@@ -1,9 +1,9 @@
 <div align="center">
-  <img src="./docs/assets/hero.png" alt="Lối — AI Coding Agent" width="100%">
+  <img src="https://raw.githubusercontent.com/hungson1002/Loi-Code/main/docs/assets/hero.png" alt="Lối — AI Coding Agent" width="100%">
   <br><br>
   <strong>An AI coding workspace for VS Code and Antigravity — built around your models, your tools and your approval.</strong>
   <br><br>
-  <a href="./README.md">English</a> · <a href="./README.vi.md">Tiếng Việt</a>
+  <a href="https://github.com/hungson1002/Loi-Code/blob/main/README.md">English</a> · <a href="https://github.com/hungson1002/Loi-Code/blob/main/README.vi.md">Tiếng Việt</a>
 </div>
 
 ---
@@ -15,7 +15,7 @@ Lối brings **Agent**, **Chat** and **Plan** workflows into one focused sidebar
 It is designed for developers who want a model-agnostic coding agent without giving up visibility or control.
 
 <p align="center">
-  <img src="./docs/assets/workflow.png" alt="Ask, work, review, accept or undo workflow" width="100%">
+  <img src="https://raw.githubusercontent.com/hungson1002/Loi-Code/main/docs/assets/workflow.png" alt="Ask, work, review, accept or undo workflow" width="100%">
 </p>
 
 ## Highlights
@@ -51,7 +51,7 @@ Local providers do not normally require an API key, but their local server must 
 
 ### From a release
 
-1. Download `loi-agent-1.0.0.vsix` from the repository Releases page.
+1. Download `loi-agent-1.0.0.vsix` from the [Lối releases page](https://github.com/hungson1002/Loi-Code/releases).
 2. Open VS Code or Antigravity.
 3. Run **Extensions: Install from VSIX…** from the Command Palette.
 4. Select the downloaded file and reload the IDE.
@@ -59,8 +59,8 @@ Local providers do not normally require an API key, but their local server must 
 ### From source
 
 ```powershell
-git clone https://github.com/YOUR_GITHUB_USERNAME/loi-ai-coding-agent.git
-cd loi-ai-coding-agent
+git clone https://github.com/hungson1002/Loi-Code.git
+cd Loi-Code
 npm install
 npm run check
 ```
@@ -153,7 +153,7 @@ Some providers restrict OAuth to approved applications. In those cases, use the 
 - Credentials are kept in `SecretStorage` and excluded from diagnostics.
 - Chat history, telemetry and pending reviews remain on the local machine.
 
-Read the complete policy in <a href="./PRIVACY.md">PRIVACY.md</a>.
+Read the complete policy in <a href="https://github.com/hungson1002/Loi-Code/blob/main/PRIVACY.md">PRIVACY.md</a>.
 
 ## Current limitations
 
@@ -177,4 +177,4 @@ The project currently requires Node.js 20+ and VS Code 1.100+.
 
 ## License
 
-<a href="./LICENSE">MIT</a>
+<a href="https://github.com/hungson1002/Loi-Code/blob/main/LICENSE">MIT</a>
