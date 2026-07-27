@@ -436,36 +436,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private async startRouter(): Promise<void> {
     await this.context.globalState.update(DISCONNECTED_STATE, false);
     const routerCommand = vscode.workspace.getConfiguration('nineRouter').get('routerCommand', '9router');
-    if (!(await this.routerProcess.isInstalled(routerCommand))) {
-      const choice = await vscode.window.showInformationMessage(
-        '9Router chưa được cài trên máy này. Cài tự động ngay bây giờ?',
-        { modal: true },
-        'Cài 9Router',
-        'Để sau'
-      );
-      if (choice !== 'Cài 9Router') {
-        await this.post({ type: 'routerLaunch', progress: 'stopped', message: '9Router chưa chạy' });
-        return;
+    try {
+      if (!(await this.routerProcess.isInstalled(routerCommand))) {
+        const choice = await vscode.window.showInformationMessage(
+          '9Router chưa được cài trên máy này. Cài tự động ngay bây giờ?',
+          { modal: true },
+          'Cài 9Router',
+          'Để sau'
+        );
+        if (choice !== 'Cài 9Router') {
+          await this.post({ type: 'routerLaunch', progress: 'stopped', message: '9Router chưa chạy' });
+          return;
+        }
+        await this.post({ type: 'routerLaunch', progress: 'installing', message: 'Đang cài 9Router' });
+        await this.routerProcess.install(routerCommand, (message) => void this.post({ type: 'routerLaunch', progress: 'installing', message }));
       }
-      await this.post({ type: 'routerLaunch', progress: 'installing', message: 'Đang cài 9Router' });
-      await this.routerProcess.install(routerCommand, (message) => void this.post({ type: 'routerLaunch', progress: 'installing', message }));
+      const progressLabel: Record<RouterLaunchProgress, string> = {
+        checking: 'Đang kiểm tra cổng 9Router',
+        installing: 'Đang cài 9Router',
+        starting: 'Đang khởi động 9Router',
+        waiting: 'Đang chờ Dashboard sẵn sàng',
+        ready: '9Router đã sẵn sàng',
+        stopped: '9Router đã tắt'
+      };
+      const url = await this.routerProcess.ensureRunning(
+        this.endpoint,
+        routerCommand,
+        (progress) => void this.post({ type: 'routerLaunch', progress, message: progressLabel[progress] })
+      );
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+      await this.post({ type: 'browserOpened', url });
+      await this.refreshConnection(false);
+    } catch (error) {
+      const message = this.errorText(error);
+      await this.post({ type: 'routerLaunch', progress: 'stopped', message: 'Không thể khởi động 9Router' });
+      await this.post({ type: 'connection', connected: false, endpoint: this.endpoint, models: [], canStop: false, provider: '9router', message });
     }
-    const progressLabel: Record<RouterLaunchProgress, string> = {
-      checking: 'Đang kiểm tra cổng 9Router',
-      installing: 'Đang cài 9Router',
-      starting: 'Đang khởi động 9Router',
-      waiting: 'Đang chờ Dashboard sẵn sàng',
-      ready: '9Router đã sẵn sàng',
-      stopped: '9Router đã tắt'
-    };
-    const url = await this.routerProcess.ensureRunning(
-      this.endpoint,
-      routerCommand,
-      (progress) => void this.post({ type: 'routerLaunch', progress, message: progressLabel[progress] })
-    );
-    await vscode.env.openExternal(vscode.Uri.parse(url));
-    await this.post({ type: 'browserOpened', url });
-    await this.refreshConnection(false);
   }
 
   private async checkRouterConnection(): Promise<void> {

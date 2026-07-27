@@ -11,6 +11,7 @@ let assistantBody = null;
 let launchingRouter = false;
 let changeSummary = null;
 let activeProvider = '9router';
+let providerConnected = false;
 let pendingAssistantText = '';
 let typingTimer = 0;
 let assistantRawText = '';
@@ -903,7 +904,18 @@ function runConnectionDiagnostics() {
   $('retryDiagnostics').disabled = true;
   vscode.postMessage({ type: 'diagnostics' });
 }
-$('topDisconnect').addEventListener('click', runConnectionDiagnostics);
+$('topDisconnect').addEventListener('click', () => {
+  if (providerConnected) {
+    runConnectionDiagnostics();
+    return;
+  }
+  if (activeProvider === '9router') {
+    showSetup(true);
+    $('setup').scrollTop = 0;
+    return;
+  }
+  $('configPanel').classList.remove('hidden');
+});
 $('retryDiagnostics').addEventListener('click', runConnectionDiagnostics);
 $('closeConnectionDiagnostics').addEventListener('click', () => $('connectionDiagnostics').classList.add('hidden'));
 $('connectionDiagnostics').addEventListener('click', (event) => { if (event.target === $('connectionDiagnostics')) $('connectionDiagnostics').classList.add('hidden'); });
@@ -1075,6 +1087,7 @@ window.addEventListener('message', ({ data }) => {
     $('collapsedChanges').classList.add('hidden');
   } else if (data.type === 'connection') {
     activeProvider = data.provider || '9router';
+    providerConnected = Boolean(data.connected);
     const isRouter = activeProvider === '9router';
     const providerName = providerMeta[activeProvider]?.label || activeProvider;
     $('connectionDot').classList.toggle('online', data.connected);
@@ -1086,7 +1099,8 @@ window.addEventListener('message', ({ data }) => {
     $('connectionToggle').classList.toggle('hidden', !data.connected);
     $('connectionToggle').textContent = 'Kiểm tra';
     $('topDisconnect').classList.remove('hidden');
-    $('topDisconnect').textContent = 'Kiểm tra';
+    $('topDisconnect').textContent = data.connected ? 'Kiểm tra' : 'Kết nối';
+    $('topDisconnect').classList.toggle('connect-action', !data.connected);
     $('stopRouter').classList.toggle('hidden', !data.connected || !isRouter);
     $('localSetup').classList.toggle('hidden', !(activeProvider === 'ollama' || activeProvider === 'lm-studio'));
     $('setupTitle').textContent = isRouter ? 'Kết nối 9Router bằng một nút.' : 'Kết nối ' + providerName + ' để bắt đầu.';
@@ -1104,6 +1118,7 @@ window.addEventListener('message', ({ data }) => {
       $('openDashboard').classList.toggle('hidden', !isRouter);
       $('retryConnection').classList.remove('hidden');
       $('topDisconnect').textContent = 'Kiểm tra';
+      $('topDisconnect').classList.remove('connect-action');
     } else {
       $('startRouter').classList.toggle('hidden', !isRouter);
       $('openDashboard').classList.add('hidden');
@@ -1236,12 +1251,15 @@ window.addEventListener('message', ({ data }) => {
         ? 'Quá trình chạy nền, bạn có thể tiếp tục dùng IDE.'
         : 'Không cần mở terminal. Một nút là đủ để bắt đầu.';
     if (data.progress === 'stopped') {
+      providerConnected = false;
       $('startRouter').classList.remove('hidden');
       $('openDashboard').classList.add('hidden');
       $('retryConnection').classList.add('hidden');
       $('stopRouter').classList.add('hidden');
       $('connectionToggle').classList.add('hidden');
-      $('topDisconnect').classList.add('hidden');
+      $('topDisconnect').classList.remove('hidden');
+      $('topDisconnect').classList.add('connect-action');
+      $('topDisconnect').textContent = 'Kết nối';
     }
   } else if (data.type === 'browserOpened') {
     setRouterLaunchState('ready', 'Đã mở trình quản lý');
