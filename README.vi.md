@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./docs/assets/hero.svg" alt="Lối — AI Coding Agent" width="100%">
+  <img src="./docs/assets/hero.png" alt="Lối — AI Coding Agent" width="100%">
   <br><br>
   <strong>Không gian lập trình AI cho VS Code và Antigravity — dùng model của bạn, công cụ của bạn và luôn giữ quyền kiểm soát.</strong>
   <br><br>
@@ -15,7 +15,7 @@ Lối đưa ba chế độ **Agent**, **Chat** và **Plan** vào một sidebar t
 Lối dành cho người muốn sử dụng coding agent đa model nhưng vẫn nhìn thấy và kiểm soát mọi thay đổi.
 
 <p align="center">
-  <img src="./docs/assets/workflow.svg" alt="Quy trình giao việc, thực hiện, xem lại và chấp nhận hoặc hoàn tác" width="100%">
+  <img src="./docs/assets/workflow.png" alt="Quy trình giao việc, thực hiện, xem lại và chấp nhận hoặc hoàn tác" width="100%">
 </p>
 
 ## Chức năng nổi bật

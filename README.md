@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./docs/assets/hero.svg" alt="Lối — AI Coding Agent" width="100%">
+  <img src="./docs/assets/hero.png" alt="Lối — AI Coding Agent" width="100%">
   <br><br>
   <strong>An AI coding workspace for VS Code and Antigravity — built around your models, your tools and your approval.</strong>
   <br><br>
@@ -15,7 +15,7 @@ Lối brings **Agent**, **Chat** and **Plan** workflows into one focused sidebar
 It is designed for developers who want a model-agnostic coding agent without giving up visibility or control.
 
 <p align="center">
-  <img src="./docs/assets/workflow.svg" alt="Ask, work, review, accept or undo workflow" width="100%">
+  <img src="./docs/assets/workflow.png" alt="Ask, work, review, accept or undo workflow" width="100%">
 </p>
 
 ## Highlights
