@@ -1,5 +1,6 @@
 import { estimateTokens, normalizeEndpoint, parseSseData, requestMetrics } from './routerClient';
 import type { ChatMessage, ConnectionConfig, RequestMetrics, RouterModel } from './types';
+import type { ToolCompletionProgress } from './provider';
 
 type AnthropicContent =
   | { type: 'text'; text: string }
@@ -113,7 +114,8 @@ export class AnthropicClient {
     model: string,
     messages: Array<Record<string, unknown>>,
     tools: Array<Record<string, unknown>>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onProgress?: (progress: ToolCompletionProgress) => void
   ): Promise<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; metrics: RequestMetrics }> {
     const startedAt = Date.now();
     const converted = this.convertAgentMessages(messages);
@@ -145,6 +147,12 @@ export class AnthropicClient {
       usage?: { input_tokens?: number; output_tokens?: number };
     };
     const blocks = body.content ?? [];
+    for (const block of blocks) {
+      if (block.type === 'text' && block.text) onProgress?.({ type: 'content' });
+      if (block.type === 'tool_use' && block.name) {
+        onProgress?.({ type: 'tool', name: block.name, arguments: JSON.stringify(block.input ?? {}) });
+      }
+    }
     return {
       content: blocks.filter((block) => block.type === 'text').map((block) => block.text ?? '').join(''),
       toolCalls: blocks.flatMap((block) => block.type === 'tool_use' && block.id && block.name
@@ -218,6 +226,8 @@ export class AnthropicClient {
 
   private async describeError(response: Response): Promise<string> {
     const text = await response.text();
+    if (response.status === 403) return 'Anthropic từ chối quyền truy cập. Hãy kiểm tra API key và quyền sử dụng model.';
+    if (response.status === 401) return 'Anthropic API key không hợp lệ hoặc đã hết hạn. Hãy cập nhật khóa trong Cài đặt.';
     try {
       const body = JSON.parse(text) as { error?: { message?: string }; message?: string };
       return body.error?.message || body.message || `Anthropic trả về HTTP ${response.status}.`;

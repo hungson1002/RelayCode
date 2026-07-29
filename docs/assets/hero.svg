@@ -6,8 +6,9 @@
     <path d="M128 121C111 138 83 138 66 121C49 104 49 76 66 59C83 42 111 42 128 59" stroke="#F4F5F5" stroke-width="9" stroke-linecap="round"/>
     <path d="M96 91L137 50M119 50H138V69" stroke="#69D8BE" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
-  <text x="184" y="92" fill="#F4F5F5" font-family="Arial, sans-serif" font-size="43" font-weight="700">Lối</text>
+  <text x="184" y="92" fill="#F4F5F5" font-family="Arial, sans-serif" font-size="43" font-weight="700">RelayCode</text>
   <text x="184" y="127" fill="#9FA3A8" font-family="Segoe UI, Arial, sans-serif" font-size="20">AI Coding Agent</text>
+  <text x="184" y="151" fill="#69D8BE" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4">BY HUXON</text>
   <text x="64" y="224" fill="#F4F5F5" font-family="Arial, sans-serif" font-size="40" font-weight="700">One workspace. Any model.</text>
   <text x="64" y="267" fill="#A9ADB2" font-family="Segoe UI, Arial, sans-serif" font-size="20">Plan, edit, run, review — while you stay in control.</text>
   <g font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="600">
@@ -15,7 +16,7 @@
     <rect x="180" y="319" width="94" height="38" rx="19" fill="#25282B" stroke="#44484D"/><text x="211" y="343" fill="#D7D9DB">Chat</text>
     <rect x="286" y="319" width="90" height="38" rx="19" fill="#25282B" stroke="#44484D"/><text x="318" y="343" fill="#D7D9DB">Plan</text>
   </g>
-  <text x="64" y="419" fill="#69D8BE" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">Mọi model. Một lối làm việc.</text>
+  <text x="64" y="419" fill="#69D8BE" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="600">Any model. One workflow.</text>
   <g transform="translate(690 60)">
     <rect width="446" height="400" rx="22" fill="#202225" stroke="#414448" stroke-width="2"/>
     <circle cx="27" cy="28" r="5" fill="#69D8BE"/>

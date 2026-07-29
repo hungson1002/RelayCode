@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeEndpoint, parseSseData } from '../src/routerClient';
+import { normalizeEndpoint, parseSseData, tuningBody } from '../src/routerClient';
 
 describe('normalizeEndpoint', () => {
   it('removes trailing slashes', () => {
@@ -21,5 +21,18 @@ describe('parseSseData', () => {
 
   it('reads a final event without a blank terminator', () => {
     expect(parseSseData('data: {"choices":[]}')).toEqual(['{"choices":[]}']);
+  });
+});
+
+describe('tuningBody', () => {
+  it('maps Codex Fast and reasoning controls to OpenAI-compatible request fields', () => {
+    expect(tuningBody({ reasoningEffort: 'high', serviceTier: 'fast' })).toEqual({
+      reasoning_effort: 'high',
+      service_tier: 'priority'
+    });
+  });
+
+  it('does not send tuning fields when controls are unavailable', () => {
+    expect(tuningBody()).toEqual({});
   });
 });

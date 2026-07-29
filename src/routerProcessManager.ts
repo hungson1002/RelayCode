@@ -1,11 +1,23 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { existsSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { connect } from 'node:net';
 import * as vscode from 'vscode';
 import { normalizeEndpoint } from './routerClient';
 
 export type RouterLaunchProgress = 'checking' | 'installing' | 'starting' | 'waiting' | 'ready' | 'stopped';
+export type RouterRuntimeState = 'ready' | 'stale' | 'offline';
+export type RouterRuntimeOwner = 'managed' | 'external' | 'none';
+
+export type RouterRuntimeStatus = {
+  state: RouterRuntimeState;
+  owner: RouterRuntimeOwner;
+  healthy: boolean;
+  portListening: boolean;
+  canStop: boolean;
+};
 
 type LaunchCommand = {
   executable: string;
@@ -13,7 +25,7 @@ type LaunchCommand = {
 };
 
 export class RouterProcessManager implements vscode.Disposable {
-  private process: ChildProcessWithoutNullStreams | undefined;
+  private process: ChildProcess | undefined;
   private startPromise: Promise<string> | undefined;
   private output = vscode.window.createOutputChannel('9Router Runtime');
   private recentErrors: string[] = [];
@@ -51,7 +63,33 @@ export class RouterProcessManager implements vscode.Disposable {
   }
 
   public async isRunning(endpoint: string): Promise<boolean> {
-    return this.isAvailable(this.dashboardUrl(endpoint));
+    return this.isAvailable(this.healthUrl(endpoint));
+  }
+
+  public async inspect(endpoint: string): Promise<RouterRuntimeStatus> {
+    const url = new URL(normalizeEndpoint(endpoint));
+    const managed = Boolean(this.process && this.process.exitCode === null);
+    const healthy = await this.isAvailable(this.healthUrl(endpoint));
+    if (healthy) {
+      return {
+        state: 'ready',
+        owner: managed ? 'managed' : 'external',
+        healthy: true,
+        portListening: true,
+        canStop: managed
+      };
+    }
+
+    const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    const local = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+    const portListening = local && Number.isInteger(port) && await this.isPortListening(url.hostname, port);
+    return {
+      state: portListening ? 'stale' : 'offline',
+      owner: managed ? 'managed' : portListening ? 'external' : 'none',
+      healthy: false,
+      portListening,
+      canStop: managed
+    };
   }
 
   public canStop(): boolean {
@@ -85,7 +123,7 @@ export class RouterProcessManager implements vscode.Disposable {
     if (!['localhost', '127.0.0.1', '::1'].includes(url.hostname)) return false;
     const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
     if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
-    const script = `$pids=(Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue).OwningProcess | Select-Object -Unique; foreach($pidValue in $pids){$p=Get-CimInstance Win32_Process -Filter \"ProcessId=$pidValue\"; if($p.CommandLine -match '9router|node_modules\\\\9router\\\\cli\\.js'){Stop-Process -Id $pidValue -Force -ErrorAction Stop}}`;
+    const script = `$all=@(Get-CimInstance Win32_Process);$listeners=@((Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue).OwningProcess|Select-Object -Unique);$roots=@();foreach($listener in $listeners){$current=$all|Where-Object ProcessId -eq $listener|Select-Object -First 1;while($current){if($current.CommandLine -match 'node_modules[\\\\/]9router[\\\\/](cli\\.js|app[\\\\/]custom-server\\.js)'){$roots+=$current.ProcessId;break};$parentId=$current.ParentProcessId;$current=$all|Where-Object ProcessId -eq $parentId|Select-Object -First 1}};$targets=@();foreach($root in ($roots|Select-Object -Unique)){$targets+=$root;$changed=$true;while($changed){$before=$targets.Count;$targets+=@($all|Where-Object {$targets -contains $_.ParentProcessId}|ForEach-Object ProcessId);$targets=@($targets|Select-Object -Unique);$changed=$targets.Count -gt $before}};if($targets.Count){Stop-Process -Id $targets -Force -ErrorAction Stop}`;
     try {
       await promisify(execFile)('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true });
       await new Promise((resolve) => setTimeout(resolve, 350));
@@ -111,47 +149,62 @@ export class RouterProcessManager implements vscode.Disposable {
     }
 
     const dashboardUrl = this.dashboardUrl(endpoint);
+    const healthUrl = this.healthUrl(endpoint);
     onProgress('checking');
-    if (await this.isAvailable(dashboardUrl)) {
+    if (await this.isAvailableWithRetry(healthUrl, 3)) {
       onProgress('ready');
       return dashboardUrl;
     }
 
     if (this.process && this.process.exitCode === null) {
       onProgress('waiting');
-      await this.waitUntilReady(dashboardUrl, this.process);
+      await this.waitUntilReady(healthUrl, this.process);
       onProgress('ready');
       return dashboardUrl;
+    }
+
+    const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    if (await this.isPortListening(url.hostname, port)) {
+      onProgress('waiting');
+      if (await this.isAvailableWithRetry(healthUrl, 4)) {
+        onProgress('ready');
+        return dashboardUrl;
+      }
+      this.output.appendLine(`9Router owns port ${port} but health is unresponsive. Restarting the stale process.`);
+      if (!await this.stop(endpoint)) {
+        throw new Error(`Cổng ${port} đang được sử dụng nhưng 9Router không phản hồi. Không thể xác minh tiến trình để khởi động lại an toàn.`);
+      }
     }
 
     onProgress('starting');
     this.recentErrors = [];
     const launch = this.resolveCommand(command);
-    const port = url.port || (url.protocol === 'https:' ? '443' : '80');
     const args = [
       ...launch.prefixArgs,
       '--port',
-      port,
+      String(port),
       '--host',
       '127.0.0.1',
-      '--tray',
+      '--no-browser',
       '--skip-update'
     ];
 
     this.output.appendLine(`Starting 9Router on ${url.origin}`);
+    const logDir = join(homedir(), '.relaycode', 'logs');
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, '9router-runtime.log');
+    const logFd = openSync(logPath, 'a');
     this.process = spawn(launch.executable, args, {
-      cwd: process.cwd(),
+      cwd: homedir(),
       env: { ...process.env, BROWSER: 'none' },
-      windowsHide: true
+      windowsHide: true,
+      detached: true,
+      stdio: ['ignore', logFd, logFd]
     });
     const child = this.process;
-    child.stdout.on('data', (chunk: Buffer) => this.output.append(chunk.toString()));
-    child.stderr.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      this.output.append(text);
-      this.recentErrors.push(text.trim());
-      this.recentErrors = this.recentErrors.slice(-4);
-    });
+    closeSync(logFd);
+    child.unref();
+    this.output.appendLine(`9Router detached with PID ${child.pid ?? 'unknown'}. Log: ${logPath}`);
     child.once('error', (error) => {
       this.recentErrors.push(error.message);
     });
@@ -160,7 +213,7 @@ export class RouterProcessManager implements vscode.Disposable {
     });
 
     onProgress('waiting');
-    await this.waitUntilReady(dashboardUrl, child);
+    await this.waitUntilReady(healthUrl, child);
     onProgress('ready');
     return dashboardUrl;
   }
@@ -180,11 +233,11 @@ export class RouterProcessManager implements vscode.Disposable {
     return { executable: trimmed, prefixArgs: [] };
   }
 
-  private async waitUntilReady(url: string, child: ChildProcessWithoutNullStreams): Promise<void> {
+  private async waitUntilReady(url: string, child?: ChildProcess): Promise<void> {
     const deadline = Date.now() + 45_000;
     while (Date.now() < deadline) {
       if (await this.isAvailable(url)) return;
-      if (child.exitCode !== null) {
+      if (child && child.exitCode !== null) {
         const details = this.recentErrors.filter(Boolean).join(' ').slice(-500);
         throw new Error(details || `9Router đã dừng với mã ${child.exitCode}.`);
       }
@@ -195,15 +248,44 @@ export class RouterProcessManager implements vscode.Disposable {
 
   private async isAvailable(url: string): Promise<boolean> {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(1_500) });
+      const response = await fetch(url, { signal: AbortSignal.timeout(3_000) });
       return response.ok || response.status === 302 || response.status === 307;
     } catch {
       return false;
     }
   }
 
+  private async isAvailableWithRetry(url: string, attempts: number): Promise<boolean> {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (await this.isAvailable(url)) return true;
+      if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 450));
+    }
+    return false;
+  }
+
+  private isPortListening(host: string, port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = connect({ host, port });
+      const finish = (result: boolean) => {
+        socket.removeAllListeners();
+        socket.destroy();
+        resolve(result);
+      };
+      socket.setTimeout(1_200);
+      socket.once('connect', () => finish(true));
+      socket.once('timeout', () => finish(false));
+      socket.once('error', () => finish(false));
+    });
+  }
+
+  private healthUrl(endpoint: string): string {
+    const url = new URL(normalizeEndpoint(endpoint));
+    return `${url.origin}/api/auth/status`;
+  }
+
   public dispose(): void {
-    this.process?.kill();
+    // 9Router is intentionally detached. Reloading the extension or closing the
+    // IDE must not stop the local gateway; only an explicit user action may do so.
     this.process = undefined;
     this.output.dispose();
   }

@@ -128,7 +128,7 @@ export class TelemetryStore {
 }
 
 function providerLabel(kind: ProviderKind): string {
-  return kind === 'anthropic' ? 'Anthropic Claude' : kind === 'lm-studio' ? 'LM Studio' : kind === 'openai-compatible' ? 'OpenAI-compatible' : kind === 'openai' ? 'OpenAI' : kind === 'ollama' ? 'Ollama' : '9Router';
+  return kind === 'cockpit' ? 'Cockpit Tools' : kind === 'anthropic' ? 'Anthropic Claude' : kind === 'lm-studio' ? 'LM Studio' : kind === 'openai-compatible' ? 'OpenAI-compatible' : kind === 'openai' ? 'OpenAI' : kind === 'ollama' ? 'Ollama' : '9Router';
 }
 
 function positive(value: number | undefined): number | undefined {

@@ -30,7 +30,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   public get clientMetadata(): OAuthClientMetadata {
     return {
-      client_name: 'Lối AI Coding Agent',
+      client_name: 'RelayCode AI Coding Agent',
       redirect_uris: [this.callbackUrl],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],

@@ -3,6 +3,7 @@ import { promisify } from 'node:util';
 import * as vscode from 'vscode';
 import type { ProviderKind } from './provider';
 import { normalizeEndpoint } from './routerClient';
+import type { UserInteraction } from './userInteraction';
 
 const execFileAsync = promisify(execFile);
 
@@ -40,14 +41,29 @@ export class LocalRuntimeManager {
     return { kind, installed, serverRunning, models, message };
   }
 
-  public async setup(kind: ProviderKind, endpoint: string, onProgress: (message: string) => void): Promise<LocalRuntimeStatus | undefined> {
+  public async setup(
+    kind: ProviderKind,
+    endpoint: string,
+    onProgress: (message: string) => void,
+    interaction?: UserInteraction
+  ): Promise<LocalRuntimeStatus | undefined> {
     if (kind !== 'ollama' && kind !== 'lm-studio') return undefined;
     let status = await this.inspect(kind, endpoint);
     if (!status) return undefined;
     const label = kind === 'ollama' ? 'Ollama' : 'LM Studio';
     if (!status.installed) {
-      const install = await vscode.window.showInformationMessage(`${label} chưa có trên máy. Mở trang cài đặt chính thức?`, { modal: true }, 'Mở trang cài đặt');
-      if (install === 'Mở trang cài đặt') await vscode.env.openExternal(vscode.Uri.parse(kind === 'ollama' ? 'https://ollama.com/download' : 'https://lmstudio.ai/download'));
+      const install = interaction
+        ? await interaction.choose({
+            title: `Cài ${label}?`,
+            message: `${label} chưa có trên máy hoặc CLI chưa nằm trong PATH.`,
+            icon: 'downloadSimple',
+            actions: [
+              { id: 'cancel', label: 'Để sau', kind: 'secondary' },
+              { id: 'open', label: 'Mở trang cài đặt', kind: 'primary' }
+            ]
+          })
+        : await vscode.window.showInformationMessage(`${label} chưa có trên máy. Mở trang cài đặt chính thức?`, { modal: true }, 'Mở trang cài đặt');
+      if (install === 'open' || install === 'Mở trang cài đặt') await vscode.env.openExternal(vscode.Uri.parse(kind === 'ollama' ? 'https://ollama.com/download' : 'https://lmstudio.ai/download'));
       return status;
     }
 
@@ -68,21 +84,29 @@ export class LocalRuntimeManager {
 
     status = await this.inspect(kind, endpoint);
     if (status?.serverRunning && !status.models.length) {
-      const model = await vscode.window.showInputBox({
-        title: `Tải model cho ${label}`,
-        prompt: kind === 'ollama' ? 'Tên model trên Ollama Library' : 'Model ID trên LM Studio Hub',
-        placeHolder: kind === 'ollama' ? 'Ví dụ: qwen2.5-coder:7b' : 'Ví dụ: openai/gpt-oss-20b',
-        ignoreFocusOut: true
-      });
+      const model = interaction
+        ? await interaction.prompt({
+            title: `Tải model cho ${label}`,
+            message: kind === 'ollama' ? 'Nhập tên model trên Ollama Library.' : 'Nhập Model ID trên LM Studio Hub.',
+            label: 'Model',
+            placeholder: kind === 'ollama' ? 'qwen2.5-coder:7b' : 'openai/gpt-oss-20b',
+            required: true,
+            confirmLabel: 'Tải model',
+            icon: 'downloadSimple'
+          })
+        : await vscode.window.showInputBox({
+            title: `Tải model cho ${label}`,
+            prompt: kind === 'ollama' ? 'Tên model trên Ollama Library' : 'Model ID trên LM Studio Hub',
+            placeHolder: kind === 'ollama' ? 'Ví dụ: qwen2.5-coder:7b' : 'Ví dụ: openai/gpt-oss-20b',
+            ignoreFocusOut: true
+          });
       if (model?.trim()) {
-        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Đang tải ${model.trim()}`, cancellable: false }, async () => {
-          onProgress(`Đang tải ${model.trim()}…`);
-          if (kind === 'ollama') await execFileAsync('ollama', ['pull', model.trim()], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
-          else {
-            await execFileAsync('lms', ['get', model.trim()], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
-            await execFileAsync('lms', ['load', model.trim()], { windowsHide: true, timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
-          }
-        });
+        onProgress(`Đang tải ${model.trim()}…`);
+        if (kind === 'ollama') await execFileAsync('ollama', ['pull', model.trim()], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+        else {
+          await execFileAsync('lms', ['get', model.trim()], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+          await execFileAsync('lms', ['load', model.trim()], { windowsHide: true, timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+        }
       }
     }
     return this.inspect(kind, endpoint);

@@ -1,8 +1,8 @@
 import { RouterClient } from './routerClient';
 import { AnthropicClient } from './anthropicClient';
-import type { ChatMessage, RequestMetrics, RouterModel } from './types';
+import type { ChatMessage, RequestMetrics, RequestTuning, RouterModel } from './types';
 
-export type ProviderKind = '9router' | 'openai' | 'anthropic' | 'openai-compatible' | 'ollama' | 'lm-studio';
+export type ProviderKind = '9router' | 'cockpit' | 'openai' | 'anthropic' | 'openai-compatible' | 'ollama' | 'lm-studio';
 
 export interface ProviderConfig {
   kind: ProviderKind;
@@ -16,15 +16,29 @@ export interface ModelCapabilities {
   reasoning: boolean;
 }
 
+export interface ToolCompletionProgress {
+  type: 'content' | 'tool';
+  name?: string;
+  arguments?: string;
+}
+
 export interface ProviderClient {
   listModels(signal?: AbortSignal): Promise<RouterModel[]>;
-  streamChat(model: string, messages: ChatMessage[], onDelta: (delta: string) => void, signal?: AbortSignal): Promise<RequestMetrics>;
+  generateImage?(
+    model: string,
+    prompt: string,
+    size: string,
+    signal?: AbortSignal
+  ): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt?: string }>;
+  streamChat(model: string, messages: ChatMessage[], onDelta: (delta: string) => void, signal?: AbortSignal, tuning?: RequestTuning): Promise<RequestMetrics>;
   checkModel(model: string, signal?: AbortSignal): Promise<RequestMetrics>;
   completeWithTools(
     model: string,
     messages: Array<Record<string, unknown>>,
     tools: Array<Record<string, unknown>>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onProgress?: (progress: ToolCompletionProgress) => void,
+    tuning?: RequestTuning
   ): Promise<{ content: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; metrics: RequestMetrics }>;
 }
 

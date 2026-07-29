@@ -1,8 +1,66 @@
+import { BRAND_ICONS, MODEL_BRAND_RULES } from '../brandIcons';
+import { UI_ICONS } from '../uiIcons';
+
 export const CHAT_VIEW_CONTROLLER = String.raw`
 const vscode = acquireVsCodeApi();
 const $ = (id) => document.getElementById(id);
+let narrowCloseRequested = false;
+let narrowCloseRetry = 0;
+const minimumViewWidth = 344;
+function restoreMinimumViewWidth() {
+  const cssWidth = Math.min(
+    document.documentElement.clientWidth,
+    document.body.clientWidth || Number.POSITIVE_INFINITY,
+    window.visualViewport?.width || Number.POSITIVE_INFINITY
+  );
+  const renderedWidth = cssWidth * Math.max(1, window.devicePixelRatio || 1);
+  if (renderedWidth >= minimumViewWidth) {
+    narrowCloseRequested = false;
+    if (narrowCloseRetry) clearTimeout(narrowCloseRetry);
+    narrowCloseRetry = 0;
+    return;
+  }
+  if (!narrowCloseRequested) {
+    narrowCloseRequested = true;
+    vscode.postMessage({ type: 'viewTooNarrow' });
+  }
+  if (narrowCloseRetry) clearTimeout(narrowCloseRetry);
+  narrowCloseRetry = setTimeout(() => {
+    narrowCloseRequested = false;
+    restoreMinimumViewWidth();
+  }, 120);
+}
+const viewSizeObserver = new ResizeObserver(() => {
+  restoreMinimumViewWidth();
+});
+viewSizeObserver.observe(document.documentElement);
+window.visualViewport?.addEventListener('resize', restoreMinimumViewWidth);
+const brandIcons = Object.freeze(${JSON.stringify(BRAND_ICONS)});
+const modelBrandRules = Object.freeze(${JSON.stringify(MODEL_BRAND_RULES)});
+const uiIcons = Object.freeze(${JSON.stringify(UI_ICONS)});
+function uiIcon(name, label = '') {
+  return '<span class="ui-symbol"' + (label ? ' title="' + escapeHtml(label) + '"' : '') + '>' + (uiIcons[name] || uiIcons.cube) + '</span>';
+}
+function brandIcon(key, label) {
+  return '<span class="brand-symbol" title="' + escapeHtml(label || key) + '">' + (brandIcons[key] || brandIcons.mcp) + '</span>';
+}
+function brandKey(value, provider = '') {
+  const id = value.toLowerCase();
+  for (const [pattern, key] of modelBrandRules) {
+    if (new RegExp(pattern, 'i').test(id)) return key;
+  }
+  return brandIcons[provider] ? provider : 'mcp';
+}
+$('attachIcon').innerHTML = uiIcon('plus');
+$('sendIcon').innerHTML = uiIcon('arrowUp');
+$('topConnectIcon').innerHTML = uiIcon('plugsConnected');
+$('historyToggleIcon').innerHTML = uiIcon('chatCircle');
+$('metricsToggleIcon').innerHTML = uiIcon('pulse');
+$('settingsIcon').innerHTML = uiIcon('gear');
 $('uiLanguage').value = document.body.dataset.language === 'en' ? 'en' : 'vi';
+$('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
 $('uiLanguage').addEventListener('change', () => {
+  $('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
   vscode.postMessage({ type: 'setLanguage', language: $('uiLanguage').value });
 });
 let mode = 'agent';
@@ -11,7 +69,6 @@ let assistantBody = null;
 let launchingRouter = false;
 let changeSummary = null;
 let activeProvider = '9router';
-let providerConnected = false;
 let pendingAssistantText = '';
 let typingTimer = 0;
 let assistantRawText = '';
@@ -29,25 +86,179 @@ let lastChangeCount = 0;
 let checkingModels = false;
 let favoriteModels = [];
 let recentModels = [];
+let pendingToolFailureId = '';
 let activeTerminal = null;
 let skills = [];
 let composerMenuIndex = -1;
+let composerGoalMode = false;
+let composerSkills = [];
+let composerContexts = [];
+let composerLinks = [];
 let turnStartedAt = 0;
+let setupDismissed = false;
+let setupOpenRequested = false;
+let queuedFollowUps = [];
+let activeGoal = null;
+let reasoningEffort = 'medium';
+let serviceTier = 'default';
+let latestTelemetryRecords = [];
 const providerMeta = {
-  '9router': { label: '9Router', hint: 'Gateway local, nhiều model', endpoint: 'http://localhost:20128/v1', keyLabel: '9Router API key', local: false },
-  openai: { label: 'OpenAI', hint: 'API chính thức · cần API key', endpoint: 'https://api.openai.com/v1', keyLabel: 'OpenAI API key', local: false },
-  anthropic: { label: 'Anthropic Claude', hint: 'Messages API · cần API key', endpoint: 'https://api.anthropic.com/v1', keyLabel: 'Anthropic API key', local: false },
-  'openai-compatible': { label: 'OpenAI-compatible', hint: 'Endpoint tùy chỉnh', endpoint: '', keyLabel: 'API key', local: false },
-  ollama: { label: 'Ollama', hint: 'Local · không cần API key', endpoint: 'http://localhost:11434/v1', keyLabel: 'API key', local: true },
-  'lm-studio': { label: 'LM Studio', hint: 'Local · không cần API key', endpoint: 'http://localhost:1234/v1', keyLabel: 'API key', local: true }
+  '9router': { brand: '9router', label: '9Router', hint: 'Gateway local, nhiều model', endpoint: 'http://localhost:20128/v1', keyLabel: '9Router API key', local: false },
+  cockpit: { brand: 'cockpit', label: 'Cockpit Tools', hint: 'Gateway local · nhiều tài khoản', endpoint: 'http://127.0.0.1:1455/v1', keyLabel: 'Cockpit Client Key', local: false },
+  openai: { brand: 'openai', label: 'OpenAI', hint: 'API chính thức · cần API key', endpoint: 'https://api.openai.com/v1', keyLabel: 'OpenAI API key', local: false },
+  anthropic: { brand: 'claude', label: 'Anthropic Claude', hint: 'Messages API · cần API key', endpoint: 'https://api.anthropic.com/v1', keyLabel: 'Anthropic API key', local: false },
+  'openai-compatible': { brand: 'openrouter', label: 'OpenAI-compatible', hint: 'Endpoint tùy chỉnh', endpoint: '', keyLabel: 'API key', local: false },
+  ollama: { brand: 'ollama', label: 'Ollama', hint: 'Local · không cần API key', endpoint: 'http://localhost:11434/v1', keyLabel: 'API key', local: true },
+  'lm-studio': { brand: 'lm-studio', label: 'LM Studio', hint: 'Local · không cần API key', endpoint: 'http://localhost:1234/v1', keyLabel: 'API key', local: true }
 };
 const knownProviderEndpoints = new Set(Object.values(providerMeta).map(item => item.endpoint).filter(Boolean));
+const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'accessConfirm', 'connectionDiagnostics', 'uiDialog'];
+let activeUiDialog = null;
+let dialogReturnFocus = null;
+document.querySelectorAll('#providerMenu .provider-option').forEach((option) => {
+  const meta = providerMeta[option.dataset.provider] || providerMeta['9router'];
+  const slot = document.createElement('span');
+  slot.className = 'provider-brand-slot';
+  slot.innerHTML = brandIcon(meta.brand, meta.label);
+  option.prepend(slot);
+});
+
+function closeFloatingSurfaces(except = '') {
+  floatingSurfaces.forEach((id) => {
+    if (id !== except) $(id)?.classList.add('hidden');
+  });
+  if (except !== 'historyPanel') historyExpanded = false;
+}
+
+function openFloatingSurface(id) {
+  closeFloatingSurfaces(id);
+  $(id)?.classList.remove('hidden');
+}
+
+function closeUiDialog(action) {
+  if (!activeUiDialog) return;
+  const current = activeUiDialog;
+  const value = current.input ? $('uiDialogInput').value : undefined;
+  activeUiDialog = null;
+  $('uiDialog').classList.add('hidden');
+  $('uiDialogInput').value = '';
+  $('uiDialogError').classList.add('hidden');
+  vscode.postMessage({
+    type: 'dialogResult',
+    id: current.id,
+    action,
+    value
+  });
+  if (dialogReturnFocus?.isConnected) dialogReturnFocus.focus();
+  dialogReturnFocus = null;
+}
+
+function renderUiDialog(data) {
+  if (!data?.id) return;
+  dialogReturnFocus = document.activeElement;
+  activeUiDialog = data;
+  closeFloatingSurfaces('uiDialog');
+  const backdrop = $('uiDialog');
+  const dialog = backdrop.querySelector('.ui-dialog');
+  dialog.dataset.tone = data.tone || 'neutral';
+  $('uiDialogIcon').innerHTML = uiIcon(data.icon || (data.tone === 'danger' ? 'warning' : data.tone === 'success' ? 'checkCircle' : 'info'));
+  $('uiDialogTitle').textContent = data.title || 'RelayCode';
+  $('uiDialogMessage').textContent = data.message || '';
+  $('uiDialogDetail').textContent = data.detail || '';
+  $('uiDialogDetail').classList.toggle('hidden', !data.detail);
+  $('uiDialogClose').innerHTML = uiIcon('x');
+  $('uiDialogClose').classList.toggle('hidden', data.dismissible === false);
+
+  const field = $('uiDialogField');
+  const input = $('uiDialogInput');
+  field.classList.toggle('hidden', !data.input);
+  if (data.input) {
+    $('uiDialogFieldLabel').textContent = data.input.label || '';
+    input.type = data.input.password ? 'password' : 'text';
+    input.placeholder = data.input.placeholder || '';
+    input.value = data.input.value || '';
+    input.dataset.required = String(Boolean(data.input.required));
+  }
+
+  const actions = $('uiDialogActions');
+  actions.replaceChildren();
+  for (const action of data.actions || []) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ui-dialog-action ' + (action.kind || 'secondary');
+    button.textContent = action.label;
+    button.dataset.action = action.id;
+    button.addEventListener('click', () => {
+      if (data.input?.required && !input.value.trim() && action.kind !== 'secondary') {
+        $('uiDialogError').textContent = 'Trường này không được để trống.';
+        $('uiDialogError').classList.remove('hidden');
+        input.focus();
+        return;
+      }
+      closeUiDialog(action.id);
+    });
+    actions.append(button);
+  }
+  backdrop.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    if (data.input) {
+      input.focus();
+      input.select();
+    } else {
+      const preferred = actions.querySelector('.primary,.danger') || $('uiDialogClose');
+      preferred?.focus();
+    }
+  });
+}
+
+function showUiToast(data) {
+  const toast = document.createElement('article');
+  toast.className = 'ui-toast ' + (data.tone || 'neutral');
+  toast.innerHTML = '<span aria-hidden="true">' + uiIcon(data.tone === 'danger' ? 'warning' : data.tone === 'success' ? 'checkCircle' : 'info') + '</span><p></p><button type="button" aria-label="Đóng">' + uiIcon('x') + '</button>';
+  toast.querySelector('p').textContent = data.message || '';
+  const remove = () => toast.remove();
+  toast.querySelector('button').addEventListener('click', remove);
+  $('toastStack').append(toast);
+  setTimeout(remove, Math.max(2600, Math.min(7000, String(data.message || '').length * 55)));
+}
+
+$('uiDialogClose').addEventListener('click', () => closeUiDialog(undefined));
+$('uiDialog').addEventListener('click', (event) => {
+  if (event.target === $('uiDialog') && activeUiDialog?.dismissible !== false) closeUiDialog(undefined);
+});
+$('uiDialogInput').addEventListener('input', () => $('uiDialogError').classList.add('hidden'));
+$('uiDialogInput').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  $('uiDialogActions').querySelector('.primary,.danger')?.click();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && activeUiDialog?.dismissible !== false) {
+    event.preventDefault();
+    closeUiDialog(undefined);
+  } else if (event.key === 'Tab' && activeUiDialog) {
+    const focusable = [...$('uiDialog').querySelectorAll('button:not(.hidden),input:not(.hidden)')]
+      .filter((element) => !element.disabled && element.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+});
 
 function flushAssistantText() {
   if (typingTimer) { clearTimeout(typingTimer); typingTimer = 0; }
   if (assistantBody && pendingAssistantText) {
     assistantRawText += pendingAssistantText;
     renderMarkdownInto(assistantBody, assistantRawText);
+    const item = assistantBody.closest('.message');
+    if (item) item.dataset.rawContent = assistantRawText;
   }
   pendingAssistantText = '';
 }
@@ -61,6 +272,8 @@ function queueAssistantText(delta) {
     assistantRawText += pendingAssistantText.slice(0, size);
     pendingAssistantText = pendingAssistantText.slice(size);
     renderMarkdownInto(assistantBody, assistantRawText);
+    const item = assistantBody.closest('.message');
+    if (item) item.dataset.rawContent = assistantRawText;
     $('messages').scrollTop = $('messages').scrollHeight;
     if (pendingAssistantText) typingTimer = setTimeout(tick, 8);
     else {
@@ -75,6 +288,14 @@ function queueAssistantText(delta) {
   typingTimer = setTimeout(tick, 0);
 }
 
+function updateComposerPlaceholder() {
+  $('prompt').placeholder = composerGoalMode
+    ? 'Mô tả mục tiêu dài hạn…'
+    : mode === 'agent'
+      ? 'Nhập yêu cầu, dùng /, $ hoặc @…'
+      : mode === 'plan' ? 'Mô tả mục tiêu để Agent lập kế hoạch…' : 'Hỏi nhanh qua model đang chọn…';
+}
+
 function setMode(next) {
   mode = next;
   $('modeLabel').textContent = mode === 'agent' ? 'Agent' : mode === 'plan' ? 'Plan' : 'Chat';
@@ -82,15 +303,14 @@ function setMode(next) {
     button.classList.toggle('active', button.dataset.mode === mode);
     button.setAttribute('aria-selected', String(button.dataset.mode === mode));
   });
-  $('prompt').placeholder = mode === 'agent'
-    ? 'Nhập yêu cầu sửa, chạy hoặc kiểm tra code…'
-    : mode === 'plan' ? 'Mô tả mục tiêu để Agent lập kế hoạch…' : 'Hỏi nhanh qua model đang chọn…';
+  updateComposerPlaceholder();
 }
 
 function setProvider(next, changeEndpoint = true) {
   const meta = providerMeta[next] || providerMeta['9router'];
   const previous = $('configProvider').value;
   $('configProvider').value = next;
+  $('providerBrand').innerHTML = brandIcon(meta.brand, meta.label);
   $('providerLabel').textContent = meta.label;
   $('providerHint').textContent = meta.hint;
   $('apiKeyLabel').textContent = meta.keyLabel;
@@ -99,6 +319,7 @@ function setProvider(next, changeEndpoint = true) {
   keyInput.disabled = meta.local;
   keyInput.placeholder = meta.local ? 'Provider local không dùng API key' : 'Nhập key mới hoặc để trống để giữ key đã lưu';
   $('apiKeyField').classList.toggle('local', meta.local);
+  $('openCockpit').classList.toggle('hidden', next !== 'cockpit');
   if (previous !== next) {
     providerChanged = true;
     keyInput.value = '';
@@ -117,6 +338,49 @@ function setProvider(next, changeEndpoint = true) {
     const current = $('configEndpoint').value.trim();
     if (!current || knownProviderEndpoints.has(current)) $('configEndpoint').value = meta.endpoint;
   }
+}
+
+function isCodexTunableModel(model) {
+  return /(codex|gpt-5|(?:^|[/_-])o[134](?:$|[/_.-]))/i.test(model || '');
+}
+
+function resetTimestamp(value) {
+  if (!value) return 0;
+  const parsedDate = Date.parse(value);
+  if (Number.isFinite(parsedDate)) return parsedDate;
+  if (/^\d+(?:\.\d+)?$/.test(value)) return Date.now() + Number(value) * 1000;
+  const duration = String(value).match(/(\d+(?:\.\d+)?)\s*(ms|s|m|h)/i);
+  if (!duration) return 0;
+  const amount = Number(duration[1]);
+  const unit = duration[2].toLowerCase();
+  return Date.now() + amount * (unit === 'ms' ? 1 : unit === 's' ? 1000 : unit === 'm' ? 60000 : 3600000);
+}
+
+function formatReset(value) {
+  const timestamp = resetTimestamp(value);
+  if (!timestamp) return '';
+  const minutes = Math.max(0, Math.ceil((timestamp - Date.now()) / 60000));
+  if (minutes < 1) return 'sắp reset';
+  if (minutes < 60) return minutes + ' phút';
+  const hours = Math.ceil(minutes / 60);
+  return hours < 24 ? hours + ' giờ' : Math.ceil(hours / 24) + ' ngày';
+}
+
+function updateCodexTuning() {
+  const model = $('model').value;
+  const visible = isCodexTunableModel(model);
+  $('codexTuning').classList.toggle('hidden', !visible);
+  $('reasoningLabel').textContent = reasoningEffort === 'xhigh' ? 'Extra high' : reasoningEffort[0].toUpperCase() + reasoningEffort.slice(1);
+  $('fastModeLabel').textContent = serviceTier === 'fast' ? 'Fast' : 'Standard';
+  $('fastMode').classList.toggle('active', serviceTier === 'fast');
+  $('fastMode').setAttribute('aria-pressed', String(serviceTier === 'fast'));
+  document.querySelectorAll('#reasoningMenu [data-effort]').forEach((button) => button.classList.toggle('active', button.dataset.effort === reasoningEffort));
+  const latest = latestTelemetryRecords
+    .filter((record) => record.model === model && record.rateLimit?.reset)
+    .sort((left, right) => (right.timestamp || 0) - (left.timestamp || 0))[0];
+  const reset = visible ? formatReset(latest?.rateLimit?.reset) : '';
+  $('quotaReset').classList.toggle('hidden', !reset);
+  $('quotaResetLabel').textContent = reset;
 }
 
 function setPermissionMode(next) {
@@ -141,7 +405,9 @@ function renderModelMenu(query = '') {
     });
   for (const option of options) {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option';
-    const health = document.createElement('span'); health.className = 'model-health ' + (modelHealth[option.value]?.status || ''); health.textContent = modelHealth[option.value]?.status === 'ok' ? '✓' : modelHealth[option.value]?.status === 'error' ? '×' : modelHealth[option.value]?.status === 'checking' ? '…' : '·';
+    const healthStatus = modelHealth[option.value]?.status || '';
+    const icon = document.createElement('span'); icon.className = 'model-brand'; icon.innerHTML = brandIcon(brandKey(option.value, activeProvider), option.text);
+    const health = document.createElement('span'); health.className = 'model-health ' + healthStatus; health.setAttribute('aria-label', healthStatus === 'ok' ? 'Model hoạt động' : healthStatus === 'error' ? 'Model không khả dụng' : healthStatus === 'checking' ? 'Đang kiểm tra model' : 'Chưa kiểm tra');
     const label = document.createElement('span'); label.className = 'model-option-label'; label.textContent = option.text;
     const meta = document.createElement('small'); meta.className = 'model-option-meta';
     const healthMessage = modelHealth[option.value]?.message || '';
@@ -152,11 +418,16 @@ function renderModelMenu(query = '') {
     const copy = document.createElement('span'); copy.className = 'model-option-copy'; copy.append(label, meta);
     const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.textContent = '★'; favorite.title = favoriteModels.includes(option.value) ? 'Bỏ yêu thích' : 'Yêu thích'; favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
     favorite.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'toggleFavoriteModel', model: option.value }); });
-    button.append(health, copy, favorite); button.title = healthMessage;
+    button.append(icon, copy, health, favorite); button.title = healthMessage;
     button.classList.toggle('active', option.value === $('model').value);
     button.addEventListener('click', () => {
       $('model').value = option.value;
       $('model').dispatchEvent(new Event('change'));
+      if (pendingToolFailureId) {
+        vscode.postMessage({ type: 'resolveToolFailure', id: pendingToolFailureId, action: 'change-model', model: option.value });
+        document.querySelector('[data-tool-failure-id="' + pendingToolFailureId + '"]')?.remove();
+        pendingToolFailureId = '';
+      }
       $('modelMenu').classList.add('hidden');
       $('modelPicker').classList.remove('open');
       $('modelTrigger').setAttribute('aria-expanded', 'false');
@@ -173,6 +444,13 @@ function renderProfiles() {
     button.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'activateProfile', id: profile.id }); });
     list.append(button);
   }
+  const selected = profiles.find((profile) => profile.id === currentProfileId);
+  $('deleteProfile').disabled = !selected || profiles.length <= 1;
+  $('deleteProfile').title = profiles.length <= 1
+    ? 'Cần giữ lại ít nhất một hồ sơ'
+    : selected
+      ? 'Xóa hồ sơ ' + selected.name
+      : 'Hãy chọn một hồ sơ đã lưu';
 }
 
 function applyProfileUi(profile) {
@@ -195,29 +473,8 @@ function escapeHtml(value) {
 }
 
 function fileTypeIcon(path) {
-  const clean = String(path || '').replace(/:\d+(?::\d+)?$/, '').split(/[\\/]/).pop() || '';
-  const extension = clean.includes('.') ? clean.split('.').pop().toLowerCase() : '';
-  const labels = {
-    html: ['html', 'HTML'], htm: ['html', 'HTML'],
-    css: ['css', 'CSS'], scss: ['css', 'SC'], sass: ['css', 'SA'], less: ['css', 'LE'],
-    js: ['js', 'JS'], jsx: ['js', 'JS'], mjs: ['js', 'JS'], cjs: ['js', 'JS'],
-    ts: ['ts', 'TS'], tsx: ['ts', 'TS'],
-    json: ['json', '{}'], jsonc: ['json', '{}'],
-    md: ['md', 'MD'], mdx: ['md', 'MD'],
-    png: ['image', ''], jpg: ['image', ''], jpeg: ['image', ''], gif: ['image', ''], webp: ['image', ''], svg: ['image', '']
-  };
-  const info = labels[extension];
-  if (info?.[0] === 'image') {
-    return '<span class="file-type-icon image" aria-hidden="true"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><circle cx="10.5" cy="6" r="1"/><path d="m4.5 11 2.4-2.6 1.8 1.8 1.2-1.1 1.7 1.9"/></svg></span>';
-  }
-  if (info?.[0] === 'html') {
-    return '<span class="file-type-icon html logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M1.5 0h21l-1.91 21.56L11.98 24l-8.57-2.44L1.5 0Zm4.61 4.41.7 8.01h9.13l-.33 3.43-2.91.8-2.95-.81-.19-2.1H6.93l.33 4.17L12 19.42l5.4-1.5.75-8.17H8.53L8.3 7.03h10.06l.23-2.62H6.11Z"/></svg></span>';
-  }
-  if (info?.[0] === 'css') {
-    return '<span class="file-type-icon css logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M1.5 0h21l-1.91 21.56L11.98 24l-8.57-2.44L1.5 0Zm4.36 4.41.26 2.62h8.94l-.26 2.72H6.36l.74 8.16L12 19.42l4.89-1.51.68-7.51h-2.72l-.37 5.4-2.48.67-2.45-.68-.16-2.05H6.7l.36 4.17L12 19.42l5.4-1.5 1.21-13.51H5.86Z"/></svg></span>';
-  }
-  if (info) return '<span class="file-type-icon ' + info[0] + '" aria-hidden="true">' + info[1] + '</span>';
-  return '<span class="file-type-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg></span>';
+  const icon = fileUiIcon(String(path || '').replace(/:\d+(?::\d+)?$/, ''));
+  return '<span class="file-type-icon ' + icon + '" aria-hidden="true">' + uiIcon(icon) + '</span>';
 }
 
 function inlineMarkdown(source) {
@@ -231,7 +488,7 @@ function inlineMarkdown(source) {
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawTarget) => {
     const target = String(rawTarget).replace(/&amp;/g, '&');
     if (/^https?:\/\//i.test(target)) {
-      return reserve('<button type="button" class="rich-link" data-url="' + encodeURIComponent(target) + '">' + label + '</button>');
+      return reserve(richLinkMarkup(target, label));
     }
     const location = target.match(/:(\d+)(?::\d+)?$/);
     const line = location && !/\bline\s+\d+/i.test(label) ? '<span class="file-line">(line ' + location[1] + ')</span>' : '';
@@ -245,8 +502,33 @@ function inlineMarkdown(source) {
       : '<code class="inline-code">' + code + '</code>');
   });
   text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  text = text.replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_, prefix, url) => prefix + reserve('<button type="button" class="rich-link" data-url="' + encodeURIComponent(url) + '">' + url + '</button>'));
+  text = text.replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_, prefix, url) => prefix + reserve(richLinkMarkup(url)));
   return text.replace(/\u0000(\d+)\u0000/g, (_, index) => tokens[Number(index)] || '');
+}
+
+function compactExternalLink(target, explicitLabel = '') {
+  if (explicitLabel) return explicitLabel;
+  try {
+    const url = new URL(target);
+    const host = url.hostname.replace(/^www\./, '');
+    const path = url.pathname.replace(/\/+$/, '');
+    if (host === 'github.com') {
+      const parts = path.split('/').filter(Boolean);
+      if (parts.length >= 2) return parts.slice(0, 2).join('/');
+    }
+    const compact = host + (path === '/' ? '' : path);
+    return compact.length > 46 ? compact.slice(0, 43) + '…' : compact;
+  } catch {
+    return target.length > 46 ? target.slice(0, 43) + '…' : target;
+  }
+}
+
+function richLinkMarkup(target, explicitLabel = '') {
+  const label = compactExternalLink(target, explicitLabel);
+  let isGithub = false;
+  try { isGithub = new URL(target).hostname.replace(/^www\./, '') === 'github.com'; } catch {}
+  const icon = isGithub ? brandIcon('github', 'GitHub') : uiIcon('plugsConnected');
+  return '<button type="button" class="rich-link" data-url="' + encodeURIComponent(target) + '"><span class="rich-link-icon" aria-hidden="true">' + icon + '</span><span>' + label + '</span></button>';
 }
 
 function bindRichContent(container) {
@@ -322,29 +604,68 @@ function renderMarkdownInto(container, source) {
 }
 
 function activityInfo(status) {
-  if (/kiểm tra provider/i.test(status)) return { kind: 'provider', done: 'Đã kiểm tra provider' };
-  if (/chờ model|model đang xử lý/i.test(status)) return { kind: 'waiting', done: 'Model đã phản hồi' };
-  if (/chạy lệnh/i.test(status)) return { kind: 'command', done: 'Đã chạy lệnh' };
-  if (/chạy kiểm tra/i.test(status)) return { kind: 'test', done: 'Đã chạy kiểm tra' };
-  if (/sửa file/i.test(status)) return { kind: 'edit', done: 'Đã sửa file' };
-  if (/đọc file|cấu trúc dự án|tìm trong dự án/i.test(status)) return { kind: 'inspect', done: 'Đã đọc workspace' };
-  if (/MCP/i.test(status)) return { kind: 'mcp', done: 'Đã dùng công cụ MCP' };
-  return { kind: 'thinking', done: 'Đã phân tích yêu cầu' };
+  const detail = status.includes(':') ? status.slice(status.indexOf(':') + 1).trim() : '';
+  if (/kiểm tra provider/i.test(status)) return { kind: 'provider', key: 'provider', done: 'Đã kiểm tra provider' };
+  if (/kết nối model gián đoạn/i.test(status)) return { kind: 'provider', key: 'model-retry', done: 'Đã kết nối lại model' };
+  if (/chờ model|model đang xử lý|model đang suy nghĩ/i.test(status)) return { kind: 'waiting', key: 'waiting', done: 'Model đã phản hồi' };
+  if (/chạy lệnh/i.test(status)) return { kind: 'command', key: 'command:' + detail, done: detail ? 'Đã chạy: ' + detail : 'Đã chạy lệnh' };
+  if (/chạy kiểm tra/i.test(status)) return { kind: 'test', key: 'test:' + detail, done: detail ? 'Đã kiểm tra: ' + detail : 'Đã chạy kiểm tra' };
+  if (/tạo ảnh thất bại/i.test(status)) return { kind: 'error', key: 'image:' + detail, done: detail ? 'Không thể tạo ảnh ' + detail : 'Không thể tạo ảnh' };
+  if (/tạo ảnh/i.test(status)) return { kind: 'edit', key: 'image:' + detail, done: detail ? 'Đã tạo ảnh ' + detail : 'Đã tạo ảnh' };
+  if (/tìm model tạo ảnh/i.test(status)) return { kind: 'inspect', key: 'image-models', done: 'Đã tìm model tạo ảnh' };
+  if (/sửa file/i.test(status)) return { kind: 'edit', key: 'edit:' + detail, done: detail ? 'Đã sửa ' + detail : 'Đã sửa file' };
+  if (/đọc tài nguyên skill/i.test(status)) return { kind: 'inspect', key: 'skill:' + detail, done: detail ? 'Đã đọc skill: ' + detail : 'Đã đọc skill' };
+  if (/đọc file/i.test(status)) return { kind: 'inspect', key: 'read:' + detail, done: detail ? 'Đã đọc ' + detail : 'Đã đọc file' };
+  if (/cấu trúc dự án/i.test(status)) return { kind: 'inspect', key: 'list:' + detail, done: detail ? 'Đã xem file: ' + detail : 'Đã xem cấu trúc dự án' };
+  if (/tìm trong dự án/i.test(status)) return { kind: 'inspect', key: 'search:' + detail, done: detail ? 'Đã tìm: ' + detail : 'Đã tìm trong dự án' };
+  if (/MCP/i.test(status)) return { kind: 'mcp', key: 'mcp:' + status, done: status.replace(/^Đang dùng/i, 'Đã dùng') };
+  if (/phân tích hướng thực hiện/i.test(status)) return { kind: 'thinking', key: 'thinking-direction', done: 'Đã xác định hướng thực hiện' };
+  if (/bước tiếp theo/i.test(status)) return { kind: 'thinking', key: 'thinking-next', done: 'Đã xác định bước tiếp theo' };
+  return { kind: 'thinking', key: 'thinking', done: 'Đã phân tích yêu cầu' };
 }
 
-function activityIcon(kind, stopped = false) {
-  if (stopped) return '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg>';
-  const icons = {
-    provider: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.2 10.8a4 4 0 0 1 0-5.6"/><path d="M10.8 5.2a4 4 0 0 1 0 5.6"/><path d="m6.7 9.3 2.6-2.6"/></svg>',
-    waiting: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.45-3.53"/><path d="M11.6 2.8v2.7H8.9"/></svg>',
-    command: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="m5 6 2 2-2 2M8.5 10h2.5"/></svg>',
-    test: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="m5.5 8 1.6 1.7 3.5-3.6"/></svg>',
-    edit: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.2 11.8.5-2.6 6.9-6.9 2.6 2.6-6.9 6.9z"/><path d="m9.5 3.4 2.6 2.6M3.2 11.8l2.6-.5"/></svg>',
-    inspect: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3 3"/></svg>',
-    mcp: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="4" r="1.5"/><circle cx="12" cy="5" r="1.5"/><circle cx="7.5" cy="12" r="1.5"/><path d="m5.3 4.6 5.2.1M4.8 5.3l2 5.3m4.2-4.2-2.5 4.3"/></svg>',
-    thinking: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.3v2M8 11.7v2M2.3 8h2M11.7 8h2M4 4l1.4 1.4M10.6 10.6 12 12M12 4l-1.4 1.4M5.4 10.6 4 12"/></svg>'
-  };
-  return icons[kind] || icons.thinking;
+function fileUiIcon(path) {
+  const clean = String(path || '').split(/[?#]/)[0].toLowerCase();
+  if (/\.(?:ts)$/.test(clean)) return 'fileTs';
+  if (/\.(?:tsx)$/.test(clean)) return 'fileTsx';
+  if (/\.(?:js|mjs|cjs)$/.test(clean)) return 'fileJs';
+  if (/\.(?:jsx)$/.test(clean)) return 'fileJsx';
+  if (/\.(?:css|scss|sass|less)$/.test(clean)) return 'fileCss';
+  if (/\.(?:html|htm)$/.test(clean)) return 'fileHtml';
+  if (/\.(?:md|mdx)$/.test(clean)) return 'fileMd';
+  if (/\.(?:py)$/.test(clean)) return 'filePy';
+  if (/\.(?:rs)$/.test(clean)) return 'fileRs';
+  if (/\.(?:png|jpe?g|gif|webp|svg|ico)$/.test(clean)) return 'fileImage';
+  if (/\.(?:pdf)$/.test(clean)) return 'filePdf';
+  if (/\.(?:docx?)$/.test(clean)) return 'fileDoc';
+  if (/\.(?:xlsx?|csv|tsv)$/.test(clean)) return 'fileXls';
+  if (/\.(?:pptx?)$/.test(clean)) return 'filePpt';
+  if (/\.(?:zip|tar|gz|7z|rar)$/.test(clean)) return 'fileZip';
+  if (/\.(?:json|jsonc|yaml|yml|toml|xml|go|java|kt|swift|c|h|cpp|hpp|cs|php|rb|vue|svelte|sql|sh|ps1)$/.test(clean)) return 'fileCode';
+  return 'file';
+}
+
+function activityIconName(info, status) {
+  const detail = status.includes(':') ? status.slice(status.indexOf(':') + 1).trim() : '';
+  if (info.kind === 'edit' || (info.kind === 'inspect' && /(?:file|skill)/i.test(info.key))) return fileUiIcon(detail);
+  if (info.kind === 'command') return 'terminalWindow';
+  if (info.kind === 'test') return 'checkCircle';
+  if (info.kind === 'mcp') return 'plugsConnected';
+  if (info.kind === 'provider') return 'pulse';
+  if (info.kind === 'waiting' || info.kind === 'thinking') return 'brain';
+  if (/list:/.test(info.key)) return 'files';
+  if (/search:/.test(info.key)) return 'listSearch';
+  return 'spinnerGap';
+}
+
+function setActivityExpanded(expanded) {
+  if (!assistantActivity) return;
+  assistantActivity.classList.toggle('expanded', expanded);
+  const toggle = assistantActivity.querySelector('.activity-toggle');
+  toggle?.setAttribute('aria-expanded', String(expanded));
+  const caret = assistantActivity.querySelector('.activity-caret');
+  if (caret) caret.innerHTML = uiIcon(expanded ? 'caretDown' : 'caretRight');
+  assistantBody?.closest('.message')?.classList.toggle('show-trace', expanded);
 }
 
 function updateActivity(status) {
@@ -353,30 +674,47 @@ function updateActivity(status) {
   if (!assistantActivity) {
     assistantActivity = document.createElement('div');
     assistantActivity.className = 'agent-activity';
-    assistantActivity.title = 'Bấm để xem hoạt động chi tiết';
-    assistantActivity.addEventListener('click', () => {
-      assistantActivity.classList.toggle('expanded');
-      assistantBody?.closest('.message')?.classList.toggle('show-trace', assistantActivity.classList.contains('expanded'));
-    });
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'activity-toggle';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.setAttribute('aria-label', 'Xem chi tiết hoạt động');
+    toggle.innerHTML = '<span class="activity-current-icon" aria-hidden="true"></span><span class="activity-current"></span><span class="activity-count"></span><span class="activity-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
+    toggle.addEventListener('click', () => setActivityExpanded(!assistantActivity?.classList.contains('expanded')));
+    const trace = document.createElement('div');
+    trace.className = 'activity-trace';
+    assistantActivity.append(toggle, trace);
     assistantBody.closest('.message')?.insertBefore(assistantActivity, assistantBody);
   }
-  assistantActivity.querySelectorAll('.activity-row.active').forEach((row) => row.classList.remove('active'));
-  let row = activitySteps.get(info.kind);
+  assistantActivity.querySelectorAll('.activity-row.active').forEach((activeRow) => {
+    if (activeRow.dataset.key === info.key) return;
+    activeRow.classList.remove('active');
+    activeRow.classList.add('done');
+    activeRow.querySelector('.activity-copy').textContent = activeRow.dataset.done;
+  });
+  let row = activitySteps.get(info.key);
   if (!row) {
     row = document.createElement('div');
     row.className = 'activity-row';
     row.dataset.kind = info.kind;
+    row.dataset.key = info.key;
     row.dataset.done = info.done;
-    row.innerHTML = '<span class="activity-icon"></span><span class="activity-copy"></span>';
-    activitySteps.set(info.kind, row);
-    assistantActivity.append(row);
+    row.innerHTML = '<span class="activity-icon" aria-hidden="true"></span><span class="activity-copy"></span>';
+    activitySteps.set(info.key, row);
+    assistantActivity.querySelector('.activity-trace')?.append(row);
   }
   row.dataset.kind = info.kind;
-  row.querySelector('.activity-icon').innerHTML = activityIcon(info.kind);
+  row.dataset.key = info.key;
+  row.dataset.done = info.done;
+  row.querySelector('.activity-icon').innerHTML = uiIcon(activityIconName(info, status));
   row.querySelector('.activity-copy').textContent = status;
   row.classList.remove('done', 'stopped');
   row.classList.add('active');
-  assistantActivity.append(row);
+  assistantActivity.querySelector('.activity-trace')?.append(row);
+  assistantActivity.querySelector('.activity-current-icon').innerHTML = uiIcon(activityIconName(info, status));
+  assistantActivity.querySelector('.activity-current').textContent = status;
+  const count = activitySteps.size;
+  assistantActivity.querySelector('.activity-count').textContent = count > 1 ? count + ' bước' : '';
   $('messages').scrollTop = $('messages').scrollHeight;
 }
 
@@ -388,8 +726,9 @@ function completeActivity(cancelled = false) {
     row.classList.remove('active');
     row.classList.add(cancelled ? 'stopped' : 'done');
     row.querySelector('.activity-copy').textContent = cancelled ? 'Đã dừng theo yêu cầu' : row.dataset.done;
-    if (cancelled) row.querySelector('.activity-icon').innerHTML = activityIcon(row.dataset.kind, true);
   }
+  assistantActivity.remove();
+  assistantActivity = null;
 }
 
 function renderTelemetry(records = []) {
@@ -403,17 +742,13 @@ function renderTelemetry(records = []) {
   const list = $('telemetryList'); list.replaceChildren();
   for (const item of records.slice(0, 40)) {
     const row = document.createElement('div'); row.className = 'telemetry-row';
-    row.innerHTML = '<span><strong>' + escapeHtml(item.model) + '</strong><small>' + escapeHtml(item.profileName) + ' · ' + formatTime(item.timestamp) + '</small></span><b>' + formatCompact((item.inputTokens || 0) + (item.outputTokens || 0)) + ' tok</b><small>' + (item.latencyMs || 0) + ' ms</small>';
+    row.innerHTML = '<span class="telemetry-model"><span class="telemetry-brand">' + brandIcon(brandKey(item.model, item.provider), item.model) + '</span><span><strong>' + escapeHtml(item.model) + '</strong><small>' + escapeHtml(item.profileName) + ' · ' + formatTime(item.timestamp) + '</small></span></span><b>' + formatCompact((item.inputTokens || 0) + (item.outputTokens || 0)) + ' tok</b><small>' + (item.latencyMs || 0) + ' ms</small>';
     list.append(row);
   }
 }
 
 function mcpIcon(kind) {
-  if (kind === 'notion') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.8 16.8 4l2.2 1.7v13.1L7.1 20 5 18.3V4.8Z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 8h2.2l5 7.6V8H17M8 16V8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
-  if (kind === 'linear') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 14.2a7.2 7.2 0 0 0 4.6 4.6M5.1 10.5l8.4 8.4M6.6 7.2l10.2 10.2M9.6 5.2l9.2 9.2M13.6 5.1a7.2 7.2 0 0 1 5.3 5.3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
-  if (kind === 'figma') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 4.5h3.5v5H8.5a2.5 2.5 0 1 1 0-5Zm3.5 0h3.5a2.5 2.5 0 1 1 0 5H12v-5Zm0 5h3.5a2.5 2.5 0 1 1 0 5H12v-5Zm-3.5 0H12v5H8.5a2.5 2.5 0 1 1 0-5Zm0 5H12V18a3.5 3.5 0 1 1-3.5-3.5Z" fill="none" stroke="currentColor" stroke-width="1.35"/></svg>';
-  if (kind === 'stitch') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linejoin="round"/><path d="m18.5 15 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" fill="currentColor"/></svg>';
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4.5a7.5 7.5 0 1 1-6.8 4.3M12 8a4 4 0 1 1-3.7 2.5M12 11.3a.8.8 0 1 1-.8.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+  return brandIcons[kind === 'stitch' ? 'google' : kind] || brandIcons.mcp;
 }
 
 function renderMcpCatalog(presets = [], servers = []) {
@@ -455,7 +790,7 @@ function renderMcpServers(servers = [], presets = []) {
   for (const server of servers) {
     const row = document.createElement('div'); row.className = 'mcp-row' + (server.error ? ' has-error' : '');
     const main = document.createElement('div'); main.className = 'mcp-row-main';
-    const iconKind = presets.find(item => item.id === server.catalogId)?.icon || 'sentry';
+    const iconKind = presets.find(item => item.id === server.catalogId)?.icon || 'mcp';
     const icon = document.createElement('span'); icon.className = 'mcp-brand-icon'; icon.innerHTML = mcpIcon(iconKind);
     const info = document.createElement('span');
     const stateText = server.connected
@@ -568,10 +903,98 @@ function renderHistory(sessions = []) {
   $('viewAllHistory').classList.toggle('hidden', historyExpanded || sessions.length <= 5);
 }
 
-function appendMessage(role, content, error = false, timestamp = Date.now(), attachments = []) {
+function messageActionIcon(kind) {
+  return uiIcon(kind === 'edit' ? 'pencilSimple' : 'copy');
+}
+
+async function copyMessageText(button, content) {
+  try {
+    await navigator.clipboard.writeText(content);
+  } catch {
+    const fallback = document.createElement('textarea');
+    fallback.value = content;
+    fallback.style.position = 'fixed';
+    fallback.style.opacity = '0';
+    document.body.append(fallback);
+    fallback.select();
+    document.execCommand('copy');
+    fallback.remove();
+  }
+  button.classList.add('copied');
+  button.setAttribute('aria-label', 'Đã sao chép');
+  setTimeout(() => {
+    button.classList.remove('copied');
+    button.setAttribute('aria-label', 'Sao chép');
+  }, 1200);
+}
+
+function beginMessageEdit(item, body, content, turnIndex) {
+  if (running || item.classList.contains('editing')) return;
+  item.classList.add('editing');
+  const editor = document.createElement('div');
+  editor.className = 'message-editor';
+  const input = document.createElement('textarea');
+  input.value = content;
+  input.setAttribute('aria-label', 'Chỉnh sửa tin nhắn');
+  input.rows = 1;
+  const hint = document.createElement('span');
+  hint.className = 'message-edit-hint';
+  hint.textContent = 'Gửi lại sẽ thay thế các phản hồi phía sau.';
+  const controls = document.createElement('div');
+  controls.className = 'message-edit-controls';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'message-edit-cancel';
+  cancel.textContent = 'Hủy';
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'message-edit-submit';
+  submit.textContent = 'Gửi lại';
+  const resize = () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 180) + 'px';
+    input.style.overflowY = input.scrollHeight > 180 ? 'auto' : 'hidden';
+  };
+  const close = () => {
+    editor.replaceWith(body);
+    item.classList.remove('editing');
+  };
+  const resend = () => {
+    const prompt = input.value.trim();
+    if (!prompt || submit.disabled) return;
+    submit.disabled = true;
+    input.disabled = true;
+    vscode.postMessage({ type: 'editMessage', index: turnIndex, prompt, mode, model: $('model').value });
+  };
+  cancel.addEventListener('click', close);
+  submit.addEventListener('click', resend);
+  input.addEventListener('input', () => {
+    submit.disabled = !input.value.trim();
+    resize();
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    } else if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      resend();
+    }
+  });
+  controls.append(hint, cancel, submit);
+  editor.append(input, controls);
+  body.replaceWith(editor);
+  resize();
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function appendMessage(role, content, error = false, timestamp = Date.now(), attachments = [], turnIndex = null) {
   document.querySelector('.empty')?.remove();
   const item = document.createElement('article');
   item.className = 'message ' + role + (error ? ' error' : '');
+  item.dataset.rawContent = content;
+  if (Number.isInteger(turnIndex)) item.dataset.turnIndex = String(turnIndex);
   const label = document.createElement('div');
   label.className = 'label';
   label.textContent = formatTime(timestamp);
@@ -579,7 +1002,30 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
   body.className = 'body';
   if (role === 'assistant') renderMarkdownInto(body, content);
   else body.textContent = content;
-  item.append(body, label);
+  const meta = document.createElement('div');
+  meta.className = 'message-meta';
+  const actions = document.createElement('div');
+  actions.className = 'message-actions';
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'message-action copy-message';
+  copy.setAttribute('aria-label', 'Sao chép');
+  copy.title = 'Sao chép';
+  copy.innerHTML = messageActionIcon('copy');
+  copy.addEventListener('click', () => void copyMessageText(copy, item.dataset.rawContent || content));
+  actions.append(copy);
+  if (role === 'user' && Number.isInteger(turnIndex)) {
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'message-action edit-message';
+    edit.setAttribute('aria-label', 'Chỉnh sửa');
+    edit.title = 'Chỉnh sửa';
+    edit.innerHTML = messageActionIcon('edit');
+    edit.addEventListener('click', () => beginMessageEdit(item, body, content, turnIndex));
+    actions.append(edit);
+  }
+  meta.append(label, actions);
+  item.append(body, meta);
   appendMessageAttachments(item, attachments);
   $('messages').append(item);
   $('messages').scrollTop = $('messages').scrollHeight;
@@ -594,16 +1040,81 @@ function appendTerminalOutput(data) {
     activeTerminal.open = false;
     activeTerminal.dataset.command = data.command || '';
     const summary = document.createElement('summary');
-    summary.textContent = (data.command || 'Terminal') + ' · đang chạy';
+    summary.innerHTML = '<span class="terminal-icon" aria-hidden="true">' + uiIcon('terminalWindow') + '</span><span class="terminal-command"></span><span class="terminal-elapsed"></span><span class="terminal-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
+    summary.querySelector('.terminal-command').textContent = data.command || 'Terminal';
+    summary.querySelector('.terminal-elapsed').textContent = 'đang chạy';
     const output = document.createElement('pre');
     activeTerminal.append(summary, output);
+    activeTerminal.addEventListener('toggle', () => {
+      const caret = activeTerminal?.querySelector('.terminal-caret');
+      if (caret) caret.innerHTML = uiIcon(activeTerminal.open ? 'caretDown' : 'caretRight');
+    });
     assistantBody.before(activeTerminal);
   }
   const output = activeTerminal.querySelector('pre');
   output.textContent = (output.textContent + data.chunk).slice(-20000);
-  activeTerminal.querySelector('summary').textContent = (data.command || 'Terminal') + ' · ' + Math.max(1, Math.round((data.elapsedMs || 0) / 1000)) + 's';
+  activeTerminal.querySelector('.terminal-command').textContent = data.command || 'Terminal';
+  activeTerminal.querySelector('.terminal-elapsed').textContent = Math.max(1, Math.round((data.elapsedMs || 0) / 1000)) + 's';
   output.scrollTop = output.scrollHeight;
   $('messages').scrollTop = $('messages').scrollHeight;
+}
+
+function renderGoal(goal) {
+  activeGoal = goal || null;
+  const rail = $('goalRail');
+  rail.classList.toggle('hidden', !activeGoal);
+  if (!activeGoal) return;
+  const state = activeGoal.status || 'ready';
+  rail.dataset.state = state;
+  $('goalTitle').textContent = activeGoal.objective;
+  $('goalStatus').textContent = activeGoal.lastStatus || (state === 'running' ? 'Đang làm việc' : state === 'paused' ? 'Đã tạm dừng' : state === 'failed' ? 'Cần xử lý' : 'Sẵn sàng để review');
+  $('goalPause').classList.toggle('hidden', state !== 'running');
+  $('goalResume').classList.toggle('hidden', state !== 'paused' && state !== 'failed');
+}
+
+function renderFollowUpQueue() {
+  const queue = $('followUpQueue');
+  const list = $('queueList');
+  queue.classList.toggle('hidden', !queuedFollowUps.length);
+  $('queueCount').textContent = queuedFollowUps.length + ' tin nhắn đang chờ';
+  list.replaceChildren();
+  queuedFollowUps.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'queue-row';
+    const copy = document.createElement('span');
+    copy.textContent = item.prompt;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', 'Bỏ tin nhắn khỏi hàng đợi');
+    remove.textContent = '×';
+    remove.addEventListener('click', () => {
+      queuedFollowUps.splice(index, 1);
+      renderFollowUpQueue();
+    });
+    row.append(copy, remove);
+    list.append(row);
+  });
+}
+
+function queueFollowUp(prompt, selectedMode, model) {
+  queuedFollowUps.push({ prompt, mode: selectedMode, model });
+  renderFollowUpQueue();
+  $('prompt').value = '';
+  resetComposerTokens();
+  resizePrompt();
+  updateSendState();
+}
+
+function runNextQueuedFollowUp() {
+  if (running || !queuedFollowUps.length) return;
+  const next = queuedFollowUps.shift();
+  renderFollowUpQueue();
+  setMode(next.mode);
+  if ([...$('model').options].some((option) => option.value === next.model)) {
+    $('model').value = next.model;
+    $('model').dispatchEvent(new Event('change'));
+  }
+  vscode.postMessage({ type: 'send', prompt: next.prompt, mode: next.mode, model: next.model, includeSelection: false, ...(isCodexTunableModel(next.model) ? { reasoningEffort, serviceTier } : {}) });
 }
 
 function setRunning(value, text = '') {
@@ -613,6 +1124,7 @@ function setRunning(value, text = '') {
   button.classList.remove('stopping');
   button.setAttribute('aria-label', value ? 'Dừng phản hồi' : 'Gửi');
   button.title = value ? 'Dừng' : 'Gửi';
+  document.querySelector('.composer-shell')?.classList.toggle('is-running', value);
   updateSendState();
 }
 
@@ -622,16 +1134,15 @@ function finishTurn(data) {
   assistantBody?.closest('.message')?.classList.remove('show-trace');
   if (assistantBody && turnStartedAt) {
     assistantBody.closest('.message')?.classList.remove('streaming');
+    assistantBody.closest('.message')?.classList.add('complete');
     const seconds = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
     const worked = document.createElement('div'); worked.className = 'worked-label';
-    worked.textContent = data.cancelled ? 'Đã dừng sau ' + seconds + ' giây' : data.error ? 'Dừng sau ' + seconds + ' giây' : 'Làm việc trong ' + seconds + ' giây';
+    const elapsed = seconds >= 60 ? Math.floor(seconds / 60) + ' phút' + (seconds % 60 ? ' ' + (seconds % 60) + ' giây' : '') : seconds + ' giây';
+    worked.textContent = data.cancelled ? 'Đã dừng sau ' + elapsed : data.error ? 'Dừng sau ' + elapsed : 'Đã làm trong ' + elapsed;
     assistantBody.closest('.message')?.insertBefore(worked, assistantBody);
   }
-  if (activeTerminal) {
-    const summary = activeTerminal.querySelector('summary');
-    if (summary) summary.textContent = activeTerminal.dataset.command + (data.cancelled ? ' · đã dừng' : ' · hoàn tất');
-    activeTerminal.open = false;
-  }
+  activeTerminal?.remove();
+  activeTerminal = null;
   if (data.error) {
     if (assistantBody && !assistantRawText && !assistantActivity?.children.length) assistantBody.closest('.message')?.remove();
     const errorBody = appendMessage('assistant', data.error, true, data.timestamp);
@@ -661,10 +1172,15 @@ function finishTurn(data) {
   turnStartedAt = 0;
   setRunning(false);
   $('prompt').focus();
+  setTimeout(runNextQueuedFollowUp, 0);
 }
 
 function updateSendState() {
-  $('send').disabled = running ? false : !$('prompt').value.trim();
+  const hasPrompt = Boolean($('prompt').value.trim() || composerLinks.length || composerSkills.length || composerContexts.length || composerGoalMode);
+  $('send').disabled = running ? false : !hasPrompt;
+  $('send').classList.toggle('queue-ready', running && hasPrompt);
+  $('send').setAttribute('aria-label', running && hasPrompt ? 'Xếp tin nhắn tiếp theo' : running ? 'Dừng phản hồi' : 'Gửi');
+  $('send').title = running && hasPrompt ? 'Gửi tiếp sau khi tác vụ hiện tại hoàn thành' : running ? 'Dừng' : 'Gửi';
 }
 
 function resizePrompt() {
@@ -674,74 +1190,341 @@ function resizePrompt() {
   const height = Math.min(prompt.scrollHeight, maximum);
   prompt.style.height = height + 'px';
   prompt.style.overflowY = prompt.scrollHeight > maximum ? 'auto' : 'hidden';
-  document.querySelector('.composer-shell')?.classList.toggle('has-input', Boolean(prompt.value.trim()));
+  document.querySelector('.composer-shell')?.classList.toggle('has-input', Boolean(prompt.value.trim() || composerLinks.length || composerSkills.length || composerContexts.length || composerGoalMode));
+}
+
+function composerSkillLabel(name) {
+  return String(name || '')
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function createComposerToken(kind, label, onRemove) {
+  const token = document.createElement('button');
+  token.type = 'button';
+  token.className = 'composer-token ' + kind;
+  token.setAttribute('aria-label', 'Bỏ ' + label);
+  const mark = document.createElement('i');
+  mark.setAttribute('aria-hidden', 'true');
+  mark.innerHTML = uiIcon(kind === 'goal' ? 'target' : kind === 'skill' ? 'cube' : 'selection');
+  const copy = document.createElement('span');
+  copy.textContent = label;
+  const remove = document.createElement('b');
+  remove.setAttribute('aria-hidden', 'true');
+  remove.textContent = '×';
+  token.append(mark, copy, remove);
+  token.addEventListener('click', onRemove);
+  return token;
+}
+
+function createComposerLinkToken(link) {
+  const token = document.createElement('span');
+  token.className = 'composer-token link';
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'composer-link-open';
+  open.title = link.url;
+  open.setAttribute('aria-label', 'Mở ' + link.label);
+  const mark = document.createElement('i');
+  mark.setAttribute('aria-hidden', 'true');
+  let isGithub = false;
+  try { isGithub = new URL(link.url).hostname.replace(/^www\./, '') === 'github.com'; } catch {}
+  mark.innerHTML = isGithub ? brandIcon('github', 'GitHub') : uiIcon('plugsConnected');
+  const copy = document.createElement('span');
+  copy.textContent = link.label;
+  open.append(mark, copy);
+  open.addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: link.url }));
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'composer-link-remove';
+  remove.innerHTML = uiIcon('x');
+  remove.setAttribute('aria-label', 'Bỏ liên kết ' + link.label);
+  remove.addEventListener('click', () => {
+    composerLinks = composerLinks.filter((item) => item.url !== link.url);
+    renderComposerTokens();
+    $('prompt').focus();
+  });
+  token.append(open, remove);
+  return token;
+}
+
+function addComposerLink(url, label = '') {
+  const normalized = String(url || '').trim();
+  if (!/^https?:\/\//i.test(normalized)) return false;
+  if (!composerLinks.some((item) => item.url === normalized)) {
+    composerLinks.push({ url: normalized, label: compactExternalLink(normalized, label) });
+  }
+  renderComposerTokens();
+  return true;
+}
+
+function extractComposerLinks(text, includeBareUrls) {
+  let changed = false;
+  let remaining = String(text || '').replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gi, (_, label, url) => {
+    changed = addComposerLink(url, label) || changed;
+    return '';
+  });
+  if (includeBareUrls) {
+    remaining = remaining.replace(/https?:\/\/[^\s<>()]+/gi, (url) => {
+      changed = addComposerLink(url) || changed;
+      return '';
+    });
+  }
+  return { changed, text: remaining.replace(/[ \t]{2,}/g, ' ').trimStart() };
+}
+
+function renderComposerTokens() {
+  const host = $('composerTokens');
+  host.replaceChildren();
+  if (composerGoalMode) {
+    host.append(createComposerToken('goal', 'Goal', () => {
+      composerGoalMode = false;
+      renderComposerTokens();
+      $('prompt').focus();
+    }));
+  }
+  composerSkills.forEach((skill) => {
+    host.append(createComposerToken('skill', composerSkillLabel(skill.name), () => {
+      composerSkills = composerSkills.filter((item) => item.name !== skill.name);
+      renderComposerTokens();
+      $('prompt').focus();
+    }));
+  });
+  composerContexts.forEach((context) => {
+    host.append(createComposerToken('context', context, () => {
+      composerContexts = composerContexts.filter((item) => item !== context);
+      renderComposerTokens();
+      $('prompt').focus();
+    }));
+  });
+  composerLinks.forEach((link) => host.append(createComposerLinkToken(link)));
+  const hasTokens = composerGoalMode || composerSkills.length > 0 || composerContexts.length > 0 || composerLinks.length > 0;
+  $('composerInput').classList.toggle('has-tokens', hasTokens);
+  updateComposerPlaceholder();
+  updateSendState();
+}
+
+function resetComposerTokens() {
+  composerGoalMode = false;
+  composerSkills = [];
+  composerContexts = [];
+  composerLinks = [];
+  renderComposerTokens();
+}
+
+function effectiveComposerPrompt() {
+  const parts = [
+    ...composerSkills.map((skill) => '$' + skill.name),
+    ...composerContexts,
+    ...composerLinks.map((link) => '[' + link.label + '](' + link.url + ')'),
+    $('prompt').value.trim()
+  ].filter(Boolean);
+  const body = parts.join(' ');
+  return composerGoalMode && body ? '/goal ' + body : body;
+}
+
+function activeComposerTrigger(value) {
+  const definitions = [
+    ['command', /(?:^|\s)(\/[^\s]*)$/],
+    ['skill', /(?:^|\s)(\$[^\s]*)$/],
+    ['mention', /(?:^|\s)(@[^\s]*)$/]
+  ];
+  for (const [kind, pattern] of definitions) {
+    const match = value.match(pattern);
+    if (!match) continue;
+    const token = match[1];
+    return { kind, token, start: match.index + match[0].lastIndexOf(token), end: value.length };
+  }
+  return null;
+}
+
+function replaceComposerTrigger(trigger, replacement = '') {
+  const prompt = $('prompt');
+  const before = prompt.value.slice(0, trigger.start);
+  const after = prompt.value.slice(trigger.end);
+  prompt.value = (before + replacement + after).replace(/[ \t]+$/, replacement ? ' ' : '');
+  resizePrompt();
+}
+
+function closeAddMenu() {
+  $('addMenu').classList.add('hidden');
+  $('attach').classList.remove('active');
+  $('attach').setAttribute('aria-expanded', 'false');
+}
+
+function appendMenuSection(host, label) {
+  const heading = document.createElement('div');
+  heading.className = 'menu-section-label';
+  heading.textContent = label;
+  host.append(heading);
+}
+
+function createMenuRow({ glyph, label, description, meta = '', action, selected = false }) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = selected ? 'selected' : '';
+  button.setAttribute('role', 'menuitem');
+  const icon = document.createElement('span');
+  icon.className = 'menu-glyph';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = uiIcon(glyph || 'cube');
+  const main = document.createElement('span');
+  main.className = 'menu-main';
+  const title = document.createElement('strong');
+  title.textContent = label;
+  const copy = document.createElement('small');
+  copy.textContent = description;
+  main.append(title, copy);
+  const suffix = document.createElement('span');
+  suffix.className = 'menu-meta';
+  suffix.textContent = meta;
+  button.append(icon, main, suffix);
+  button.addEventListener('click', action);
+  return button;
+}
+
+function renderAddMenu() {
+  const menu = $('addMenu');
+  menu.replaceChildren();
+  appendMenuSection(menu, 'Thêm');
+  menu.append(
+    createMenuRow({
+      glyph: 'paperclip',
+      label: 'Tệp và thư mục',
+      description: 'Đính kèm ngữ cảnh từ workspace',
+      action: () => {
+        closeAddMenu();
+        vscode.postMessage({ type: 'pickFiles', kind: 'resources' });
+      }
+    }),
+    createMenuRow({
+      glyph: 'target',
+      label: 'Goal',
+      description: 'Đặt mục tiêu để agent tiếp tục theo đuổi',
+      action: () => {
+        composerGoalMode = true;
+        closeAddMenu();
+        renderComposerTokens();
+        $('prompt').focus();
+      }
+    }),
+    createMenuRow({
+      glyph: 'lightbulb',
+      label: 'Plan mode',
+      description: 'Lập kế hoạch trước khi thực hiện',
+      action: () => {
+        closeAddMenu();
+        setMode('plan');
+        $('prompt').focus();
+      }
+    })
+  );
+  if (skills.length) {
+    appendMenuSection(menu, 'Skills');
+    for (const skill of skills) {
+      menu.append(createMenuRow({
+        glyph: 'cube',
+        label: composerSkillLabel(skill.name),
+        description: skill.description || 'Thêm skill vào yêu cầu',
+        meta: skill.source === 'workspace' ? 'Workspace' : 'Personal',
+        selected: composerSkills.some((item) => item.name === skill.name),
+        action: () => {
+          if (!composerSkills.some((item) => item.name === skill.name)) composerSkills.push(skill);
+          closeAddMenu();
+          renderComposerTokens();
+          $('prompt').focus();
+        }
+      }));
+    }
+  }
 }
 
 function renderComposerMenu() {
   const value = $('prompt').value;
   const menu = $('composerMenu');
   const slash = [
-    ['/new', 'Cuộc chat mới'],
-    ['/skills', 'Tìm và chèn skill'],
-    ['/models', 'Mở danh sách model'],
-    ['/plan', 'Chuyển sang chế độ Plan'],
-    ['/review', 'Xem các file đã thay đổi'],
-    ['/status', 'Xem provider, MCP và skills'],
-    ['/diagnostics', 'Kiểm tra kết nối'],
-    ['/mcp', 'Mở công cụ MCP'],
-    ['/settings', 'Mở cấu hình'],
-    ['/logs', 'Mở Output Channel'],
-    ['/export', 'Xuất gói chẩn đoán']
+    ['/goal', 'Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Goal', 'target'],
+    ['/new', 'Bắt đầu một cuộc chat mới', 'New chat', 'chatCircle'],
+    ['/compact', 'Rút gọn ngữ cảnh cuộc chat', 'Compact', 'broom'],
+    ['/skills', 'Tìm và chèn skill', 'Skills', 'cube'],
+    ['/model', 'Mở danh sách model', 'Model', 'circlesThree'],
+    ['/plan', 'Chuyển sang chế độ Plan', 'Plan mode', 'lightbulb'],
+    ['/review', 'Xem các file đã thay đổi', 'Code review', 'magnifyingGlass'],
+    ['/diff', 'Mở các thay đổi đang chờ review', 'Diff', 'gitDiff'],
+    ['/ide-context', 'Bật hoặc tắt file đang mở trong ngữ cảnh', 'IDE context', 'selection'],
+    ['/init', 'Tạo khung AGENTS.md cho dự án', 'Init', 'fileMd'],
+    ['/status', 'Xem provider, MCP và skills', 'Status', 'info'],
+    ['/diagnostics', 'Kiểm tra kết nối', 'Diagnostics', 'pulse'],
+    ['/mcp', 'Mở công cụ MCP', 'MCP', 'plugsConnected'],
+    ['/settings', 'Mở cấu hình', 'Settings', 'gear'],
+    ['/logs', 'Mở Output Channel', 'Logs', 'terminalWindow'],
+    ['/export', 'Xuất gói chẩn đoán', 'Export', 'export']
   ];
   const mentions = [
-    ['@selection', 'Đoạn code đang chọn'],
-    ['@file:', 'Một file trong workspace'],
-    ['@folder:', 'Cây file của thư mục'],
-    ['@terminal', 'Output terminal gần nhất'],
-    ['@git-diff', 'Thay đổi Git hiện tại'],
-    ['@problems', 'Problems của workspace']
+    ['@selection', 'Đoạn code đang chọn', 'Selection', 'selection'],
+    ['@file:', 'Một file trong workspace', 'File', 'file'],
+    ['@folder:', 'Cây file của thư mục', 'Folder', 'folderOpen'],
+    ['@terminal', 'Output terminal gần nhất', 'Terminal', 'terminalWindow'],
+    ['@git-diff', 'Thay đổi Git hiện tại', 'Git diff', 'gitDiff'],
+    ['@problems', 'Problems của workspace', 'Problems', 'pulse']
   ];
-  const skillMatch = value.match(/(?:^|\s)\$([^\s]*)$/);
-  const source = value.startsWith('/')
-    ? slash.map(([key, description]) => ({ key, description, kind: 'command' }))
-    : /(^|\s)@[^\s]*$/.test(value)
-      ? mentions.map(([key, description]) => ({ key, description, kind: 'mention' }))
-      : skillMatch
-        ? skills.map((skill) => ({ key: '$' + skill.name, description: skill.description, kind: 'skill', source: skill.source }))
+  const trigger = activeComposerTrigger(value);
+  const source = trigger?.kind === 'command'
+    ? slash.map(([key, description, label, glyph]) => ({ key, description, label, glyph, kind: 'command' }))
+    : trigger?.kind === 'mention'
+      ? mentions.map(([key, description, label, glyph]) => ({ key, description, label, glyph, kind: 'mention' }))
+      : trigger?.kind === 'skill'
+        ? skills.map((skill) => ({ key: '$' + skill.name, label: composerSkillLabel(skill.name), glyph: 'cube', description: skill.description, kind: 'skill', source: skill.source, skill }))
         : [];
-  const needle = value.startsWith('/')
-    ? value.toLowerCase()
-    : skillMatch
-      ? ('$' + (skillMatch[1] || '')).toLowerCase()
-      : (value.match(/@[^\s]*$/)?.[0] || '').toLowerCase();
+  const needle = (trigger?.token || '').toLowerCase();
   const filtered = source.filter((item) => item.key.toLowerCase().includes(needle)).slice(0, 50);
   menu.replaceChildren();
   if (composerMenuIndex >= filtered.length) composerMenuIndex = filtered.length - 1;
   if (composerMenuIndex < 0 && filtered.length) composerMenuIndex = 0;
   for (const [index, item] of filtered.entries()) {
-    const button = document.createElement('button'); button.type = 'button';
-    button.classList.toggle('selected', index === composerMenuIndex);
-    const command = document.createElement('span'); command.className = 'menu-key';
-    if (item.kind === 'skill') {
-      const mark = document.createElement('i'); mark.className = 'skill-mark'; mark.textContent = '$';
-      command.append(mark);
-    }
-    command.append(document.createTextNode(item.key));
-    if (item.kind === 'skill') {
-      const source = document.createElement('small'); source.className = 'skill-source'; source.textContent = item.source === 'workspace' ? 'project' : 'user';
-      command.append(source);
-    }
-    const copy = document.createElement('span'); copy.className = 'menu-copy'; copy.textContent = item.description;
-    button.append(command, copy);
-    button.addEventListener('click', () => {
-      if (value.startsWith('/')) $('prompt').value = item.key;
-      else if (item.kind === 'skill') $('prompt').value = value.replace(/\$[^\s]*$/, item.key + ' ');
-      else $('prompt').value = value.replace(/@[^\s]*$/, item.key);
+    const button = createMenuRow({
+      glyph: item.glyph || (item.kind === 'skill' ? 'cube' : 'info'),
+      label: item.label || item.key,
+      description: item.description,
+      meta: item.kind === 'skill' ? (item.source === 'workspace' ? 'Workspace' : 'Personal') : item.key,
+      selected: index === composerMenuIndex,
+      action: () => {
+      if (!trigger) return;
+      if (item.kind === 'skill') {
+        if (!composerSkills.some((skill) => skill.name === item.skill.name)) composerSkills.push(item.skill);
+        replaceComposerTrigger(trigger);
+        renderComposerTokens();
+      } else if (item.kind === 'mention' && !item.key.endsWith(':')) {
+        if (!composerContexts.includes(item.key)) composerContexts.push(item.key);
+        replaceComposerTrigger(trigger);
+        renderComposerTokens();
+      } else if (item.kind === 'command' && item.key === '/goal') {
+        composerGoalMode = true;
+        replaceComposerTrigger(trigger);
+        renderComposerTokens();
+      } else if (item.kind === 'command' && item.key === '/skills') {
+        replaceComposerTrigger(trigger, '$');
+        composerMenuIndex = 0;
+        renderComposerMenu();
+        $('prompt').focus();
+        return;
+      } else if (item.kind === 'command' && item.key === '/model') {
+        replaceComposerTrigger(trigger);
+        $('modelTrigger').click();
+      } else if (item.kind === 'command' && item.key === '/plan') {
+        replaceComposerTrigger(trigger);
+        setMode('plan');
+      } else {
+        replaceComposerTrigger(trigger, item.key);
+      }
       menu.classList.add('hidden');
       composerMenuIndex = -1;
       $('prompt').focus();
       resizePrompt();
       updateSendState();
+      }
     });
     menu.append(button);
   }
@@ -749,14 +1532,21 @@ function renderComposerMenu() {
 }
 
 function send() {
-  const prompt = $('prompt').value.trim();
-  if (!prompt || running) return;
+  const rawPrompt = $('prompt').value.trim();
+  const prompt = effectiveComposerPrompt();
+  if (!prompt) return;
   const model = $('model').value;
-  if ((!model || model === '__custom__') && !prompt.startsWith('/')) { appendMessage('assistant', 'Hãy chọn hoặc nhập một model trước khi gửi.', true); return; }
+  const standaloneCommand = !composerGoalMode && !composerSkills.length && !composerContexts.length && !composerLinks.length && rawPrompt.startsWith('/');
+  if ((!model || model === '__custom__') && !standaloneCommand) { appendMessage('assistant', 'Hãy chọn hoặc nhập một model trước khi gửi.', true); return; }
   const selected = $('model').selectedOptions[0];
   if (mode === 'agent' && selected?.dataset.tools === 'false') { appendMessage('assistant', 'Model này không hỗ trợ tools nên không thể chạy Agent mode. Hãy chuyển sang Chat hoặc chọn model khác.', true); return; }
-  vscode.postMessage({ type: 'send', prompt, mode, model, includeSelection: false });
+  if (running) {
+    queueFollowUp(prompt, mode, model);
+    return;
+  }
+  vscode.postMessage({ type: 'send', prompt, mode, model, includeSelection: false, ...(isCodexTunableModel(model) ? { reasoningEffort, serviceTier } : {}) });
   $('prompt').value = '';
+  resetComposerTokens();
   resizePrompt();
   updateSendState();
 }
@@ -786,14 +1576,18 @@ $('startRouter').addEventListener('click', () => {
   vscode.postMessage({ type: 'startRouter' });
 });
 $('openDashboard').addEventListener('click', () => vscode.postMessage({ type: 'openDashboard' }));
-$('openExternal').addEventListener('click', () => vscode.postMessage({ type: 'openDashboard' }));
+$('backToChat').addEventListener('click', () => {
+  setupDismissed = true;
+  setupOpenRequested = false;
+  showSetup(false);
+});
 $('historyToggle').addEventListener('click', (event) => {
   event.stopPropagation();
   const opening = $('historyPanel').classList.contains('hidden');
   if (opening) {
     historyExpanded = false;
     renderHistory(allSessions);
-    $('historyPanel').classList.remove('hidden');
+    openFloatingSurface('historyPanel');
   } else $('historyPanel').classList.add('hidden');
 });
 $('historyPanel').addEventListener('click', (event) => event.stopPropagation());
@@ -803,7 +1597,7 @@ $('metricsToggle').addEventListener('click', (event) => { event.stopPropagation(
 $('closeTelemetry').addEventListener('click', () => $('telemetryPanel').classList.add('hidden'));
 $('telemetryPanel').addEventListener('click', (event) => event.stopPropagation());
 $('clearTelemetry').addEventListener('click', () => vscode.postMessage({ type: 'clearTelemetry' }));
-$('openMcp').addEventListener('click', (event) => { event.stopPropagation(); $('mcpPanel').classList.remove('hidden'); vscode.postMessage({ type: 'getMcpServers' }); });
+$('openMcp').addEventListener('click', (event) => { event.stopPropagation(); openFloatingSurface('mcpPanel'); vscode.postMessage({ type: 'getMcpServers' }); });
 $('closeMcp').addEventListener('click', () => $('mcpPanel').classList.add('hidden'));
 $('mcpPanel').addEventListener('click', (event) => event.stopPropagation());
 function updateMcpForm() {
@@ -827,7 +1621,21 @@ $('saveMcp').addEventListener('click', () => {
 updateMcpForm();
 $('closeImage').addEventListener('click', () => $('imageLightbox').classList.add('hidden'));
 $('imageLightbox').addEventListener('click', (event) => { if (event.target === $('imageLightbox')) $('imageLightbox').classList.add('hidden'); });
-$('attach').addEventListener('click', () => vscode.postMessage({ type: 'pickFiles', kind: 'files' }));
+$('attach').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const opening = $('addMenu').classList.contains('hidden');
+  if (opening) {
+    $('composerMenu').classList.add('hidden');
+    composerMenuIndex = -1;
+    renderAddMenu();
+    $('addMenu').classList.remove('hidden');
+    $('attach').classList.add('active');
+  } else {
+    closeAddMenu();
+  }
+  $('attach').setAttribute('aria-expanded', String(opening));
+});
+$('addMenu').addEventListener('click', (event) => event.stopPropagation());
 $('acceptAllChanges').addEventListener('click', () => vscode.postMessage({ type: 'acceptAllChanges' }));
 $('undoAllChanges').addEventListener('click', () => vscode.postMessage({ type: 'undoAllChanges' }));
 $('hideChanges').addEventListener('click', () => {
@@ -846,7 +1654,9 @@ $('model').addEventListener('change', () => {
   if (custom) $('customModelInput').focus();
   const selectedLabel = custom ? 'Model tùy chỉnh' : ($('model').selectedOptions[0]?.textContent || 'Chọn model');
   $('modelLabel').textContent = selectedLabel;
+  $('modelBrand').innerHTML = custom || !$('model').value ? '' : brandIcon(brandKey($('model').value, activeProvider), selectedLabel);
   $('modelTrigger').title = selectedLabel;
+  updateCodexTuning();
 });
 $('modelTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
@@ -879,19 +1689,59 @@ document.querySelectorAll('#providerMenu .provider-option').forEach(option => op
   $('providerPicker').classList.remove('open');
   $('providerTrigger').setAttribute('aria-expanded', 'false');
 }));
+$('reasoningTrigger').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const open = $('reasoningMenu').classList.contains('hidden');
+  $('reasoningMenu').classList.toggle('hidden', !open);
+  $('reasoningPicker').classList.toggle('open', open);
+  $('reasoningTrigger').setAttribute('aria-expanded', String(open));
+});
+$('reasoningMenu').addEventListener('click', (event) => event.stopPropagation());
+document.querySelectorAll('#reasoningMenu [data-effort]').forEach((option) => option.addEventListener('click', (event) => {
+  event.stopPropagation();
+  reasoningEffort = option.dataset.effort;
+  $('reasoningMenu').classList.add('hidden');
+  $('reasoningPicker').classList.remove('open');
+  $('reasoningTrigger').setAttribute('aria-expanded', 'false');
+  updateCodexTuning();
+}));
+$('fastMode').addEventListener('click', (event) => {
+  event.stopPropagation();
+  serviceTier = serviceTier === 'fast' ? 'default' : 'fast';
+  updateCodexTuning();
+});
+$('quotaReset').addEventListener('click', () => vscode.postMessage({ type: 'openTelemetryDashboard' }));
+$('languageTrigger').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const open = $('languageMenu').classList.contains('hidden');
+  $('languageMenu').classList.toggle('hidden', !open);
+  $('languagePicker').classList.toggle('open', open);
+  $('languageTrigger').setAttribute('aria-expanded', String(open));
+});
+$('languageMenu').addEventListener('click', (event) => event.stopPropagation());
+document.querySelectorAll('#languageMenu [data-language]').forEach((option) => option.addEventListener('click', (event) => {
+  event.stopPropagation();
+  $('uiLanguage').value = option.dataset.language;
+  $('uiLanguage').dispatchEvent(new Event('change'));
+  $('languageMenu').classList.add('hidden');
+  $('languagePicker').classList.remove('open');
+  $('languageTrigger').setAttribute('aria-expanded', 'false');
+}));
 $('addCustomModel').addEventListener('click', () => {
   const model = $('customModelInput').value.trim();
   if (model) vscode.postMessage({ type: 'addCustomModel', model });
 });
 $('retryConnection').addEventListener('click', () => {
   showError('');
-  vscode.postMessage({ type: 'retryConnection' });
+  $('setupCheckResult').textContent = 'Đang kiểm tra provider…';
+  $('setupCheckResult').className = 'setup-check-result checking';
+  $('retryConnection').disabled = true;
+  vscode.postMessage({ type: 'diagnostics' });
 });
-$('stopRouter').addEventListener('click', () => vscode.postMessage({ type: 'checkRouterConnection' }));
 $('connectionToggle').addEventListener('click', () => vscode.postMessage({ type: 'checkRouterConnection' }));
 function runConnectionDiagnostics() {
   const meta = providerMeta[activeProvider] || providerMeta['9router'];
-  $('connectionDiagnostics').classList.remove('hidden');
+  openFloatingSurface('connectionDiagnostics');
   $('connectionProviderName').textContent = meta.label;
   $('connectionProviderMark').textContent = meta.label.slice(0, 2).toUpperCase();
   $('connectionEndpoint').textContent = $('configEndpoint').value.trim() || 'Chưa có endpoint';
@@ -904,24 +1754,23 @@ function runConnectionDiagnostics() {
   $('retryDiagnostics').disabled = true;
   vscode.postMessage({ type: 'diagnostics' });
 }
-$('topDisconnect').addEventListener('click', () => {
-  if (providerConnected) {
-    runConnectionDiagnostics();
-    return;
-  }
+$('topConnect').addEventListener('click', () => {
+  setupDismissed = false;
+  setupOpenRequested = true;
   if (activeProvider === '9router') {
+    closeFloatingSurfaces();
     showSetup(true);
     $('setup').scrollTop = 0;
     return;
   }
-  $('configPanel').classList.remove('hidden');
+  setupOpenRequested = false;
+  openFloatingSurface('configPanel');
 });
 $('retryDiagnostics').addEventListener('click', runConnectionDiagnostics);
 $('closeConnectionDiagnostics').addEventListener('click', () => $('connectionDiagnostics').classList.add('hidden'));
 $('connectionDiagnostics').addEventListener('click', (event) => { if (event.target === $('connectionDiagnostics')) $('connectionDiagnostics').classList.add('hidden'); });
 $('openConnectionSettings').addEventListener('click', () => {
-  $('connectionDiagnostics').classList.add('hidden');
-  $('configPanel').classList.remove('hidden');
+  openFloatingSurface('configPanel');
 });
 $('permissionMode').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -933,7 +1782,7 @@ $('permissionMode').addEventListener('click', (e) => {
 document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
   opt.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (opt.dataset.perm === 'full') $('accessConfirm').classList.remove('hidden');
+    if (opt.dataset.perm === 'full') openFloatingSurface('accessConfirm');
     else vscode.postMessage({ type: 'setPermissionMode', mode: opt.dataset.perm });
     $('permDropdown').classList.remove('open');
     $('permMenu').classList.add('hidden');
@@ -941,26 +1790,54 @@ document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
 });
 $('cancelFull').addEventListener('click', () => $('accessConfirm').classList.add('hidden'));
 $('confirmFull').addEventListener('click', () => { $('accessConfirm').classList.add('hidden'); vscode.postMessage({ type: 'setPermissionMode', mode: 'full' }); });
+$('accessConfirm').addEventListener('click', (event) => { if (event.target === $('accessConfirm')) $('accessConfirm').classList.add('hidden'); });
+$('configPanel').addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (!$('providerPicker').contains(event.target)) {
+    $('providerMenu').classList.add('hidden');
+    $('providerPicker').classList.remove('open');
+    $('providerTrigger').setAttribute('aria-expanded', 'false');
+  }
+  if (!$('languagePicker').contains(event.target)) {
+    $('languageMenu').classList.add('hidden');
+    $('languagePicker').classList.remove('open');
+    $('languageTrigger').setAttribute('aria-expanded', 'false');
+  }
+});
 document.addEventListener('click', () => {
+  closeAddMenu();
   $('permDropdown')?.classList.remove('open');
   $('permMenu')?.classList.add('hidden');
   $('modelMenu')?.classList.add('hidden');
   $('modelPicker')?.classList.remove('open');
   $('modelTrigger')?.setAttribute('aria-expanded', 'false');
-  $('historyPanel')?.classList.add('hidden');
-  historyExpanded = false;
-  $('telemetryPanel')?.classList.add('hidden');
-  $('mcpPanel')?.classList.add('hidden');
+  closeFloatingSurfaces();
   $('providerMenu')?.classList.add('hidden');
   $('providerPicker')?.classList.remove('open');
   $('providerTrigger')?.setAttribute('aria-expanded', 'false');
+  $('languageMenu')?.classList.add('hidden');
+  $('languagePicker')?.classList.remove('open');
+  $('languageTrigger')?.setAttribute('aria-expanded', 'false');
+  $('reasoningMenu')?.classList.add('hidden');
+  $('reasoningPicker')?.classList.remove('open');
+  $('reasoningTrigger')?.setAttribute('aria-expanded', 'false');
   $('modeMenu')?.classList.add('hidden');
   $('modePicker')?.classList.remove('open');
   $('modeTrigger')?.setAttribute('aria-expanded', 'false');
 });
-$('settings').addEventListener('click', () => $('configPanel').classList.toggle('hidden'));
+$('settings').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const opening = $('configPanel').classList.contains('hidden');
+  if (opening) openFloatingSurface('configPanel');
+  else $('configPanel').classList.add('hidden');
+});
 $('closeConfig').addEventListener('click', () => $('configPanel').classList.add('hidden'));
 $('newProfile').addEventListener('click', () => { currentProfileId = ''; $('profileName').value = ''; $('configApiKey').value = ''; $('inputPrice').value = ''; $('outputPrice').value = ''; renderProfiles(); });
+$('deleteProfile').addEventListener('click', () => {
+  const profile = profiles.find((item) => item.id === currentProfileId);
+  if (!profile || profiles.length <= 1) return;
+  vscode.postMessage({ type: 'deleteProfile', id: profile.id });
+});
 $('saveConfig').addEventListener('click', () => {
   vscode.postMessage({
     type: 'connect',
@@ -982,14 +1859,26 @@ $('runDiagnostics').addEventListener('click', () => {
   vscode.postMessage({ type: 'diagnostics' });
 });
 $('localSetup').addEventListener('click', () => vscode.postMessage({ type: 'setupLocalProvider' }));
+$('openCockpit').addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://github.com/jlcodes99/cockpit-tools/releases' }));
 $('exportDiagnostics').addEventListener('click', () => vscode.postMessage({ type: 'exportDiagnostics' }));
 $('send').addEventListener('click', () => {
   if (running) {
+    if ($('prompt').value.trim()) {
+      send();
+      return;
+    }
     $('send').classList.add('stopping');
     vscode.postMessage({ type: 'stopTurn' });
     return;
   }
   send();
+});
+$('goalPause').addEventListener('click', () => vscode.postMessage({ type: 'pauseGoal' }));
+$('goalResume').addEventListener('click', () => vscode.postMessage({ type: 'resumeGoal', model: $('model').value }));
+$('goalClear').addEventListener('click', () => vscode.postMessage({ type: 'clearGoal' }));
+$('clearQueue').addEventListener('click', () => {
+  queuedFollowUps = [];
+  renderFollowUpQueue();
 });
 $('prompt').addEventListener('keydown', (event) => {
   const menu = $('composerMenu');
@@ -1014,9 +1903,22 @@ $('prompt').addEventListener('keydown', (event) => {
       return;
     }
   }
+  if (event.key === 'Backspace' && !$('prompt').value) {
+    if (composerLinks.length) composerLinks.pop();
+    else if (composerContexts.length) composerContexts.pop();
+    else if (composerSkills.length) composerSkills.pop();
+    else if (composerGoalMode) composerGoalMode = false;
+    else return;
+    event.preventDefault();
+    renderComposerTokens();
+    return;
+  }
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); }
 });
 $('prompt').addEventListener('input', () => {
+  closeAddMenu();
+  const extracted = extractComposerLinks($('prompt').value, false);
+  if (extracted.changed) $('prompt').value = extracted.text;
   resizePrompt();
   renderComposerMenu();
   updateSendState();
@@ -1025,19 +1927,37 @@ $('prompt').addEventListener('focus', () => document.querySelector('.composer-sh
 $('prompt').addEventListener('blur', () => document.querySelector('.composer-shell')?.classList.remove('prompt-focused'));
 $('prompt').addEventListener('paste', (event) => {
   const images = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'));
-  if (!images.length) return;
-  event.preventDefault();
-  for (const file of images) {
-    const reader = new FileReader();
-    reader.addEventListener('load', () => vscode.postMessage({ type: 'pasteImage', name: file.name || 'clipboard-image', mimeType: file.type, dataUrl: String(reader.result || '') }));
-    reader.readAsDataURL(file);
+  if (images.length) {
+    event.preventDefault();
+    for (const file of images) {
+      const reader = new FileReader();
+      reader.addEventListener('load', () => vscode.postMessage({ type: 'pasteImage', name: file.name || 'clipboard-image', mimeType: file.type, dataUrl: String(reader.result || '') }));
+      reader.readAsDataURL(file);
+    }
+    return;
   }
+  const pasted = event.clipboardData?.getData('text/plain') || '';
+  const extracted = extractComposerLinks(pasted, true);
+  if (!extracted.changed) return;
+  event.preventDefault();
+  const prompt = $('prompt');
+  const start = prompt.selectionStart ?? prompt.value.length;
+  const end = prompt.selectionEnd ?? start;
+  prompt.setRangeText(extracted.text, start, end, 'end');
+  resizePrompt();
+  renderComposerMenu();
+  updateSendState();
 });
 
 window.addEventListener('message', ({ data }) => {
-  if (data.type === 'bootstrap') {
+  if (data.type === 'uiDialog') {
+    renderUiDialog(data);
+  } else if (data.type === 'uiToast') {
+    showUiToast(data);
+  } else if (data.type === 'bootstrap') {
     $('endpoint').value = data.endpoint;
     $('configEndpoint').value = data.endpoint;
+    renderGoal(data.goal);
     setProvider(data.provider || '9router', false);
     if (!providerMeta[data.provider || '9router']?.local) {
       $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
@@ -1056,6 +1976,8 @@ window.addEventListener('message', ({ data }) => {
     const initialProfile = profiles.find((item) => item.id === currentProfileId);
     if (initialProfile) applyProfileUi(initialProfile);
     renderHistory(data.sessions || []);
+  } else if (data.type === 'goalState') {
+    renderGoal(data.goal);
   } else if (data.type === 'sessions') {
     renderHistory(data.sessions || []);
   } else if (data.type === 'restoreSession') {
@@ -1063,7 +1985,9 @@ window.addEventListener('message', ({ data }) => {
     setMode(data.mode || 'agent');
     $('messages').replaceChildren();
     changeSummary = null;
-    for (const turn of data.turns || []) appendMessage(turn.role, turn.content, Boolean(turn.error), turn.timestamp, turn.attachments || []);
+    for (const [index, turn] of (data.turns || []).entries()) {
+      appendMessage(turn.role, turn.content, Boolean(turn.error), turn.timestamp, turn.attachments || [], index);
+    }
     if ([...$('model').options].some((option) => option.value === data.model)) {
       $('model').value = data.model;
       $('model').dispatchEvent(new Event('change'));
@@ -1073,11 +1997,20 @@ window.addEventListener('message', ({ data }) => {
     skills = data.skills || [];
     renderComposerMenu();
   } else if (data.type === 'focusSkillPicker') {
-    $('prompt').value = '$';
+    const prompt = $('prompt');
+    prompt.value = prompt.value.replace(/\s*$/, prompt.value ? ' $' : '$');
     composerMenuIndex = 0;
     renderComposerMenu();
-    $('prompt').focus();
+    prompt.focus();
+    resizePrompt();
     updateSendState();
+  } else if (data.type === 'editGoalComposer') {
+    composerGoalMode = true;
+    $('prompt').value = data.objective || '';
+    renderComposerTokens();
+    resizePrompt();
+    $('prompt').focus();
+    $('prompt').setSelectionRange($('prompt').value.length, $('prompt').value.length);
   } else if (data.type === 'setComposerMode') {
     setMode(data.mode || 'agent');
     $('prompt').focus();
@@ -1087,41 +2020,66 @@ window.addEventListener('message', ({ data }) => {
     $('collapsedChanges').classList.add('hidden');
   } else if (data.type === 'connection') {
     activeProvider = data.provider || '9router';
-    providerConnected = Boolean(data.connected);
+    setProvider(activeProvider, false);
+    if (data.endpoint) {
+      $('endpoint').value = data.endpoint;
+      $('configEndpoint').value = data.endpoint;
+    }
     const isRouter = activeProvider === '9router';
+    const routerReady = isRouter && data.routerRuntimeState === 'ready';
+    const routerStale = isRouter && data.routerRuntimeState === 'stale';
+    const routerExternal = routerReady && data.routerRuntimeOwner === 'external';
     const providerName = providerMeta[activeProvider]?.label || activeProvider;
-    $('connectionDot').classList.toggle('online', data.connected);
+    $('connectionDot').classList.toggle('online', data.connected || routerReady);
     const needsConfiguration = !data.connected && /API key|cấu hình|endpoint/i.test(data.message || '');
-    $('connectionLabel').textContent = data.connected ? providerName + ' sẵn sàng' : needsConfiguration ? 'Chưa cấu hình' : providerName + ' ngoại tuyến';
+    $('connectionLabel').textContent = data.connected
+      ? providerName + ' sẵn sàng'
+      : routerReady
+        ? '9Router đang chạy'
+        : needsConfiguration
+          ? 'Chưa cấu hình'
+          : routerStale
+            ? '9Router cần khôi phục'
+            : providerName + ' ngoại tuyến';
     if (data.connected) showError('');
     else if (!launchingRouter) showError(data.message || '');
-    showSetup(!data.connected);
+    if (!data.connected && !setupDismissed) showSetup(true);
+    else if (data.connected && !setupOpenRequested) showSetup(false);
     $('connectionToggle').classList.toggle('hidden', !data.connected);
     $('connectionToggle').textContent = 'Kiểm tra';
-    $('topDisconnect').classList.remove('hidden');
-    $('topDisconnect').textContent = data.connected ? 'Kiểm tra' : 'Kết nối';
-    $('topDisconnect').classList.toggle('connect-action', !data.connected);
-    $('stopRouter').classList.toggle('hidden', !data.connected || !isRouter);
+    $('topConnectLabel').textContent = routerStale ? 'Khôi phục' : routerReady && !data.connected ? 'Cấu hình' : 'Kết nối';
+    $('topConnect').classList.toggle('hidden', Boolean(data.connected));
+    $('topConnect').classList.toggle('attention', !data.connected && !routerReady);
     $('localSetup').classList.toggle('hidden', !(activeProvider === 'ollama' || activeProvider === 'lm-studio'));
-    $('setupTitle').textContent = isRouter ? 'Kết nối 9Router bằng một nút.' : 'Kết nối ' + providerName + ' để bắt đầu.';
+    $('setupProviderBadge').textContent = providerName;
+    $('setupProviderMark').innerHTML = brandIcon(providerMeta[activeProvider]?.brand || brandKey(providerName, activeProvider), providerName);
+    $('setupEndpointLabel').textContent = data.endpoint || $('configEndpoint').value.trim() || 'Chưa có endpoint';
+    $('setupTitle').textContent = isRouter ? 'Kết nối 9Router.' : 'Kết nối ' + providerName + '.';
     $('setupCopy').textContent = isRouter
-      ? 'Extension tự chạy dịch vụ nền rồi mở trang quản lý bằng trình duyệt mặc định.'
+      ? 'Khởi động gateway, kiểm tra API và mở bảng điều khiển mà không cần tự chạy lệnh.'
       : activeProvider === 'ollama' || activeProvider === 'lm-studio'
         ? 'Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.'
         : 'Mở Cài đặt để kiểm tra endpoint và API key của provider này.';
-    if (data.connected) {
-      setRouterLaunchState('ready', '9Router đang hoạt động');
+    if (data.connected || routerReady) {
+      setRouterLaunchState(
+        'ready',
+        isRouter
+          ? (routerExternal ? '9Router đang chạy sẵn' : '9Router đang hoạt động')
+          : providerName + ' đã kết nối'
+      );
       $('launchDescription').textContent = !isRouter
         ? 'Đang dùng provider ' + activeProvider + '.'
-        : 'Dịch vụ đang chạy. Bấm Kiểm tra để xem tiến trình, cổng và API trong Terminal.';
-      $('startRouter').classList.toggle('hidden', !isRouter);
+        : routerExternal
+          ? 'RelayCode đã phát hiện 9Router từ terminal và sẽ dùng lại tiến trình này, không khởi động thêm.'
+          : 'Gateway và API đang sẵn sàng nhận yêu cầu từ Chat hoặc Agent.';
+      $('startRouter').classList.add('hidden');
       $('openDashboard').classList.toggle('hidden', !isRouter);
       $('retryConnection').classList.remove('hidden');
-      $('topDisconnect').textContent = 'Kiểm tra';
-      $('topDisconnect').classList.remove('connect-action');
+      $('topConnect').classList.remove('attention');
     } else {
       $('startRouter').classList.toggle('hidden', !isRouter);
       $('openDashboard').classList.add('hidden');
+      $('retryConnection').classList.remove('hidden');
       if (!launchingRouter) setRouterLaunchState('idle', isRouter ? '9Router chưa chạy' : providerName + ' chưa kết nối');
     }
     const select = $('model');
@@ -1142,8 +2100,10 @@ window.addEventListener('message', ({ data }) => {
     else if (select.options.length > 1) select.selectedIndex = 1;
     const selectedLabel = select.selectedOptions[0]?.textContent || 'Chọn model';
     $('modelLabel').textContent = selectedLabel;
+    $('modelBrand').innerHTML = select.value ? brandIcon(brandKey(select.value, activeProvider), selectedLabel) : '';
     $('modelTrigger').title = selectedLabel;
     renderModelMenu();
+    updateCodexTuning();
   } else if (data.type === 'favoriteModels') {
     favoriteModels = data.models || [];
     renderModelMenu($('modelSearch').value);
@@ -1163,12 +2123,26 @@ window.addEventListener('message', ({ data }) => {
     card.innerHTML = '<strong>Bắt đầu nhanh</strong><span>' + escapeHtml(data.message) + '</span>';
     $('messages').append(card);
   } else if (data.type === 'recoveredTurn') {
-    appendMessage('user', data.prompt, false, data.startedAt);
-    appendMessage('assistant', (data.answer || 'Tác vụ bị gián đoạn khi IDE reload.') + '\n\n> Đã khôi phục nội dung trước khi reload. Bạn có thể gửi tiếp để Agent hoàn tất.', false, Date.now());
+    const item = document.createElement('article'); item.className = 'recovery-card';
+    const lastStatus = data.checkpoint?.lastStatus || 'Tác vụ bị gián đoạn khi IDE reload.';
+    item.innerHTML = '<small>Khôi phục phiên Agent</small><strong>' + escapeHtml(data.prompt) + '</strong><span>' + escapeHtml(lastStatus) + '</span><div>' + (data.checkpoint ? '<button class="recovery-resume">Tiếp tục</button>' : '') + '<button class="recovery-discard">Bỏ phiên</button></div>';
+    item.querySelector('.recovery-resume')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'resumeAgent', model: $('model').value });
+      item.querySelector('.recovery-resume').disabled = true;
+      item.querySelector('.recovery-resume').textContent = 'Đang tiếp tục…';
+    });
+    item.querySelector('.recovery-discard').addEventListener('click', () => {
+      vscode.postMessage({ type: 'discardAgentRun' });
+      item.remove();
+    });
+    $('messages').append(item);
+    $('messages').scrollTop = $('messages').scrollHeight;
+  } else if (data.type === 'agentRecoveryDismissed') {
+    document.querySelector('.recovery-card')?.remove();
   } else if (data.type === 'openConfig') {
-    $('configPanel').classList.remove('hidden');
+    openFloatingSurface('configPanel');
   } else if (data.type === 'openMcpPanel') {
-    $('mcpPanel').classList.remove('hidden');
+    openFloatingSurface('mcpPanel');
   } else if (data.type === 'openModelPicker') {
     $('modelMenu').classList.remove('hidden');
     $('modelPicker').classList.add('open');
@@ -1188,6 +2162,9 @@ window.addEventListener('message', ({ data }) => {
     $('diagnosticsResult').textContent = data.message;
     $('diagnosticsResult').className = 'diagnostics-result ' + (data.ok ? 'success' : 'failure');
     $('runDiagnostics').disabled = false;
+    $('retryConnection').disabled = false;
+    $('setupCheckResult').textContent = data.message;
+    $('setupCheckResult').className = 'setup-check-result ' + (data.ok ? 'success' : 'failure');
     $('retryDiagnostics').disabled = false;
     $('connectionProviderName').textContent = providerMeta[data.provider]?.label || data.provider || 'Provider';
     $('connectionProviderMark').textContent = (providerMeta[data.provider]?.label || data.provider || 'AI').slice(0, 2).toUpperCase();
@@ -1224,7 +2201,9 @@ window.addEventListener('message', ({ data }) => {
     $('checkModels').classList.remove('checking');
     renderModelMenu($('modelSearch').value);
   } else if (data.type === 'telemetry') {
-    renderTelemetry(data.records || []);
+    latestTelemetryRecords = data.records || [];
+    renderTelemetry(latestTelemetryRecords);
+    updateCodexTuning();
   } else if (data.type === 'mcpServers') {
     renderMcpServers(data.servers || [], data.presets || []);
   } else if (data.type === 'checkpoint') {
@@ -1251,15 +2230,11 @@ window.addEventListener('message', ({ data }) => {
         ? 'Quá trình chạy nền, bạn có thể tiếp tục dùng IDE.'
         : 'Không cần mở terminal. Một nút là đủ để bắt đầu.';
     if (data.progress === 'stopped') {
-      providerConnected = false;
       $('startRouter').classList.remove('hidden');
       $('openDashboard').classList.add('hidden');
       $('retryConnection').classList.add('hidden');
-      $('stopRouter').classList.add('hidden');
       $('connectionToggle').classList.add('hidden');
-      $('topDisconnect').classList.remove('hidden');
-      $('topDisconnect').classList.add('connect-action');
-      $('topDisconnect').textContent = 'Kết nối';
+      $('topConnect').classList.add('attention');
     }
   } else if (data.type === 'browserOpened') {
     setRouterLaunchState('ready', 'Đã mở trình quản lý');
@@ -1282,7 +2257,7 @@ window.addEventListener('message', ({ data }) => {
       }
       const chip = document.createElement('span');
       chip.className = 'attachment-chip';
-      chip.textContent = item.name;
+      chip.innerHTML = fileTypeIcon(item.name) + '<span>' + escapeHtml(item.name) + '</span>';
       const remove = document.createElement('button');
       remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', 'Bỏ tệp đính kèm');
       remove.addEventListener('click', () => vscode.postMessage({ type: 'removeAttachment', index }));
@@ -1293,6 +2268,25 @@ window.addEventListener('message', ({ data }) => {
     item.innerHTML = '<strong>Agent cần quyền</strong><span>' + data.message + '</span><div><button class="permission-allow">Cho phép</button><button class="permission-deny">Từ chối</button></div>';
     item.querySelector('.permission-allow').addEventListener('click', () => { vscode.postMessage({ type: 'approval', id: data.id, allow: true }); item.remove(); });
     item.querySelector('.permission-deny').addEventListener('click', () => { vscode.postMessage({ type: 'approval', id: data.id, allow: false }); item.remove(); });
+    $('messages').append(item); $('messages').scrollTop = $('messages').scrollHeight;
+  } else if (data.type === 'toolFailure') {
+    const item = document.createElement('article'); item.className = 'tool-failure-card';
+    item.dataset.toolFailureId = data.id;
+    item.innerHTML = '<small>' + escapeHtml(data.tool) + ' · lần ' + data.attempt + '</small><strong>Tool chưa hoàn thành</strong><span>' + escapeHtml(data.message) + '</span><div><button class="tool-retry">Thử lại</button><button class="tool-change-model">Đổi model</button><button class="tool-skip">Bỏ qua</button></div>';
+    const finish = (action, model) => {
+      vscode.postMessage({ type: 'resolveToolFailure', id: data.id, action, model });
+      item.remove();
+    };
+    item.querySelector('.tool-retry').addEventListener('click', () => finish('retry'));
+    item.querySelector('.tool-change-model').addEventListener('click', () => {
+      pendingToolFailureId = data.id;
+      $('modelMenu').classList.remove('hidden');
+      $('modelPicker').classList.add('open');
+      $('modelTrigger').setAttribute('aria-expanded', 'true');
+      $('modelSearch').focus();
+    });
+    item.querySelector('.tool-change-model').title = 'Chọn model khác rồi tiếp tục từ bước đang dở';
+    item.querySelector('.tool-skip').addEventListener('click', () => finish('skip'));
     $('messages').append(item); $('messages').scrollTop = $('messages').scrollHeight;
   } else if (data.type === 'changesState') {
     const tray = $('changeTray');
@@ -1316,7 +2310,7 @@ window.addEventListener('message', ({ data }) => {
         list.append(taskLabel);
       }
       const row = document.createElement('div'); row.className = 'change-row';
-      row.innerHTML = '<span>' + escapeHtml(change.path) + '</span><span><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b></span><button class="tray-review">Review</button><button class="tray-undo">Undo</button><button class="tray-accept">Accept</button>';
+      row.innerHTML = '<span class="change-file">' + fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span></span><span><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b></span><button class="tray-review">Review</button><button class="tray-undo">Undo</button><button class="tray-accept">Accept</button>';
       row.querySelector('.tray-review').addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
       row.querySelector('.tray-undo').addEventListener('click', () => vscode.postMessage({ type: 'undoChange', id: change.id }));
       row.querySelector('.tray-accept').addEventListener('click', () => vscode.postMessage({ type: 'acceptChange', id: change.id }));
@@ -1326,7 +2320,7 @@ window.addEventListener('message', ({ data }) => {
       if (!changeSummary) {
         changeSummary = document.createElement('article');
         changeSummary.className = 'chat-change-summary';
-        changeSummary.innerHTML = '<span></span><button type="button">Review</button>';
+        changeSummary.innerHTML = '<span class="change-summary-icon" aria-hidden="true">' + uiIcon('files') + '</span><span class="change-summary-copy"><strong></strong><small>Sẵn sàng để review</small></span><button type="button">Review</button>';
         $('messages').append(changeSummary);
       }
       const reviewButton = changeSummary.querySelector('button');
@@ -1337,9 +2331,9 @@ window.addEventListener('message', ({ data }) => {
         const first = data.changes?.[0];
         if (first) vscode.postMessage({ type: 'reviewChange', id: first.id });
       };
-      const summaryText = changeSummary.querySelector('span');
+      const summaryText = changeSummary.querySelector('.change-summary-copy strong');
       summaryText.textContent = data.files + ' ' + (data.files === 1 ? 'file' : 'files') + ' changed  +' + data.added + '  -' + data.removed;
-      summaryText.onclick = () => { changesHidden = false; tray.classList.remove('hidden'); collapsed.classList.add('hidden'); };
+      changeSummary.querySelector('.change-summary-copy').onclick = () => { changesHidden = false; tray.classList.remove('hidden'); collapsed.classList.add('hidden'); };
     } else if (changeSummary) {
       changeSummary.remove();
       changeSummary = null;
@@ -1354,14 +2348,27 @@ window.addEventListener('message', ({ data }) => {
     activeTerminal = null;
     activitySteps = new Map();
     pendingTurnEnd = null;
-    appendMessage('user', data.prompt, false, data.timestamp, data.attachments || []);
-    assistantBody = appendMessage('assistant', '', false, data.timestamp);
+    if (!data.resume) appendMessage('user', data.prompt, false, data.timestamp, data.attachments || [], data.turnIndex);
+    assistantBody = appendMessage('assistant', '', false, data.timestamp, [], Number.isInteger(data.turnIndex) ? data.turnIndex + 1 : null);
     assistantBody.closest('.message')?.classList.add('streaming');
     setRunning(true);
+  } else if (data.type === 'truncateTurns') {
+    flushAssistantText();
+    document.querySelectorAll('.message[data-turn-index]').forEach((item) => {
+      if (Number(item.dataset.turnIndex) >= data.fromIndex) item.remove();
+    });
+    assistantBody = null;
+    assistantRawText = '';
+    assistantActivity = null;
+    activeTerminal = null;
+    activitySteps = new Map();
   } else if (data.type === 'delta') {
     queueAssistantText(data.delta);
   } else if (data.type === 'status') {
-    if (running) updateActivity(data.message);
+    if (running) {
+      updateActivity(data.message);
+      if (activeGoal?.status === 'running') $('goalStatus').textContent = data.message;
+    }
   } else if (data.type === 'toolOutput') {
     appendTerminalOutput(data);
   } else if (data.type === 'turnEnd') {
@@ -1369,6 +2376,9 @@ window.addEventListener('message', ({ data }) => {
     else finishTurn(data);
   } else if (data.type === 'reset') {
     flushAssistantText();
+    queuedFollowUps = [];
+    renderFollowUpQueue();
+    renderGoal(null);
     $('messages').innerHTML = '<div class="empty"><h2>Nói điều bạn muốn xây.</h2><p>Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.</p></div>';
     assistantBody = null;
     pendingTurnEnd = null;

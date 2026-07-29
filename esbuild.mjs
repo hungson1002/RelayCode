@@ -11,6 +11,10 @@ const context = await esbuild.context({
   format: 'cjs',
   platform: 'node',
   target: 'node20',
+  loader: {
+    '.svg': 'text',
+    '.png': 'dataurl'
+  },
   sourcemap: !production,
   minify: production,
   logLevel: 'info'

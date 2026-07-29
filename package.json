@@ -1,13 +1,26 @@
 {
-  "name": "loi-agent",
-  "displayName": "Lối — AI Coding Agent",
+  "name": "relaycode",
+  "displayName": "RelayCode — AI Coding Agent",
   "description": "A focused AI coding workspace with Agent, Chat, Plan, multi-provider routing, MCP tools and safe reviewable changes.",
   "version": "1.0.0",
-  "publisher": "local",
+  "publisher": "huxon",
   "icon": "media/icon.png",
   "license": "MIT",
   "author": {
-    "name": "Lối"
+    "name": "Huxon",
+    "url": "https://github.com/hungson1002"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hungson1002/RelayCode.git"
+  },
+  "homepage": "https://github.com/hungson1002/RelayCode#readme",
+  "bugs": {
+    "url": "https://github.com/hungson1002/RelayCode/issues"
+  },
+  "galleryBanner": {
+    "color": "#171819",
+    "theme": "dark"
   },
   "keywords": [
     "ai",
@@ -46,31 +59,31 @@
       {
         "command": "nineRouter.openChat",
         "title": "Open Chat",
-        "category": "Lối",
+        "category": "RelayCode",
         "icon": "$(comment-discussion)"
       },
       {
         "command": "nineRouter.configure",
         "title": "Configure Provider",
-        "category": "Lối",
+        "category": "RelayCode",
         "icon": "$(settings-gear)"
       },
       {
         "command": "nineRouter.newThread",
         "title": "New Thread",
-        "category": "Lối",
+        "category": "RelayCode",
         "icon": "$(add)"
       },
       {
         "command": "nineRouter.openDashboard",
         "title": "Open Provider Dashboard",
-        "category": "Lối",
+        "category": "RelayCode",
         "icon": "$(server-process)"
       },
       {
         "command": "nineRouter.showLogs",
         "title": "Show Agent Logs",
-        "category": "Lối",
+        "category": "RelayCode",
         "icon": "$(output)"
       }
     ],
@@ -78,7 +91,7 @@
       "activitybar": [
         {
           "id": "nineRouter",
-          "title": "Lối",
+          "title": "RelayCode",
           "icon": "media/activity.svg"
         }
       ]
@@ -112,7 +125,7 @@
       ]
     },
     "configuration": {
-      "title": "Lối — AI Coding Agent",
+      "title": "RelayCode — AI Coding Agent",
       "properties": {
         "nineRouter.language": {
           "type": "string",
@@ -125,12 +138,13 @@
             "English"
           ],
           "default": "vi",
-          "description": "Interface language used by the Lối sidebar."
+          "description": "Interface language used by the RelayCode sidebar."
         },
         "nineRouter.provider": {
           "type": "string",
           "enum": [
             "9router",
+            "cockpit",
             "openai",
             "anthropic",
             "openai-compatible",
@@ -140,6 +154,7 @@
           "default": "9router",
           "enumDescriptions": [
             "🔷 9Router - Local-first routing with multi-model support",
+            "🛩️ Cockpit Tools - Local multi-account API gateway",
             "🤖 OpenAI - GPT-4, GPT-3.5 and more",
             "🧠 Anthropic - Claude family models",
             "🔌 OpenAI-Compatible - Custom endpoints (Together, Groq, etc.)",
@@ -211,6 +226,11 @@
           "default": false,
           "description": "Ask Agent to state a short plan before using tools."
         },
+        "nineRouter.autoValidateChanges": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run the most appropriate project validation after Agent changes code and before the turn completes."
+        },
         "nineRouter.notifyOnComplete": {
           "type": "boolean",
           "default": true,
@@ -243,23 +263,31 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "npm run check",
     "build": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "vitest run test/routerExternal.e2e.test.ts test/agentRecovery.e2e.test.ts",
     "check": "npm run typecheck && npm test && npm run build",
-    "package": "npm run check && vsce package --no-dependencies --allow-missing-repository --no-rewrite-relative-links"
+    "package": "npm run check && vsce package --no-dependencies --no-rewrite-relative-links",
+    "publish:vscode": "node scripts/publish.mjs vscode",
+    "publish:openvsx": "node scripts/publish.mjs openvsx"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/vscode": "^1.100.0",
     "@vscode/vsce": "^3.6.0",
     "esbuild": "^0.25.0",
+    "ovsx": "^1.0.2",
     "sharp": "^0.35.3",
     "typescript": "^5.8.0",
     "vitest": "^3.2.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@lobehub/icons-static-svg": "^1.94.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@phosphor-icons/core": "^2.1.1",
+    "simple-icons": "^16.27.1"
   }
 }
