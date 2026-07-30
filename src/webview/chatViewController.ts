@@ -4,37 +4,76 @@ import { UI_ICONS } from '../uiIcons';
 export const CHAT_VIEW_CONTROLLER = String.raw`
 const vscode = acquireVsCodeApi();
 const $ = (id) => document.getElementById(id);
-let narrowCloseRequested = false;
-let narrowCloseRetry = 0;
+let narrowCollapseTimer = 0;
+let narrowCollapseArmed = false;
+let resizeTrackingReady = false;
+let lastViewWidth = 0;
+let narrowShrinkDistance = 0;
 const minimumViewWidth = 344;
-function restoreMinimumViewWidth() {
-  const cssWidth = Math.min(
+const minimumNarrowDrag = 18;
+function currentViewWidth() {
+  return Math.min(
     document.documentElement.clientWidth,
     document.body.clientWidth || Number.POSITIVE_INFINITY,
     window.visualViewport?.width || Number.POSITIVE_INFINITY
   );
-  const renderedWidth = cssWidth * Math.max(1, window.devicePixelRatio || 1);
-  if (renderedWidth >= minimumViewWidth) {
-    narrowCloseRequested = false;
-    if (narrowCloseRetry) clearTimeout(narrowCloseRetry);
-    narrowCloseRetry = 0;
+}
+function cancelNarrowCollapse() {
+  if (narrowCollapseTimer) clearTimeout(narrowCollapseTimer);
+  narrowCollapseTimer = 0;
+}
+function collapseIfStillNarrow() {
+  const width = currentViewWidth();
+  if (
+    document.visibilityState !== 'visible'
+    || !Number.isFinite(width)
+    || width <= 0
+    || width >= minimumViewWidth
+  ) {
+    cancelNarrowCollapse();
     return;
   }
-  if (!narrowCloseRequested) {
-    narrowCloseRequested = true;
-    vscode.postMessage({ type: 'viewTooNarrow' });
+  narrowCollapseArmed = false;
+  narrowShrinkDistance = 0;
+  cancelNarrowCollapse();
+  vscode.postMessage({ type: 'collapseSidebar', width: Math.round(width) });
+}
+function trackViewWidth() {
+  const width = currentViewWidth();
+  if (!Number.isFinite(width) || width <= 0) return;
+  if (!resizeTrackingReady) {
+    lastViewWidth = width;
+    return;
   }
-  if (narrowCloseRetry) clearTimeout(narrowCloseRetry);
-  narrowCloseRetry = setTimeout(() => {
-    narrowCloseRequested = false;
-    restoreMinimumViewWidth();
-  }, 120);
+  if (width >= minimumViewWidth) {
+    narrowCollapseArmed = true;
+    narrowShrinkDistance = 0;
+    cancelNarrowCollapse();
+  } else {
+    if (lastViewWidth > 0 && width < lastViewWidth) {
+      narrowShrinkDistance += lastViewWidth - width;
+    }
+    const crossedMinimum = lastViewWidth >= minimumViewWidth;
+    if (
+      document.visibilityState === 'visible'
+      && ((narrowCollapseArmed && crossedMinimum) || narrowShrinkDistance >= minimumNarrowDrag)
+    ) {
+      cancelNarrowCollapse();
+      narrowCollapseTimer = setTimeout(collapseIfStillNarrow, 140);
+    }
+  }
+  lastViewWidth = width;
 }
 const viewSizeObserver = new ResizeObserver(() => {
-  restoreMinimumViewWidth();
+  trackViewWidth();
 });
 viewSizeObserver.observe(document.documentElement);
-window.visualViewport?.addEventListener('resize', restoreMinimumViewWidth);
+window.visualViewport?.addEventListener('resize', trackViewWidth);
+setTimeout(() => {
+  lastViewWidth = currentViewWidth();
+  narrowCollapseArmed = lastViewWidth >= minimumViewWidth;
+  resizeTrackingReady = true;
+}, 450);
 const brandIcons = Object.freeze(${JSON.stringify(BRAND_ICONS)});
 const modelBrandRules = Object.freeze(${JSON.stringify(MODEL_BRAND_RULES)});
 const uiIcons = Object.freeze(${JSON.stringify(UI_ICONS)});
@@ -68,6 +107,8 @@ let running = false;
 let assistantBody = null;
 let launchingRouter = false;
 let changeSummary = null;
+let changeSummaryExpanded = false;
+let pendingCompletedChangesState = null;
 let activeProvider = '9router';
 let pendingAssistantText = '';
 let typingTimer = 0;
@@ -83,6 +124,10 @@ let allSessions = [];
 let historyExpanded = false;
 let changesHidden = false;
 let lastChangeCount = 0;
+let lastPendingChangeCount = 0;
+let knownChangeSnapshots = new Map();
+let resolvedChangeSnapshots = new Map();
+let changeOperationBusy = false;
 let checkingModels = false;
 let favoriteModels = [];
 let recentModels = [];
@@ -91,10 +136,13 @@ let activeTerminal = null;
 let skills = [];
 let composerMenuIndex = -1;
 let composerGoalMode = false;
+let composerCommand = null;
 let composerSkills = [];
 let composerContexts = [];
 let composerLinks = [];
 let turnStartedAt = 0;
+let workingLabel = null;
+let workingTimer = null;
 let setupDismissed = false;
 let setupOpenRequested = false;
 let queuedFollowUps = [];
@@ -115,6 +163,7 @@ const knownProviderEndpoints = new Set(Object.values(providerMeta).map(item => i
 const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'accessConfirm', 'connectionDiagnostics', 'uiDialog'];
 let activeUiDialog = null;
 let dialogReturnFocus = null;
+let queuedUiDialogs = [];
 document.querySelectorAll('#providerMenu .provider-option').forEach((option) => {
   const meta = providerMeta[option.dataset.provider] || providerMeta['9router'];
   const slot = document.createElement('span');
@@ -125,6 +174,7 @@ document.querySelectorAll('#providerMenu .provider-option').forEach((option) => 
 
 function closeFloatingSurfaces(except = '') {
   floatingSurfaces.forEach((id) => {
+    if (id === 'uiDialog' && activeUiDialog && except !== 'uiDialog') return;
     if (id !== except) $(id)?.classList.add('hidden');
   });
   if (except !== 'historyPanel') historyExpanded = false;
@@ -149,15 +199,25 @@ function closeUiDialog(action) {
     action,
     value
   });
+  const next = queuedUiDialogs.shift();
+  if (next) {
+    requestAnimationFrame(() => renderUiDialog(next));
+    return;
+  }
   if (dialogReturnFocus?.isConnected) dialogReturnFocus.focus();
   dialogReturnFocus = null;
 }
 
 function renderUiDialog(data) {
   if (!data?.id) return;
-  dialogReturnFocus = document.activeElement;
+  if (activeUiDialog) {
+    if (activeUiDialog.id !== data.id && !queuedUiDialogs.some((item) => item.id === data.id)) queuedUiDialogs.push(data);
+    return;
+  }
+  if (!dialogReturnFocus?.isConnected) dialogReturnFocus = document.activeElement;
   activeUiDialog = data;
-  closeFloatingSurfaces('uiDialog');
+  // A dialog overlays the active surface. Keep that surface mounted so closing
+  // an API-key/OAuth prompt returns to MCP instead of the Chat home.
   const backdrop = $('uiDialog');
   const dialog = backdrop.querySelector('.ui-dialog');
   dialog.dataset.tone = data.tone || 'neutral';
@@ -224,6 +284,7 @@ function showUiToast(data) {
 
 $('uiDialogClose').addEventListener('click', () => closeUiDialog(undefined));
 $('uiDialog').addEventListener('click', (event) => {
+  event.stopPropagation();
   if (event.target === $('uiDialog') && activeUiDialog?.dismissible !== false) closeUiDialog(undefined);
 });
 $('uiDialogInput').addEventListener('input', () => $('uiDialogError').classList.add('hidden'));
@@ -263,33 +324,62 @@ function flushAssistantText() {
   pendingAssistantText = '';
 }
 
+function scrollMessagesToBottom() {
+  const messageList = $('messages');
+  messageList.scrollTop = messageList.scrollHeight;
+  // Webview layout can grow after Markdown, activity, and file icons settle.
+  requestAnimationFrame(() => {
+    messageList.scrollTop = messageList.scrollHeight;
+  });
+}
+
 function queueAssistantText(delta) {
   pendingAssistantText += delta;
   if (typingTimer) return;
   const tick = () => {
     if (!assistantBody) { pendingAssistantText = ''; typingTimer = 0; return; }
-    const size = Math.max(3, Math.min(18, Math.ceil(pendingAssistantText.length / 45)));
+    const size = Math.max(1, Math.min(10, Math.ceil(pendingAssistantText.length / 140)));
     assistantRawText += pendingAssistantText.slice(0, size);
     pendingAssistantText = pendingAssistantText.slice(size);
     renderMarkdownInto(assistantBody, assistantRawText);
     const item = assistantBody.closest('.message');
     if (item) item.dataset.rawContent = assistantRawText;
-    $('messages').scrollTop = $('messages').scrollHeight;
-    if (pendingAssistantText) typingTimer = setTimeout(tick, 8);
+    scrollMessagesToBottom();
+    if (pendingAssistantText) typingTimer = setTimeout(tick, 24);
     else {
       typingTimer = 0;
       if (pendingTurnEnd) {
         const data = pendingTurnEnd;
         pendingTurnEnd = null;
-        finishTurn(data);
+        settleTurn(data);
       }
     }
   };
   typingTimer = setTimeout(tick, 0);
 }
 
+function reconcileFinalAssistantText(content) {
+  const finalText = typeof content === 'string' ? content : '';
+  if (!assistantBody || !finalText) return;
+  const bufferedText = assistantRawText + pendingAssistantText;
+  if (bufferedText === finalText) return;
+  if (finalText.startsWith(assistantRawText)) {
+    pendingAssistantText = finalText.slice(assistantRawText.length);
+    if (!typingTimer) queueAssistantText('');
+    return;
+  }
+  if (typingTimer) { clearTimeout(typingTimer); typingTimer = 0; }
+  pendingAssistantText = '';
+  assistantRawText = finalText;
+  renderMarkdownInto(assistantBody, assistantRawText);
+  const item = assistantBody.closest('.message');
+  if (item) item.dataset.rawContent = assistantRawText;
+}
+
 function updateComposerPlaceholder() {
-  $('prompt').placeholder = composerGoalMode
+  $('prompt').placeholder = composerCommand
+    ? 'Nhấn gửi để chạy ' + composerCommand.key
+    : composerGoalMode
     ? 'Mô tả mục tiêu dài hạn…'
     : mode === 'agent'
       ? 'Nhập yêu cầu, dùng /, $ hoặc @…'
@@ -474,7 +564,9 @@ function escapeHtml(value) {
 
 function fileTypeIcon(path) {
   const icon = fileUiIcon(String(path || '').replace(/:\d+(?::\d+)?$/, ''));
-  return '<span class="file-type-icon ' + icon + '" aria-hidden="true">' + uiIcon(icon) + '</span>';
+  return '<span class="file-type-icon ' + icon + '" data-file-kind="' + icon + '" aria-hidden="true">'
+    + uiIcon(icon)
+    + '</span>';
 }
 
 function inlineMarkdown(source) {
@@ -492,16 +584,17 @@ function inlineMarkdown(source) {
     }
     const location = target.match(/:(\d+)(?::\d+)?$/);
     const line = location && !/\bline\s+\d+/i.test(label) ? '<span class="file-line">(line ' + location[1] + ')</span>' : '';
-    return reserve('<button type="button" class="file-link" data-file="' + encodeURIComponent(target) + '">' + fileTypeIcon(target) + '<span>' + label + '</span>' + line + '</button>');
+    return reserve('<button type="button" class="file-link" title="' + escapeHtml(target) + '" data-file="' + encodeURIComponent(target) + '">' + fileTypeIcon(target) + '<span>' + label + '</span>' + line + '</button>');
   });
   text = text.replace(/\x60([^\x60]+)\x60/g, (_, code) => {
     const plain = String(code).replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
     const looksLikeFile = /^(?:[a-z]:[\\/]|\.{0,2}[\\/])?.+\.[a-z0-9]{1,10}(?::\d+(?::\d+)?)?$/i.test(plain);
     return reserve(looksLikeFile
-      ? '<button type="button" class="file-link" data-file="' + encodeURIComponent(plain) + '">' + fileTypeIcon(plain) + '<span>' + code + '</span></button>'
+      ? '<button type="button" class="file-link" title="' + escapeHtml(plain) + '" data-file="' + encodeURIComponent(plain) + '">' + fileTypeIcon(plain) + '<span>' + code + '</span></button>'
       : '<code class="inline-code">' + code + '</code>');
   });
   text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/\((\+[\d.,]+)\s+(-[\d.,]+)\)/g, (_, added, removed) => reserve('<span class="diff-inline">(<b class="diff-add">' + added + '</b><b class="diff-remove">' + removed + '</b>)</span>'));
   text = text.replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_, prefix, url) => prefix + reserve(richLinkMarkup(url)));
   return text.replace(/\u0000(\d+)\u0000/g, (_, index) => tokens[Number(index)] || '');
 }
@@ -603,29 +696,41 @@ function renderMarkdownInto(container, source) {
   bindRichContent(container);
 }
 
+const englishUi = document.body.dataset.language === 'en';
+const activityCopy = (vi, en) => englishUi ? en : vi;
+
 function activityInfo(status) {
   const detail = status.includes(':') ? status.slice(status.indexOf(':') + 1).trim() : '';
-  if (/kiểm tra provider/i.test(status)) return { kind: 'provider', key: 'provider', done: 'Đã kiểm tra provider' };
-  if (/kết nối model gián đoạn/i.test(status)) return { kind: 'provider', key: 'model-retry', done: 'Đã kết nối lại model' };
-  if (/chờ model|model đang xử lý|model đang suy nghĩ/i.test(status)) return { kind: 'waiting', key: 'waiting', done: 'Model đã phản hồi' };
-  if (/chạy lệnh/i.test(status)) return { kind: 'command', key: 'command:' + detail, done: detail ? 'Đã chạy: ' + detail : 'Đã chạy lệnh' };
-  if (/chạy kiểm tra/i.test(status)) return { kind: 'test', key: 'test:' + detail, done: detail ? 'Đã kiểm tra: ' + detail : 'Đã chạy kiểm tra' };
-  if (/tạo ảnh thất bại/i.test(status)) return { kind: 'error', key: 'image:' + detail, done: detail ? 'Không thể tạo ảnh ' + detail : 'Không thể tạo ảnh' };
-  if (/tạo ảnh/i.test(status)) return { kind: 'edit', key: 'image:' + detail, done: detail ? 'Đã tạo ảnh ' + detail : 'Đã tạo ảnh' };
-  if (/tìm model tạo ảnh/i.test(status)) return { kind: 'inspect', key: 'image-models', done: 'Đã tìm model tạo ảnh' };
-  if (/sửa file/i.test(status)) return { kind: 'edit', key: 'edit:' + detail, done: detail ? 'Đã sửa ' + detail : 'Đã sửa file' };
-  if (/đọc tài nguyên skill/i.test(status)) return { kind: 'inspect', key: 'skill:' + detail, done: detail ? 'Đã đọc skill: ' + detail : 'Đã đọc skill' };
-  if (/đọc file/i.test(status)) return { kind: 'inspect', key: 'read:' + detail, done: detail ? 'Đã đọc ' + detail : 'Đã đọc file' };
-  if (/cấu trúc dự án/i.test(status)) return { kind: 'inspect', key: 'list:' + detail, done: detail ? 'Đã xem file: ' + detail : 'Đã xem cấu trúc dự án' };
-  if (/tìm trong dự án/i.test(status)) return { kind: 'inspect', key: 'search:' + detail, done: detail ? 'Đã tìm: ' + detail : 'Đã tìm trong dự án' };
-  if (/MCP/i.test(status)) return { kind: 'mcp', key: 'mcp:' + status, done: status.replace(/^Đang dùng/i, 'Đã dùng') };
-  if (/phân tích hướng thực hiện/i.test(status)) return { kind: 'thinking', key: 'thinking-direction', done: 'Đã xác định hướng thực hiện' };
-  if (/bước tiếp theo/i.test(status)) return { kind: 'thinking', key: 'thinking-next', done: 'Đã xác định bước tiếp theo' };
-  return { kind: 'thinking', key: 'thinking', done: 'Đã phân tích yêu cầu' };
+  if (/kiểm tra provider|checking provider/i.test(status)) return { kind: 'provider', key: 'provider', done: activityCopy('Đã kiểm tra provider', 'Provider checked') };
+  if (/kết nối model gián đoạn|model connection interrupted/i.test(status)) return { kind: 'provider', key: 'model-retry', done: activityCopy('Đã kết nối lại model', 'Model reconnected') };
+  if (/chờ model|model đang xử lý|model đang suy nghĩ|waiting for model|model is (?:working|thinking)/i.test(status)) return { kind: 'waiting', key: 'waiting', done: activityCopy('Model đã phản hồi', 'Model responded') };
+  if (/chạy lệnh|running command/i.test(status)) return { kind: 'command', key: 'command-current', done: detail ? activityCopy('Đã chạy: ', 'Ran: ') + detail : activityCopy('Đã chạy lệnh', 'Command completed') };
+  if (/chạy kiểm tra|running tests|validating changes/i.test(status)) return { kind: 'test', key: 'test-current', done: detail ? activityCopy('Đã kiểm tra: ', 'Checked: ') + detail : activityCopy('Đã chạy kiểm tra', 'Tests completed') };
+  if (/tạo ảnh thất bại|image generation failed/i.test(status)) return { kind: 'error', key: 'image:' + detail, done: detail ? activityCopy('Không thể tạo ảnh ', 'Could not generate ') + detail : activityCopy('Không thể tạo ảnh', 'Image generation failed') };
+  if (/tạo ảnh|generating image/i.test(status)) return { kind: 'edit', key: 'image:' + detail, done: detail ? activityCopy('Đã tạo ảnh ', 'Generated ') + detail : activityCopy('Đã tạo ảnh', 'Image generated') };
+  if (/tìm model tạo ảnh|finding an image model/i.test(status)) return { kind: 'inspect', key: 'image-models', done: activityCopy('Đã tìm model tạo ảnh', 'Image model found') };
+  if (/tạo thư mục|creating directory/i.test(status)) return { kind: 'edit', key: 'directory:' + detail, done: detail ? activityCopy('Đã tạo thư mục ', 'Created directory ') + detail : activityCopy('Đã tạo thư mục', 'Directory created') };
+  if (/xóa file|deleting file/i.test(status)) return { kind: 'edit', key: 'delete:' + detail, done: detail ? activityCopy('Đã xóa ', 'Deleted ') + detail : activityCopy('Đã xóa file', 'File deleted') };
+  if (/di chuyển file|moving file/i.test(status)) return { kind: 'edit', key: 'move:' + detail, done: detail ? activityCopy('Đã di chuyển ', 'Moved ') + detail : activityCopy('Đã di chuyển file', 'File moved') };
+  if (/sửa file|editing file/i.test(status)) return { kind: 'edit', key: 'edit:' + detail, done: detail ? activityCopy('Đã sửa ', 'Edited ') + detail : activityCopy('Đã sửa file', 'File edited') };
+  if (/kiểm tra đường dẫn|checking path/i.test(status)) return { kind: 'inspect', key: 'stat:' + detail, done: detail ? activityCopy('Đã kiểm tra ', 'Checked ') + detail : activityCopy('Đã kiểm tra đường dẫn', 'Path checked') };
+  if (/xem thư mục|reading directory/i.test(status)) return { kind: 'inspect', key: 'directory-list:' + detail, done: detail ? activityCopy('Đã xem thư mục ', 'Read directory ') + detail : activityCopy('Đã xem thư mục', 'Directory read') };
+  if (/Git diff/i.test(status)) return { kind: 'inspect', key: 'git-diff', done: activityCopy('Đã đọc Git diff', 'Git diff read') };
+  if (/đọc tài nguyên skill|reading skill resource/i.test(status)) return { kind: 'inspect', key: 'skill:' + detail, done: detail ? activityCopy('Đã đọc skill: ', 'Read skill: ') + detail : activityCopy('Đã đọc skill', 'Skill read') };
+  if (/đọc trang web|reading webpage/i.test(status)) return { kind: 'inspect', key: 'web:' + detail, done: detail ? activityCopy('Đã đọc trang ', 'Read page ') + detail : activityCopy('Đã đọc trang web', 'Webpage read') };
+  if (/phân tích file|analyzing file/i.test(status)) return { kind: 'inspect', key: 'analyze-files', done: detail ? activityCopy('Đã phân tích file gần nhất: ', 'Last analyzed file: ') + detail : activityCopy('Đã phân tích file', 'File analyzed') };
+  if (/đọc file|reading file/i.test(status)) return { kind: 'inspect', key: 'read:' + detail, done: detail ? activityCopy('Đã đọc ', 'Read ') + detail : activityCopy('Đã đọc file', 'File read') };
+  if (/cấu trúc dự án|project structure/i.test(status)) return { kind: 'inspect', key: 'list:' + detail, done: detail ? activityCopy('Đã xem file: ', 'Inspected files: ') + detail : activityCopy('Đã xem cấu trúc dự án', 'Project structure inspected') };
+  if (/tìm trong dự án|searching project/i.test(status)) return { kind: 'inspect', key: 'search:' + detail, done: detail ? activityCopy('Đã tìm: ', 'Searched: ') + detail : activityCopy('Đã tìm trong dự án', 'Project searched') };
+  if (/MCP/i.test(status)) return { kind: 'mcp', key: 'mcp:' + status, done: englishUi ? status.replace(/^Using/i, 'Used') : status.replace(/^Đang dùng/i, 'Đã dùng') };
+  if (/phân tích hướng thực hiện|analyzing the approach/i.test(status)) return { kind: 'thinking', key: 'thinking-direction', done: activityCopy('Đã xác định hướng thực hiện', 'Approach determined') };
+  if (/bước tiếp theo|next step/i.test(status)) return { kind: 'thinking', key: 'thinking-next', done: activityCopy('Đã xác định bước tiếp theo', 'Next step determined') };
+  return { kind: 'thinking', key: 'thinking', done: activityCopy('Đã phân tích yêu cầu', 'Request analyzed') };
 }
 
 function fileUiIcon(path) {
   const clean = String(path || '').split(/[?#]/)[0].toLowerCase();
+  const name = clean.split(/[\\/]/).pop() || clean;
   if (/\.(?:ts)$/.test(clean)) return 'fileTs';
   if (/\.(?:tsx)$/.test(clean)) return 'fileTsx';
   if (/\.(?:js|mjs|cjs)$/.test(clean)) return 'fileJs';
@@ -635,13 +740,28 @@ function fileUiIcon(path) {
   if (/\.(?:md|mdx)$/.test(clean)) return 'fileMd';
   if (/\.(?:py)$/.test(clean)) return 'filePy';
   if (/\.(?:rs)$/.test(clean)) return 'fileRs';
-  if (/\.(?:png|jpe?g|gif|webp|svg|ico)$/.test(clean)) return 'fileImage';
+  if (/\.(?:vue)$/.test(clean)) return 'fileVue';
+  if (/\.(?:c|h)$/.test(clean)) return 'fileC';
+  if (/\.(?:cpp|cc|cxx|hpp|hh|hxx)$/.test(clean)) return 'fileCpp';
+  if (/\.(?:cs)$/.test(clean)) return 'fileCSharp';
+  if (/\.(?:sql)$/.test(clean)) return 'fileSql';
+  if (/\.(?:ini|cfg|conf|properties)$/.test(clean)) return 'fileIni';
+  if (/\.(?:csv|tsv)$/.test(clean)) return 'fileCsv';
+  if (/\.(?:txt|log)$/.test(clean)) return 'fileTxt';
+  if (/\.(?:png)$/.test(clean)) return 'filePng';
+  if (/\.(?:jpe?g)$/.test(clean)) return 'fileJpg';
+  if (/\.(?:svg)$/.test(clean)) return 'fileSvg';
+  if (/\.(?:gif|webp|ico|avif|bmp)$/.test(clean)) return 'fileImage';
+  if (/\.(?:mp4|webm|mov|avi|mkv)$/.test(clean)) return 'fileVideo';
+  if (/\.(?:mp3|wav|ogg|flac|m4a)$/.test(clean)) return 'fileAudio';
   if (/\.(?:pdf)$/.test(clean)) return 'filePdf';
   if (/\.(?:docx?)$/.test(clean)) return 'fileDoc';
-  if (/\.(?:xlsx?|csv|tsv)$/.test(clean)) return 'fileXls';
+  if (/\.(?:xlsx?)$/.test(clean)) return 'fileXls';
   if (/\.(?:pptx?)$/.test(clean)) return 'filePpt';
   if (/\.(?:zip|tar|gz|7z|rar)$/.test(clean)) return 'fileZip';
-  if (/\.(?:json|jsonc|yaml|yml|toml|xml|go|java|kt|swift|c|h|cpp|hpp|cs|php|rb|vue|svelte|sql|sh|ps1)$/.test(clean)) return 'fileCode';
+  if (/^(?:readme|license|notice|authors|contributors)(?:\..*)?$/.test(name)) return 'fileText';
+  if (/^(?:dockerfile|makefile|procfile|gemfile|rakefile)$/.test(name)) return 'fileCode';
+  if (/\.(?:json|jsonc|yaml|yml|toml|xml|go|java|kt|swift|php|rb|svelte|sh|bash|zsh|fish|ps1|bat|cmd|graphql|gql)$/.test(clean)) return 'fileCode';
   return 'file';
 }
 
@@ -655,32 +775,44 @@ function activityIconName(info, status) {
   if (info.kind === 'waiting' || info.kind === 'thinking') return 'brain';
   if (/list:/.test(info.key)) return 'files';
   if (/search:/.test(info.key)) return 'listSearch';
+  if (/web:/.test(info.key)) return 'listSearch';
   return 'spinnerGap';
 }
 
-function setActivityExpanded(expanded) {
-  if (!assistantActivity) return;
-  assistantActivity.classList.toggle('expanded', expanded);
-  const toggle = assistantActivity.querySelector('.activity-toggle');
+function setActivityExpanded(expanded, activity = assistantActivity) {
+  if (!activity) return;
+  activity.classList.toggle('expanded', expanded);
+  const toggle = activity.querySelector('.activity-toggle');
   toggle?.setAttribute('aria-expanded', String(expanded));
-  const caret = assistantActivity.querySelector('.activity-caret');
+  const caret = activity.querySelector('.activity-caret');
   if (caret) caret.innerHTML = uiIcon(expanded ? 'caretDown' : 'caretRight');
-  assistantBody?.closest('.message')?.classList.toggle('show-trace', expanded);
+  const message = activity.closest('.message');
+  message?.classList.toggle('show-trace', Boolean(message.querySelector('.agent-activity.expanded')));
+}
+
+function cueActivitySweep(element) {
+  if (!element) return;
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  if (element.classList.contains('sweeping')) return;
+  element.classList.add('sweeping');
 }
 
 function updateActivity(status) {
+  const messageList = $('messages');
+  const previousScrollTop = messageList.scrollTop;
   if (!assistantBody || !status || status === 'Hoàn tất') return;
   const info = activityInfo(status);
   if (!assistantActivity) {
     assistantActivity = document.createElement('div');
     assistantActivity.className = 'agent-activity';
+    const phase = assistantActivity;
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'activity-toggle';
     toggle.setAttribute('aria-expanded', 'false');
-    toggle.setAttribute('aria-label', 'Xem chi tiết hoạt động');
-    toggle.innerHTML = '<span class="activity-current-icon" aria-hidden="true"></span><span class="activity-current"></span><span class="activity-count"></span><span class="activity-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
-    toggle.addEventListener('click', () => setActivityExpanded(!assistantActivity?.classList.contains('expanded')));
+    toggle.setAttribute('aria-label', activityCopy('Xem chi tiết hoạt động', 'View activity details'));
+    toggle.innerHTML = '<span class="activity-current-icon" aria-hidden="true"></span><span class="activity-current"></span><span class="activity-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
+    toggle.addEventListener('click', () => setActivityExpanded(!phase.classList.contains('expanded'), phase));
     const trace = document.createElement('div');
     trace.className = 'activity-trace';
     assistantActivity.append(toggle, trace);
@@ -712,23 +844,105 @@ function updateActivity(status) {
   row.classList.add('active');
   assistantActivity.querySelector('.activity-trace')?.append(row);
   assistantActivity.querySelector('.activity-current-icon').innerHTML = uiIcon(activityIconName(info, status));
-  assistantActivity.querySelector('.activity-current').textContent = status;
-  const count = activitySteps.size;
-  assistantActivity.querySelector('.activity-count').textContent = count > 1 ? count + ' bước' : '';
-  $('messages').scrollTop = $('messages').scrollHeight;
+  const currentActivity = assistantActivity.querySelector('.activity-current');
+  currentActivity.textContent = status;
+  currentActivity.dataset.sweep = status;
+  cueActivitySweep(currentActivity);
+  messageList.scrollTop = previousScrollTop;
 }
 
-function completeActivity(cancelled = false) {
+function finalizeLiveActivity() {
   if (!assistantActivity) return;
-  const rows = [...assistantActivity.querySelectorAll('.activity-row')];
-  for (const row of rows) {
-    if (row.dataset.done === 'Đã phân tích yêu cầu' && rows.length > 1) { row.remove(); continue; }
+  assistantActivity.querySelectorAll('.activity-row.active').forEach((row) => {
     row.classList.remove('active');
-    row.classList.add(cancelled ? 'stopped' : 'done');
-    row.querySelector('.activity-copy').textContent = cancelled ? 'Đã dừng theo yêu cầu' : row.dataset.done;
-  }
-  assistantActivity.remove();
+    row.classList.add('done');
+    const copy = row.querySelector('.activity-copy');
+    if (copy) copy.textContent = row.dataset.done || copy.textContent;
+  });
+  assistantActivity.classList.remove('expanded');
+  assistantActivity.classList.add('archived');
+  const current = assistantActivity.querySelector('.activity-current');
+  const lastRow = [...assistantActivity.querySelectorAll('.activity-row')].at(-1);
+  if (current && lastRow) current.textContent = lastRow.dataset.done || lastRow.querySelector('.activity-copy')?.textContent || current.textContent;
+  setActivityExpanded(false, assistantActivity);
   assistantActivity = null;
+  activitySteps = new Map();
+}
+
+function appendAgentCommentary(content) {
+  const text = String(content || '').trim();
+  if (!assistantBody || !text) return;
+  finalizeLiveActivity();
+  activeTerminal = null;
+  const block = document.createElement('div');
+  block.className = 'agent-commentary';
+  renderMarkdownInto(block, text);
+  assistantBody.before(block);
+}
+
+function formatWorkingElapsed(seconds) {
+  if (currentLanguage === 'en') {
+    if (seconds < 60) return seconds + 's';
+    return Math.floor(seconds / 60) + 'm' + (seconds % 60 ? ' ' + (seconds % 60) + 's' : '');
+  }
+  if (seconds < 60) return seconds + ' giây';
+  return Math.floor(seconds / 60) + ' phút' + (seconds % 60 ? ' ' + (seconds % 60) + ' giây' : '');
+}
+
+function updateWorkingLabel(state = 'working') {
+  if (!workingLabel || !turnStartedAt) return;
+  const seconds = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
+  const elapsed = formatWorkingElapsed(seconds);
+  workingLabel.textContent = currentLanguage === 'en'
+    ? (state === 'cancelled' ? 'Stopped after ' : state === 'error' ? 'Stopped after ' : state === 'complete' ? 'Worked for ' : 'Working for ') + elapsed
+    : (state === 'cancelled' ? 'Đã dừng sau ' : state === 'error' ? 'Dừng sau ' : state === 'complete' ? 'Đã làm trong ' : 'Đang làm trong ') + elapsed;
+}
+
+function startWorkingLabel() {
+  if (!assistantBody) return;
+  if (workingTimer) clearInterval(workingTimer);
+  workingLabel = document.createElement('div');
+  workingLabel.className = 'worked-label working-live';
+  assistantBody.before(workingLabel);
+  updateWorkingLabel();
+  workingTimer = setInterval(() => updateWorkingLabel(), 1000);
+}
+
+function finishWorkingLabel(state) {
+  if (workingTimer) clearInterval(workingTimer);
+  workingTimer = null;
+  updateWorkingLabel(state);
+  workingLabel?.classList.remove('working-live');
+}
+
+function compactTechnicalHistory(turnMessage) {
+  if (!turnMessage || !assistantBody) return;
+  // Live activity belongs to the running state only. Final file changes have
+  // their own review card, so retaining activity rows after completion is both
+  // redundant and visually indistinguishable from a stuck Agent.
+  turnMessage.querySelectorAll('.agent-activity').forEach((node) => node.remove());
+  const technicalNodes = [...turnMessage.querySelectorAll('.terminal-card')];
+  if (!technicalNodes.length) return;
+
+  const details = document.createElement('details');
+  details.className = 'activity-history-summary';
+  const summary = document.createElement('summary');
+  summary.innerHTML = '<span class="activity-history-icon" aria-hidden="true">' + uiIcon('terminalWindow') + '</span><span class="activity-history-copy"></span><span class="activity-history-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
+  summary.querySelector('.activity-history-copy').textContent = activityCopy('đã chạy lệnh', 'ran commands');
+  const body = document.createElement('div');
+  body.className = 'activity-history-details';
+  technicalNodes[0].before(details);
+  details.append(summary, body);
+  technicalNodes.forEach((node) => body.append(node));
+  details.addEventListener('toggle', () => {
+    const caret = details.querySelector('.activity-history-caret');
+    if (caret) caret.innerHTML = uiIcon(details.open ? 'caretDown' : 'caretRight');
+  });
+}
+
+function discardTechnicalHistory(turnMessage) {
+  if (!turnMessage) return;
+  turnMessage.querySelectorAll('.activity-history-summary,.agent-activity,.terminal-card').forEach((node) => node.remove());
 }
 
 function renderTelemetry(records = []) {
@@ -780,6 +994,29 @@ function renderMcpCatalog(presets = [], servers = []) {
       else vscode.postMessage({ type: 'installMcpPreset', presetId: preset.id });
     });
     catalog.append(card);
+  }
+}
+
+function renderMcpOutcome(data) {
+  const notice = $('mcpConnectionNotice');
+  notice.dataset.serverId = data.serverId || '';
+  notice.textContent = data.message || '';
+  notice.className = 'mcp-connection-notice ' + (data.tone || 'neutral');
+  notice.classList.toggle('hidden', !data.message);
+  if (data.message) showUiToast({ message: data.message, tone: data.tone || 'neutral' });
+}
+
+function syncPendingMcpOutcome(servers) {
+  const notice = $('mcpConnectionNotice');
+  if (!notice.classList.contains('warning') || !notice.dataset.serverId) return;
+  const server = servers.find((item) => item.id === notice.dataset.serverId);
+  if (!server || server.authPending) return;
+  if (server.connected) {
+    notice.textContent = server.name + ' đã kết nối thành công · ' + (server.toolCount || 0) + ' công cụ sẵn sàng.';
+    notice.className = 'mcp-connection-notice success';
+  } else if (server.error) {
+    notice.textContent = 'Không thể kết nối ' + server.name + ': ' + server.error;
+    notice.className = 'mcp-connection-notice danger';
   }
 }
 
@@ -880,6 +1117,8 @@ function renderHistory(sessions = []) {
   allSessions = sessions;
   $('historyPanel').classList.toggle('expanded', historyExpanded);
   $('historyTitle').textContent = historyExpanded ? 'Tất cả lịch sử' : 'Lịch sử chat';
+  $('clearAllHistory').classList.toggle('hidden', !sessions.length);
+  $('clearAllHistory').textContent = activityCopy('Xóa tất cả', 'Clear all');
   const list = $('historyList'); list.replaceChildren();
   if (!sessions.length) {
     const empty = document.createElement('div'); empty.className = 'history-empty'; empty.textContent = 'Chưa có cuộc trò chuyện nào.'; list.append(empty);
@@ -989,7 +1228,42 @@ function beginMessageEdit(item, body, content, turnIndex) {
   input.setSelectionRange(input.value.length, input.value.length);
 }
 
-function appendMessage(role, content, error = false, timestamp = Date.now(), attachments = [], turnIndex = null) {
+function renderUserPrompt(body, content) {
+  const source = String(content || '');
+  const tokens = [];
+  let remaining = source;
+  const tokenPattern = /^\s*(\$[\w.-]+|\/(?:goal|new|compact|skills|model|plan|review|diff|ide-context|init|status|diagnostics|mcp|settings|logs|export)|@(?:selection|terminal|git-diff|problems))(?=\s|$)/i;
+  while (true) {
+    const match = remaining.match(tokenPattern);
+    if (!match) break;
+    const raw = match[1];
+    const kind = raw.startsWith('$') ? 'skill' : raw.startsWith('/') ? 'command' : 'context';
+    const label = kind === 'skill' ? composerSkillLabel(raw.slice(1)) : raw;
+    tokens.push({ kind, label });
+    remaining = remaining.slice(match[0].length);
+  }
+  if (tokens.length) {
+    const rail = document.createElement('div');
+    rail.className = 'sent-prompt-tokens';
+    for (const token of tokens) {
+      const chip = document.createElement('span');
+      chip.className = 'sent-prompt-token ' + token.kind;
+      chip.innerHTML = '<i aria-hidden="true">' + uiIcon(token.kind === 'skill' ? 'cube' : token.kind === 'command' ? 'terminalWindow' : 'selection') + '</i><b></b>';
+      chip.querySelector('b').textContent = token.label;
+      rail.append(chip);
+    }
+    body.append(rail);
+  }
+  const copy = remaining.trim();
+  if (copy) {
+    const text = document.createElement('span');
+    text.className = 'sent-prompt-copy';
+    text.textContent = copy;
+    body.append(text);
+  }
+}
+
+function appendMessage(role, content, error = false, timestamp = Date.now(), attachments = [], turnIndex = null, artifact = null) {
   document.querySelector('.empty')?.remove();
   const item = document.createElement('article');
   item.className = 'message ' + role + (error ? ' error' : '');
@@ -1001,7 +1275,7 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
   const body = document.createElement('div');
   body.className = 'body';
   if (role === 'assistant') renderMarkdownInto(body, content);
-  else body.textContent = content;
+  else renderUserPrompt(body, content);
   const meta = document.createElement('div');
   meta.className = 'message-meta';
   const actions = document.createElement('div');
@@ -1027,13 +1301,95 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
   meta.append(label, actions);
   item.append(body, meta);
   appendMessageAttachments(item, attachments);
+  appendPlanArtifact(item, artifact, turnIndex);
   $('messages').append(item);
-  $('messages').scrollTop = $('messages').scrollHeight;
+  scrollMessagesToBottom();
   return body;
+}
+
+function appendPlanArtifact(item, artifact, turnIndex) {
+  if (!item || !artifact || artifact.type !== 'plan' || !Number.isInteger(turnIndex)) return;
+  item.querySelector('.plan-artifact')?.remove();
+  const card = document.createElement('section');
+  card.className = 'plan-artifact';
+  const icon = document.createElement('span');
+  icon.className = 'plan-artifact-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = uiIcon('fileDoc');
+  const copy = document.createElement('span');
+  copy.className = 'plan-artifact-copy';
+  const title = document.createElement('strong');
+  title.textContent = artifact.title || activityCopy('Kế hoạch thực hiện', 'Implementation Plan');
+  const meta = document.createElement('small');
+  meta.textContent = activityCopy('Sẵn sàng để xem và phê duyệt', 'Ready to review and approve');
+  copy.append(title, meta);
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'plan-artifact-open';
+  open.innerHTML = '<span>' + activityCopy('Mở kế hoạch', 'Open plan') + '</span><i aria-hidden="true">' + uiIcon('caretRight') + '</i>';
+  open.addEventListener('click', () => vscode.postMessage({ type: 'openPlanArtifact', turnIndex }));
+  card.append(icon, copy, open);
+  const body = item.querySelector('.body');
+  item.insertBefore(card, body || item.querySelector('.message-meta'));
+}
+
+function appendTurnChangeSummary(item, data) {
+  const changes = data.changes || [];
+  if (!item || !changes.length) return;
+  item.querySelector('.turn-change-summary')?.remove();
+  const card = document.createElement('section');
+  card.className = 'chat-change-summary turn-change-summary';
+  const header = document.createElement('header');
+  const icon = document.createElement('span');
+  icon.className = 'change-summary-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = uiIcon('files');
+  const copy = document.createElement('span');
+  copy.className = 'change-summary-copy';
+  const title = document.createElement('strong');
+  title.textContent = changes.length + ' ' + (changes.length === 1 ? 'file' : 'files') + ' changed';
+  const stats = document.createElement('small');
+  stats.className = 'change-summary-stats';
+  const added = changes.reduce((sum, change) => sum + Number(change.added || 0), 0);
+  const removed = changes.reduce((sum, change) => sum + Number(change.removed || 0), 0);
+  stats.innerHTML = '<b class="diff-add">+' + added + '</b><b class="diff-remove">-' + removed + '</b>';
+  copy.append(title, stats);
+  const actions = document.createElement('span');
+  actions.className = 'change-summary-actions';
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'summary-review';
+  actions.append(toggle);
+  header.append(icon, copy, actions);
+  const preview = document.createElement('div');
+  preview.className = 'change-summary-preview';
+  for (const change of changes) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'change-summary-file turn-change-file';
+    row.dataset.changeId = change.id;
+    row.title = change.path;
+    row.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + Number(change.added || 0) + '</b> <b class="diff-remove">-' + Number(change.removed || 0) + '</b></small>';
+    row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
+    preview.append(row);
+  }
+  let expanded = false;
+  const setExpanded = (value) => {
+    expanded = value;
+    card.classList.toggle('collapsed', !expanded);
+    toggle.textContent = expanded ? activityCopy('Ẩn', 'Hide') : activityCopy('Xem', 'Review');
+  };
+  toggle.addEventListener('click', () => setExpanded(!expanded));
+  copy.addEventListener('click', () => setExpanded(!expanded));
+  card.append(header, preview);
+  setExpanded(false);
+  item.insertBefore(card, item.querySelector('.message-meta'));
 }
 
 function appendTerminalOutput(data) {
   if (!assistantBody) return;
+  const messageList = $('messages');
+  const previousScrollTop = messageList.scrollTop;
   if (!activeTerminal || activeTerminal.dataset.command !== (data.command || '')) {
     activeTerminal = document.createElement('details');
     activeTerminal.className = 'terminal-card';
@@ -1056,7 +1412,10 @@ function appendTerminalOutput(data) {
   activeTerminal.querySelector('.terminal-command').textContent = data.command || 'Terminal';
   activeTerminal.querySelector('.terminal-elapsed').textContent = Math.max(1, Math.round((data.elapsedMs || 0) / 1000)) + 's';
   output.scrollTop = output.scrollHeight;
-  $('messages').scrollTop = $('messages').scrollHeight;
+  messageList.scrollTop = previousScrollTop;
+  requestAnimationFrame(() => {
+    if (running) messageList.scrollTop = previousScrollTop;
+  });
 }
 
 function renderGoal(goal) {
@@ -1125,26 +1484,33 @@ function setRunning(value, text = '') {
   button.setAttribute('aria-label', value ? 'Dừng phản hồi' : 'Gửi');
   button.title = value ? 'Dừng' : 'Gửi';
   document.querySelector('.composer-shell')?.classList.toggle('is-running', value);
+  updateChangeActionState();
   updateSendState();
 }
 
+function updateChangeActionState() {
+  const disabled = running || changeOperationBusy;
+  $('changeTray')?.classList.toggle('is-busy', changeOperationBusy);
+  document.querySelectorAll('#changeList button:not(.is-resolved),#undoAllChanges,#acceptAllChanges,.hunk-undo,.hunk-accept,.review-undo-file,.review-accept-file,.summary-undo').forEach((button) => { button.disabled = disabled; });
+  if ($('undoAllChanges')) $('undoAllChanges').disabled = disabled || !lastPendingChangeCount;
+  if ($('acceptAllChanges')) $('acceptAllChanges').disabled = disabled || !lastPendingChangeCount;
+}
+
 function finishTurn(data) {
-  completeActivity(Boolean(data.cancelled));
-  assistantActivity?.classList.remove('expanded');
+  const turnMessage = assistantBody?.closest('.message');
+  finalizeLiveActivity();
   assistantBody?.closest('.message')?.classList.remove('show-trace');
-  if (assistantBody && turnStartedAt) {
-    assistantBody.closest('.message')?.classList.remove('streaming');
-    assistantBody.closest('.message')?.classList.add('complete');
-    const seconds = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
-    const worked = document.createElement('div'); worked.className = 'worked-label';
-    const elapsed = seconds >= 60 ? Math.floor(seconds / 60) + ' phút' + (seconds % 60 ? ' ' + (seconds % 60) + ' giây' : '') : seconds + ' giây';
-    worked.textContent = data.cancelled ? 'Đã dừng sau ' + elapsed : data.error ? 'Dừng sau ' + elapsed : 'Đã làm trong ' + elapsed;
-    assistantBody.closest('.message')?.insertBefore(worked, assistantBody);
+  if (workingLabel?.classList.contains('working-live')) {
+    finishWorkingLabel(data.cancelled ? 'cancelled' : data.error ? 'error' : 'complete');
   }
-  activeTerminal?.remove();
+  turnMessage?.classList.remove('streaming');
+  turnMessage?.classList.add('complete');
+  document.querySelectorAll('.message.streaming.complete').forEach((item) => item.classList.remove('streaming'));
+  if (data.cancelled) discardTechnicalHistory(turnMessage);
+  else compactTechnicalHistory(turnMessage);
   activeTerminal = null;
   if (data.error) {
-    if (assistantBody && !assistantRawText && !assistantActivity?.children.length) assistantBody.closest('.message')?.remove();
+    if (assistantBody && !assistantRawText && !turnMessage?.querySelector('.agent-commentary,.activity-history-summary')) assistantBody.closest('.message')?.remove();
     const errorBody = appendMessage('assistant', data.error, true, data.timestamp);
     if (activeProvider === '9router'
       && /không phản hồi|không có hoạt động|không phản hồi API|chưa trả kết quả Agent/i.test(data.error)
@@ -1157,11 +1523,17 @@ function finishTurn(data) {
       actions.append(restart);
       errorBody.append(actions);
     }
-  } else if (data.cancelled && assistantBody && !assistantRawText && !assistantActivity?.children.length) {
+  } else if (data.cancelled && assistantBody && !assistantRawText && !turnMessage?.querySelector('.agent-commentary,.activity-history-summary')) {
     renderMarkdownInto(assistantBody, 'Đã dừng.');
   } else if (assistantBody) {
     const label = assistantBody.closest('.message')?.querySelector('.label');
     if (label) label.textContent = formatTime(data.timestamp);
+  }
+  if (assistantBody && data.artifact) {
+    appendPlanArtifact(assistantBody.closest('.message'), data.artifact, data.turnIndex);
+  }
+  if (turnMessage && data.changes?.length) {
+    appendTurnChangeSummary(turnMessage, data);
   }
   assistantBody = null;
   assistantRawText = '';
@@ -1170,17 +1542,63 @@ function finishTurn(data) {
   activitySteps = new Map();
   pendingTurnEnd = null;
   turnStartedAt = 0;
+  workingLabel = null;
   setRunning(false);
+  if (pendingCompletedChangesState) {
+    const completedChangesState = pendingCompletedChangesState;
+    pendingCompletedChangesState = null;
+    window.dispatchEvent(new MessageEvent('message', { data: completedChangesState }));
+  }
   $('prompt').focus();
   setTimeout(runNextQueuedFollowUp, 0);
 }
 
+function releaseCompletedTurnUi(data) {
+  const turnMessage = assistantBody?.closest('.message');
+  finalizeLiveActivity();
+  turnMessage?.querySelectorAll('.agent-activity').forEach((node) => node.remove());
+  turnMessage?.classList.remove('streaming', 'show-trace');
+  turnMessage?.classList.add('complete');
+  finishWorkingLabel(data.cancelled ? 'cancelled' : data.error ? 'error' : 'complete');
+  setRunning(false);
+  scrollMessagesToBottom();
+}
+
+function settleTurn(data) {
+  try {
+    flushAssistantText();
+    finishTurn(data);
+  } catch (error) {
+    console.error('RelayCode failed to render the completed turn.', error);
+  } finally {
+    if (workingTimer) clearInterval(workingTimer);
+    workingTimer = null;
+    workingLabel?.classList.remove('working-live');
+    document.querySelectorAll('.message.streaming').forEach((item) => {
+      item.classList.remove('streaming');
+      item.classList.add('complete');
+    });
+    // This is deliberately repeated outside finishTurn(): even if Markdown or
+    // history compaction throws, a completed turn must never retain live trace.
+    document.querySelectorAll('.message.complete .agent-activity').forEach((node) => node.remove());
+    pendingAssistantText = '';
+    pendingTurnEnd = null;
+    turnStartedAt = 0;
+    assistantBody = null;
+    assistantActivity = null;
+    activeTerminal = null;
+    activitySteps = new Map();
+    setRunning(false);
+    scrollMessagesToBottom();
+  }
+}
+
 function updateSendState() {
-  const hasPrompt = Boolean($('prompt').value.trim() || composerLinks.length || composerSkills.length || composerContexts.length || composerGoalMode);
+  const hasPrompt = Boolean($('prompt').value.trim() || composerLinks.length || composerSkills.length || composerContexts.length || composerGoalMode || composerCommand);
   $('send').disabled = running ? false : !hasPrompt;
-  $('send').classList.toggle('queue-ready', running && hasPrompt);
-  $('send').setAttribute('aria-label', running && hasPrompt ? 'Xếp tin nhắn tiếp theo' : running ? 'Dừng phản hồi' : 'Gửi');
-  $('send').title = running && hasPrompt ? 'Gửi tiếp sau khi tác vụ hiện tại hoàn thành' : running ? 'Dừng' : 'Gửi';
+  $('send').classList.remove('queue-ready');
+  $('send').setAttribute('aria-label', running ? 'Dừng phản hồi' : 'Gửi');
+  $('send').title = running ? 'Dừng' : 'Gửi';
 }
 
 function resizePrompt() {
@@ -1190,7 +1608,7 @@ function resizePrompt() {
   const height = Math.min(prompt.scrollHeight, maximum);
   prompt.style.height = height + 'px';
   prompt.style.overflowY = prompt.scrollHeight > maximum ? 'auto' : 'hidden';
-  document.querySelector('.composer-shell')?.classList.toggle('has-input', Boolean(prompt.value.trim() || composerLinks.length || composerSkills.length || composerContexts.length || composerGoalMode));
+  document.querySelector('.composer-shell')?.classList.toggle('has-input', Boolean(prompt.value.trim() || composerLinks.length || composerSkills.length || composerContexts.length || composerGoalMode || composerCommand));
 }
 
 function composerSkillLabel(name) {
@@ -1208,7 +1626,7 @@ function createComposerToken(kind, label, onRemove) {
   token.setAttribute('aria-label', 'Bỏ ' + label);
   const mark = document.createElement('i');
   mark.setAttribute('aria-hidden', 'true');
-  mark.innerHTML = uiIcon(kind === 'goal' ? 'target' : kind === 'skill' ? 'cube' : 'selection');
+  mark.innerHTML = uiIcon(kind === 'goal' ? 'target' : kind === 'command' ? 'terminalWindow' : kind === 'skill' ? 'cube' : 'selection');
   const copy = document.createElement('span');
   copy.textContent = label;
   const remove = document.createElement('b');
@@ -1278,6 +1696,13 @@ function extractComposerLinks(text, includeBareUrls) {
 function renderComposerTokens() {
   const host = $('composerTokens');
   host.replaceChildren();
+  if (composerCommand) {
+    host.append(createComposerToken('command', composerCommand.label, () => {
+      composerCommand = null;
+      renderComposerTokens();
+      $('prompt').focus();
+    }));
+  }
   if (composerGoalMode) {
     host.append(createComposerToken('goal', 'Goal', () => {
       composerGoalMode = false;
@@ -1300,7 +1725,7 @@ function renderComposerTokens() {
     }));
   });
   composerLinks.forEach((link) => host.append(createComposerLinkToken(link)));
-  const hasTokens = composerGoalMode || composerSkills.length > 0 || composerContexts.length > 0 || composerLinks.length > 0;
+  const hasTokens = Boolean(composerCommand) || composerGoalMode || composerSkills.length > 0 || composerContexts.length > 0 || composerLinks.length > 0;
   $('composerInput').classList.toggle('has-tokens', hasTokens);
   updateComposerPlaceholder();
   updateSendState();
@@ -1308,6 +1733,7 @@ function renderComposerTokens() {
 
 function resetComposerTokens() {
   composerGoalMode = false;
+  composerCommand = null;
   composerSkills = [];
   composerContexts = [];
   composerLinks = [];
@@ -1315,6 +1741,7 @@ function resetComposerTokens() {
 }
 
 function effectiveComposerPrompt() {
+  if (composerCommand) return composerCommand.key;
   const parts = [
     ...composerSkills.map((skill) => '$' + skill.name),
     ...composerContexts,
@@ -1517,7 +1944,9 @@ function renderComposerMenu() {
         replaceComposerTrigger(trigger);
         setMode('plan');
       } else {
-        replaceComposerTrigger(trigger, item.key);
+        composerCommand = { key: item.key, label: item.label || item.key };
+        $('prompt').value = '';
+        renderComposerTokens();
       }
       menu.classList.add('hidden');
       composerMenuIndex = -1;
@@ -1536,7 +1965,7 @@ function send() {
   const prompt = effectiveComposerPrompt();
   if (!prompt) return;
   const model = $('model').value;
-  const standaloneCommand = !composerGoalMode && !composerSkills.length && !composerContexts.length && !composerLinks.length && rawPrompt.startsWith('/');
+  const standaloneCommand = Boolean(composerCommand) || (!composerGoalMode && !composerSkills.length && !composerContexts.length && !composerLinks.length && rawPrompt.startsWith('/'));
   if ((!model || model === '__custom__') && !standaloneCommand) { appendMessage('assistant', 'Hãy chọn hoặc nhập một model trước khi gửi.', true); return; }
   const selected = $('model').selectedOptions[0];
   if (mode === 'agent' && selected?.dataset.tools === 'false') { appendMessage('assistant', 'Model này không hỗ trợ tools nên không thể chạy Agent mode. Hãy chuyển sang Chat hoặc chọn model khác.', true); return; }
@@ -1544,7 +1973,14 @@ function send() {
     queueFollowUp(prompt, mode, model);
     return;
   }
+  if (pendingTurnEnd) {
+    const completedTurn = pendingTurnEnd;
+    pendingTurnEnd = null;
+    flushAssistantText();
+    finishTurn(completedTurn);
+  }
   vscode.postMessage({ type: 'send', prompt, mode, model, includeSelection: false, ...(isCodexTunableModel(model) ? { reasoningEffort, serviceTier } : {}) });
+  if (!standaloneCommand) setRunning(true);
   $('prompt').value = '';
   resetComposerTokens();
   resizePrompt();
@@ -1592,6 +2028,7 @@ $('historyToggle').addEventListener('click', (event) => {
 });
 $('historyPanel').addEventListener('click', (event) => event.stopPropagation());
 $('closeHistory').addEventListener('click', () => { historyExpanded = false; $('historyPanel').classList.add('hidden'); });
+$('clearAllHistory').addEventListener('click', () => vscode.postMessage({ type: 'deleteAllSessions' }));
 $('viewAllHistory').addEventListener('click', () => { historyExpanded = true; renderHistory(allSessions); });
 $('metricsToggle').addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'openTelemetryDashboard' }); });
 $('closeTelemetry').addEventListener('click', () => $('telemetryPanel').classList.add('hidden'));
@@ -1641,7 +2078,7 @@ $('undoAllChanges').addEventListener('click', () => vscode.postMessage({ type: '
 $('hideChanges').addEventListener('click', () => {
   changesHidden = true;
   $('changeTray').classList.add('hidden');
-  if (lastChangeCount) $('collapsedChanges').classList.remove('hidden');
+  $('collapsedChanges').classList.toggle('hidden', !lastChangeCount);
 });
 $('expandChanges').addEventListener('click', () => {
   changesHidden = false;
@@ -1672,8 +2109,15 @@ $('modelMenu').addEventListener('click', (event) => event.stopPropagation());
 $('modelSearch').addEventListener('input', () => renderModelMenu($('modelSearch').value));
 $('checkModels').addEventListener('click', (event) => {
   event.stopPropagation();
+  keepModelMenuOpen();
   vscode.postMessage({ type: checkingModels ? 'cancelModelCheck' : 'checkModels' });
 });
+
+function keepModelMenuOpen() {
+  $('modelMenu').classList.remove('hidden');
+  $('modelPicker').classList.add('open');
+  $('modelTrigger').setAttribute('aria-expanded', 'true');
+}
 $('providerTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('providerMenu').classList.contains('hidden');
@@ -1743,7 +2187,7 @@ function runConnectionDiagnostics() {
   const meta = providerMeta[activeProvider] || providerMeta['9router'];
   openFloatingSurface('connectionDiagnostics');
   $('connectionProviderName').textContent = meta.label;
-  $('connectionProviderMark').textContent = meta.label.slice(0, 2).toUpperCase();
+  $('connectionProviderMark').innerHTML = brandIcon(meta.brand, meta.label);
   $('connectionEndpoint').textContent = $('configEndpoint').value.trim() || 'Chưa có endpoint';
   $('connectionDialogSubtitle').textContent = 'Đang kiểm tra ' + meta.label;
   $('connectionHealthBadge').textContent = 'Đang kiểm tra';
@@ -1863,18 +2307,20 @@ $('openCockpit').addEventListener('click', () => vscode.postMessage({ type: 'ope
 $('exportDiagnostics').addEventListener('click', () => vscode.postMessage({ type: 'exportDiagnostics' }));
 $('send').addEventListener('click', () => {
   if (running) {
-    if ($('prompt').value.trim()) {
-      send();
-      return;
-    }
     $('send').classList.add('stopping');
     vscode.postMessage({ type: 'stopTurn' });
+    // The user explicitly stopped the turn. Do not leave the composer hostage
+    // to a delayed provider abort or a delayed extension-host acknowledgement.
+    settleTurn({ cancelled: true, timestamp: Date.now() });
     return;
   }
   send();
 });
 $('goalPause').addEventListener('click', () => vscode.postMessage({ type: 'pauseGoal' }));
-$('goalResume').addEventListener('click', () => vscode.postMessage({ type: 'resumeGoal', model: $('model').value }));
+$('goalResume').addEventListener('click', () => {
+  setRunning(true);
+  vscode.postMessage({ type: 'resumeGoal', model: $('model').value });
+});
 $('goalClear').addEventListener('click', () => vscode.postMessage({ type: 'clearGoal' }));
 $('clearQueue').addEventListener('click', () => {
   queuedFollowUps = [];
@@ -1908,6 +2354,7 @@ $('prompt').addEventListener('keydown', (event) => {
     else if (composerContexts.length) composerContexts.pop();
     else if (composerSkills.length) composerSkills.pop();
     else if (composerGoalMode) composerGoalMode = false;
+    else if (composerCommand) composerCommand = null;
     else return;
     event.preventDefault();
     renderComposerTokens();
@@ -1952,9 +2399,30 @@ $('prompt').addEventListener('paste', (event) => {
 window.addEventListener('message', ({ data }) => {
   if (data.type === 'uiDialog') {
     renderUiDialog(data);
+  } else if (data.type === 'cancelPendingInteractions') {
+    queuedUiDialogs = [];
+    if (activeUiDialog) closeUiDialog(undefined);
+    document.querySelectorAll('.permission-card,.tool-failure-card').forEach((item) => item.remove());
+    pendingToolFailureId = '';
+    $('modelMenu').classList.add('hidden');
+    $('modelPicker').classList.remove('open');
+    $('modelTrigger').setAttribute('aria-expanded', 'false');
+  } else if (data.type === 'stopAcknowledged') {
+    // Stop is acknowledged by the extension host, so release the composer
+    // immediately. A later backend turnEnd is idempotent and only persists the
+    // final transcript state.
+    if (running) settleTurn({ cancelled: true, timestamp: Date.now() });
+    else {
+      finishWorkingLabel('cancelled');
+      finalizeLiveActivity();
+      setRunning(false);
+    }
   } else if (data.type === 'uiToast') {
     showUiToast(data);
   } else if (data.type === 'bootstrap') {
+    // Chat is the primary surface. Provider discovery runs in the background;
+    // Connection Center is opened only when the user explicitly requests it.
+    showSetup(false);
     $('endpoint').value = data.endpoint;
     $('configEndpoint').value = data.endpoint;
     renderGoal(data.goal);
@@ -1986,7 +2454,7 @@ window.addEventListener('message', ({ data }) => {
     $('messages').replaceChildren();
     changeSummary = null;
     for (const [index, turn] of (data.turns || []).entries()) {
-      appendMessage(turn.role, turn.content, Boolean(turn.error), turn.timestamp, turn.attachments || [], index);
+      appendMessage(turn.role, turn.content, Boolean(turn.error), turn.timestamp, turn.attachments || [], index, turn.artifact || null);
     }
     if ([...$('model').options].some((option) => option.value === data.model)) {
       $('model').value = data.model;
@@ -2014,6 +2482,15 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'setComposerMode') {
     setMode(data.mode || 'agent');
     $('prompt').focus();
+  } else if (data.type === 'planRevision') {
+    setMode('plan');
+    $('prompt').value = language === 'en'
+      ? 'Revise the implementation plan with this feedback: '
+      : 'Điều chỉnh kế hoạch thực hiện theo phản hồi này: ';
+    resizePrompt();
+    updateSendState();
+    $('prompt').focus();
+    $('prompt').setSelectionRange($('prompt').value.length, $('prompt').value.length);
   } else if (data.type === 'openChanges') {
     changesHidden = false;
     $('changeTray').classList.toggle('hidden', !lastChangeCount);
@@ -2043,12 +2520,19 @@ window.addEventListener('message', ({ data }) => {
             : providerName + ' ngoại tuyến';
     if (data.connected) showError('');
     else if (!launchingRouter) showError(data.message || '');
-    if (!data.connected && !setupDismissed) showSetup(true);
-    else if (data.connected && !setupOpenRequested) showSetup(false);
+    if (data.connected && !setupOpenRequested) showSetup(false);
     $('connectionToggle').classList.toggle('hidden', !data.connected);
     $('connectionToggle').textContent = 'Kiểm tra';
-    $('topConnectLabel').textContent = routerStale ? 'Khôi phục' : routerReady && !data.connected ? 'Cấu hình' : 'Kết nối';
-    $('topConnect').classList.toggle('hidden', Boolean(data.connected));
+    $('topConnectLabel').textContent = data.connected
+      ? 'Kết nối'
+      : routerStale
+        ? 'Khôi phục'
+        : routerReady
+          ? 'Cấu hình'
+          : 'Kết nối';
+    $('topConnect').dataset.tooltip = $('topConnectLabel').textContent + ' provider';
+    $('topConnect').classList.remove('hidden');
+    $('topConnect').classList.toggle('online', Boolean(data.connected));
     $('topConnect').classList.toggle('attention', !data.connected && !routerReady);
     $('localSetup').classList.toggle('hidden', !(activeProvider === 'ollama' || activeProvider === 'lm-studio'));
     $('setupProviderBadge').textContent = providerName;
@@ -2123,10 +2607,15 @@ window.addEventListener('message', ({ data }) => {
     card.innerHTML = '<strong>Bắt đầu nhanh</strong><span>' + escapeHtml(data.message) + '</span>';
     $('messages').append(card);
   } else if (data.type === 'recoveredTurn') {
+    if (running) return;
+    document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
+    setRunning(false);
     const item = document.createElement('article'); item.className = 'recovery-card';
+    item.dataset.runId = data.runId || '';
     const lastStatus = data.checkpoint?.lastStatus || 'Tác vụ bị gián đoạn khi IDE reload.';
     item.innerHTML = '<small>Khôi phục phiên Agent</small><strong>' + escapeHtml(data.prompt) + '</strong><span>' + escapeHtml(lastStatus) + '</span><div>' + (data.checkpoint ? '<button class="recovery-resume">Tiếp tục</button>' : '') + '<button class="recovery-discard">Bỏ phiên</button></div>';
     item.querySelector('.recovery-resume')?.addEventListener('click', () => {
+      setRunning(true);
       vscode.postMessage({ type: 'resumeAgent', model: $('model').value });
       item.querySelector('.recovery-resume').disabled = true;
       item.querySelector('.recovery-resume').textContent = 'Đang tiếp tục…';
@@ -2137,8 +2626,14 @@ window.addEventListener('message', ({ data }) => {
     });
     $('messages').append(item);
     $('messages').scrollTop = $('messages').scrollHeight;
+  } else if (data.type === 'activeTurnState') {
+    document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
+    turnStartedAt = data.startedAt || Date.now();
+    if (!workingLabel) startWorkingLabel();
+    setRunning(true);
+    updateActivity(data.status || 'Đang tiếp tục tác vụ');
   } else if (data.type === 'agentRecoveryDismissed') {
-    document.querySelector('.recovery-card')?.remove();
+    document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
   } else if (data.type === 'openConfig') {
     openFloatingSurface('configPanel');
   } else if (data.type === 'openMcpPanel') {
@@ -2167,7 +2662,8 @@ window.addEventListener('message', ({ data }) => {
     $('setupCheckResult').className = 'setup-check-result ' + (data.ok ? 'success' : 'failure');
     $('retryDiagnostics').disabled = false;
     $('connectionProviderName').textContent = providerMeta[data.provider]?.label || data.provider || 'Provider';
-    $('connectionProviderMark').textContent = (providerMeta[data.provider]?.label || data.provider || 'AI').slice(0, 2).toUpperCase();
+    const diagnosticsMeta = providerMeta[data.provider] || providerMeta['9router'];
+    $('connectionProviderMark').innerHTML = brandIcon(diagnosticsMeta.brand, diagnosticsMeta.label);
     $('connectionEndpoint').textContent = data.endpoint || 'Chưa có endpoint';
     $('connectionDialogSubtitle').textContent = data.ok ? 'Provider đã sẵn sàng' : 'Provider chưa thể sử dụng';
     $('connectionHealthBadge').textContent = data.ok ? 'Sẵn sàng' : 'Có lỗi';
@@ -2190,9 +2686,11 @@ window.addEventListener('message', ({ data }) => {
     $('checkModels').textContent = 'Đang kiểm tra 0/' + data.total + ' · Bấm để hủy';
     $('checkModels').classList.add('checking');
     renderModelMenu($('modelSearch').value);
+    keepModelMenuOpen();
   } else if (data.type === 'modelCheck') {
     modelHealth[data.model] = { status: data.status, message: data.message || (data.latencyMs ? 'OK · ' + data.latencyMs + ' ms' : '') };
     renderModelMenu($('modelSearch').value);
+    keepModelMenuOpen();
   } else if (data.type === 'modelCheckProgress') {
     $('checkModels').textContent = 'Đang kiểm tra ' + data.completed + '/' + data.total + ' · Bấm để hủy';
   } else if (data.type === 'modelCheckEnd') {
@@ -2200,12 +2698,16 @@ window.addEventListener('message', ({ data }) => {
     $('checkModels').textContent = data.cancelled ? 'Đã hủy · Kiểm tra lại' : 'Kiểm tra model';
     $('checkModels').classList.remove('checking');
     renderModelMenu($('modelSearch').value);
+    keepModelMenuOpen();
   } else if (data.type === 'telemetry') {
     latestTelemetryRecords = data.records || [];
     renderTelemetry(latestTelemetryRecords);
     updateCodexTuning();
   } else if (data.type === 'mcpServers') {
     renderMcpServers(data.servers || [], data.presets || []);
+    syncPendingMcpOutcome(data.servers || []);
+  } else if (data.type === 'mcpOutcome') {
+    renderMcpOutcome(data);
   } else if (data.type === 'checkpoint') {
     const card = document.createElement('article'); card.className = 'checkpoint-card';
     card.innerHTML = '<span>Git checkpoint đã tạo · ' + data.checkpoint.hash + '</span><button>Khôi phục</button>';
@@ -2274,6 +2776,7 @@ window.addEventListener('message', ({ data }) => {
     item.dataset.toolFailureId = data.id;
     item.innerHTML = '<small>' + escapeHtml(data.tool) + ' · lần ' + data.attempt + '</small><strong>Tool chưa hoàn thành</strong><span>' + escapeHtml(data.message) + '</span><div><button class="tool-retry">Thử lại</button><button class="tool-change-model">Đổi model</button><button class="tool-skip">Bỏ qua</button></div>';
     const finish = (action, model) => {
+      if (pendingToolFailureId === data.id) pendingToolFailureId = '';
       vscode.postMessage({ type: 'resolveToolFailure', id: data.id, action, model });
       item.remove();
     };
@@ -2288,58 +2791,116 @@ window.addEventListener('message', ({ data }) => {
     item.querySelector('.tool-change-model').title = 'Chọn model khác rồi tiếp tục từ bước đang dở';
     item.querySelector('.tool-skip').addEventListener('click', () => finish('skip'));
     $('messages').append(item); $('messages').scrollTop = $('messages').scrollHeight;
+  } else if (data.type === 'changeOperation') {
+    changeOperationBusy = Boolean(data.busy);
+    updateChangeActionState();
+  } else if (data.type === 'changeResolved') {
+    for (const id of data.ids || []) {
+      const snapshot = knownChangeSnapshots.get(id);
+      if (snapshot) resolvedChangeSnapshots.set(id, { ...snapshot, resolution: data.action });
+    }
   } else if (data.type === 'changesState') {
     const tray = $('changeTray');
     const collapsed = $('collapsedChanges');
-    const nextChangeCount = data.changes?.length || 0;
+    const messageList = $('messages');
+    const shouldFollowChanges = messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 90;
+    const pendingChanges = data.changes || [];
+    for (const change of pendingChanges) {
+      knownChangeSnapshots.set(change.id, change);
+      resolvedChangeSnapshots.delete(change.id);
+    }
+    // Only unresolved files belong in the live tray above the composer.
+    // Resolved snapshots are retained for transcript history, but must not
+    // keep an empty/disabled tray visible after Accept or Undo.
+    const allChanges = pendingChanges;
+    const nextChangeCount = allChanges.length;
+    lastPendingChangeCount = pendingChanges.length;
+    if (running) pendingCompletedChangesState = data;
     if (!nextChangeCount || !lastChangeCount) changesHidden = false;
     lastChangeCount = nextChangeCount;
+    // Keep the review tray stable across turn completion. It remains visible
+    // until the user hides it or resolves every pending change.
     tray.classList.toggle('hidden', !nextChangeCount || changesHidden);
     collapsed.classList.toggle('hidden', !nextChangeCount || !changesHidden);
-    const totals = data.files + ' ' + (data.files === 1 ? 'file' : 'files') + ' changed  +' + data.added + '  -' + data.removed;
-    $('changeCount').textContent = totals;
-    $('collapsedChangeCount').innerHTML = escapeHtml(data.files + ' ' + (data.files === 1 ? 'file' : 'files') + ' changed  ') + '<b class="diff-add">+' + data.added + '</b> <b class="diff-remove">-' + data.removed + '</b>';
+    const displayAdded = allChanges.reduce((sum, change) => sum + change.added, 0);
+    const displayRemoved = allChanges.reduce((sum, change) => sum + change.removed, 0);
+    const fileSummary = nextChangeCount + ' ' + (nextChangeCount === 1 ? 'file' : 'files') + ' changed';
+    $('changeCount').innerHTML = escapeHtml(fileSummary) + ' <b class="diff-add">+' + displayAdded + '</b> <b class="diff-remove">-' + displayRemoved + '</b>';
+    $('collapsedChangeCount').innerHTML = escapeHtml(fileSummary + '  ') + '<b class="diff-add">+' + displayAdded + '</b> <b class="diff-remove">-' + displayRemoved + '</b>';
     const list = $('changeList'); list.replaceChildren();
     let renderedTask = '';
-    for (const change of data.changes || []) {
-      if (change.taskId && change.taskId !== renderedTask) {
-        renderedTask = change.taskId;
-        const taskLabel = document.createElement('div'); taskLabel.className = 'task-group-label';
-        const title = document.createElement('span'); title.textContent = 'Tác vụ ' + change.taskId.replace(/^task-/, '').split('-')[0];
-        taskLabel.append(title);
-        list.append(taskLabel);
+    let renderedChanges = 0;
+    const renderChangeBatch = () => {
+      list.querySelector('.change-list-more')?.remove();
+      const nextChanges = allChanges.slice(renderedChanges, renderedChanges + 60);
+      for (const change of nextChanges) {
+        if (change.taskId && change.taskId !== renderedTask) {
+          renderedTask = change.taskId;
+          const taskLabel = document.createElement('div'); taskLabel.className = 'task-group-label';
+          const title = document.createElement('span'); title.textContent = 'Tác vụ ' + change.taskId.replace(/^task-/, '').split('-')[0];
+          taskLabel.append(title);
+          list.append(taskLabel);
+        }
+        const resolved = Boolean(change.resolution);
+        const row = document.createElement('button'); row.type = 'button'; row.className = 'change-row change-row-review' + (resolved ? ' is-resolved' : '');
+        row.title = change.path;
+        row.innerHTML = '<span class="change-file">' + fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span></span><span class="change-row-stats"><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b>' + (resolved ? '<em>' + escapeHtml(change.resolution === 'accepted' ? activityCopy('Đã chấp nhận', 'Accepted') : activityCopy('Đã hoàn tác', 'Undone')) + '</em>' : '') + '</span>';
+        if (resolved) row.disabled = true;
+        else row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
+        list.append(row);
       }
-      const row = document.createElement('div'); row.className = 'change-row';
-      row.innerHTML = '<span class="change-file">' + fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span></span><span><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b></span><button class="tray-review">Review</button><button class="tray-undo">Undo</button><button class="tray-accept">Accept</button>';
-      row.querySelector('.tray-review').addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
-      row.querySelector('.tray-undo').addEventListener('click', () => vscode.postMessage({ type: 'undoChange', id: change.id }));
-      row.querySelector('.tray-accept').addEventListener('click', () => vscode.postMessage({ type: 'acceptChange', id: change.id }));
-      list.append(row);
-    }
-    if (data.changes?.length) {
+      renderedChanges += nextChanges.length;
+      if (renderedChanges < allChanges.length) {
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'change-list-more';
+        more.textContent = 'Hiện thêm ' + Math.min(60, allChanges.length - renderedChanges) + ' file';
+        more.addEventListener('click', renderChangeBatch);
+        list.append(more);
+      }
+      updateChangeActionState();
+    };
+    renderChangeBatch();
+    updateChangeActionState();
+    const pendingChangeIds = new Set(pendingChanges.map((change) => change.id));
+    const hasInlineChangeSummary = [...document.querySelectorAll('.turn-change-file')]
+      .some((row) => pendingChangeIds.has(row.dataset.changeId));
+    if (data.changes?.length && !running && !hasInlineChangeSummary) {
       if (!changeSummary) {
         changeSummary = document.createElement('article');
-        changeSummary.className = 'chat-change-summary';
-        changeSummary.innerHTML = '<span class="change-summary-icon" aria-hidden="true">' + uiIcon('files') + '</span><span class="change-summary-copy"><strong></strong><small>Sẵn sàng để review</small></span><button type="button">Review</button>';
+        changeSummary.className = 'chat-change-summary collapsed';
+        changeSummary.innerHTML = '<header><span class="change-summary-icon" aria-hidden="true">' + uiIcon('files') + '</span><span class="change-summary-copy"><strong><span class="change-summary-files"></span></strong><small class="change-summary-stats"><b class="diff-add"></b><b class="diff-remove"></b></small></span><span class="change-summary-actions"><button class="summary-undo" type="button">Undo</button><button class="summary-review" type="button">Review</button></span></header><div class="change-summary-preview"></div>';
         $('messages').append(changeSummary);
       }
-      const reviewButton = changeSummary.querySelector('button');
-      reviewButton.onclick = () => {
-        changesHidden = false;
-        tray.classList.remove('hidden');
-        collapsed.classList.add('hidden');
-        const first = data.changes?.[0];
-        if (first) vscode.postMessage({ type: 'reviewChange', id: first.id });
+      const setSummaryExpanded = (expanded) => {
+        changeSummaryExpanded = expanded;
+        changeSummary.classList.toggle('collapsed', !expanded);
+        changeSummary.querySelector('.summary-review').textContent = expanded ? activityCopy('Ẩn', 'Hide') : activityCopy('Xem', 'Review');
       };
-      const summaryText = changeSummary.querySelector('.change-summary-copy strong');
-      summaryText.textContent = data.files + ' ' + (data.files === 1 ? 'file' : 'files') + ' changed  +' + data.added + '  -' + data.removed;
-      changeSummary.querySelector('.change-summary-copy').onclick = () => { changesHidden = false; tray.classList.remove('hidden'); collapsed.classList.add('hidden'); };
-    } else if (changeSummary) {
-      changeSummary.remove();
-      changeSummary = null;
+      const reviewButton = changeSummary.querySelector('.summary-review');
+      reviewButton.onclick = () => setSummaryExpanded(!changeSummaryExpanded);
+      changeSummary.querySelector('.summary-undo').onclick = () => vscode.postMessage({ type: 'undoAllChanges' });
+      changeSummary.querySelector('.change-summary-files').textContent = fileSummary;
+      changeSummary.querySelector('.change-summary-stats .diff-add').textContent = '+' + data.added;
+      changeSummary.querySelector('.change-summary-stats .diff-remove').textContent = '-' + data.removed;
+      changeSummary.querySelector('.change-summary-copy').onclick = () => setSummaryExpanded(!changeSummaryExpanded);
+      const preview = changeSummary.querySelector('.change-summary-preview');
+      preview.replaceChildren();
+      for (const change of (data.changes || [])) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'change-summary-file';
+        row.title = change.path;
+        row.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b></small>';
+        row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
+        preview.append(row);
+      }
+      setSummaryExpanded(changeSummaryExpanded);
+      updateChangeActionState();
     }
-    $('messages').scrollTop = $('messages').scrollHeight;
+    if (shouldFollowChanges && !running) messageList.scrollTop = messageList.scrollHeight;
   } else if (data.type === 'turnStart') {
+    document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
     mode = data.mode;
     turnStartedAt = data.timestamp || Date.now();
     flushAssistantText();
@@ -2348,10 +2909,13 @@ window.addEventListener('message', ({ data }) => {
     activeTerminal = null;
     activitySteps = new Map();
     pendingTurnEnd = null;
+    pendingCompletedChangesState = null;
     if (!data.resume) appendMessage('user', data.prompt, false, data.timestamp, data.attachments || [], data.turnIndex);
     assistantBody = appendMessage('assistant', '', false, data.timestamp, [], Number.isInteger(data.turnIndex) ? data.turnIndex + 1 : null);
     assistantBody.closest('.message')?.classList.add('streaming');
+    startWorkingLabel();
     setRunning(true);
+    scrollMessagesToBottom();
   } else if (data.type === 'truncateTurns') {
     flushAssistantText();
     document.querySelectorAll('.message[data-turn-index]').forEach((item) => {
@@ -2362,6 +2926,13 @@ window.addEventListener('message', ({ data }) => {
     assistantActivity = null;
     activeTerminal = null;
     activitySteps = new Map();
+    if (workingTimer) clearInterval(workingTimer);
+    workingTimer = null;
+    workingLabel = null;
+  } else if (data.type === 'commentary') {
+    appendAgentCommentary(data.content);
+  } else if (data.type === 'activityComplete') {
+    finalizeLiveActivity();
   } else if (data.type === 'delta') {
     queueAssistantText(data.delta);
   } else if (data.type === 'status') {
@@ -2372,18 +2943,39 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'toolOutput') {
     appendTerminalOutput(data);
   } else if (data.type === 'turnEnd') {
-    if (pendingAssistantText || typingTimer) pendingTurnEnd = data;
-    else finishTurn(data);
+    // Never let the cosmetic typing animation own the lifecycle of a turn.
+    // Release Stop/caret immediately, but let a successful response finish at
+    // a readable pace instead of flashing the entire buffered answer at once.
+    if (!data.cancelled && !data.error) reconcileFinalAssistantText(data.content);
+    if (!data.cancelled && !data.error && assistantBody && pendingAssistantText && typingTimer) {
+      pendingTurnEnd = data;
+      releaseCompletedTurnUi(data);
+    } else settleTurn(data);
   } else if (data.type === 'reset') {
     flushAssistantText();
+    queuedUiDialogs = [];
+    if (activeUiDialog) closeUiDialog(undefined);
     queuedFollowUps = [];
     renderFollowUpQueue();
     renderGoal(null);
     $('messages').innerHTML = '<div class="empty"><h2>Nói điều bạn muốn xây.</h2><p>Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.</p></div>';
+    if (workingTimer) clearInterval(workingTimer);
+    workingTimer = null;
+    workingLabel = null;
+    turnStartedAt = 0;
     assistantBody = null;
     pendingTurnEnd = null;
+    pendingCompletedChangesState = null;
+    lastChangeCount = 0;
+    lastPendingChangeCount = 0;
+    knownChangeSnapshots = new Map();
+    resolvedChangeSnapshots = new Map();
+    changesHidden = false;
     setRunning(false);
   } else if (data.type === 'error') {
+    if (workingTimer) clearInterval(workingTimer);
+    workingTimer = null;
+    workingLabel = null;
     setRouterLaunchState('idle', '9Router chưa chạy');
     $('launchDescription').textContent = 'Không cần mở terminal hoặc chuyển sang trình duyệt.';
     showError(data.message);

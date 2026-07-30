@@ -33,6 +33,27 @@ export interface QuotaSnapshot {
   message?: string;
 }
 
+export interface ModelQuotaExhaustion {
+  accountCount: number;
+  resetAt?: string;
+}
+
+/** Returns a result only when every active account reports this model at zero. */
+export function quotaExhaustionForModel(snapshot: QuotaSnapshot, model: string): ModelQuotaExhaustion | undefined {
+  if (snapshot.status !== 'ready') return undefined;
+  const activeAccounts = snapshot.accounts.filter((account) => account.active);
+  if (!activeAccounts.length) return undefined;
+  const matches = activeAccounts.map((account) => account.quotas.find((quota) => quotaMatchesModel(quota, model)));
+  if (matches.some((quota) => !quota)) return undefined;
+  const reported = matches as QuotaItem[];
+  if (reported.some((quota) => quota.unlimited || !quotaIsExhausted(quota))) return undefined;
+  const resetAt = reported
+    .map((quota) => quota.resetAt)
+    .filter((value): value is string => Boolean(value))
+    .sort()[0];
+  return { accountCount: activeAccounts.length, resetAt };
+}
+
 interface AuthStatus {
   requireLogin?: boolean;
   authMode?: string;
@@ -224,6 +245,28 @@ function originOf(endpoint: string): string {
 
 function humanize(value: string): string {
   return value.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function quotaMatchesModel(quota: QuotaItem, model: string): boolean {
+  const expected = canonicalModel(model);
+  return [quota.id, quota.name].some((value) => {
+    const candidate = canonicalModel(value);
+    return Boolean(candidate && expected && (candidate === expected || candidate.includes(expected) || expected.includes(candidate)));
+  });
+}
+
+function canonicalModel(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/^[a-z0-9_-]+\//, '')
+    .replace(/\b(agent|reasoning)\b/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function quotaIsExhausted(quota: QuotaItem): boolean {
+  if (quota.remaining !== undefined) return quota.remaining <= 0;
+  if (quota.remainingPercentage !== undefined) return quota.remainingPercentage <= 0;
+  return quota.total !== undefined && quota.used !== undefined && quota.used >= quota.total;
 }
 
 function finite(value: number | undefined): number | undefined {

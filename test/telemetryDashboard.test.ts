@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { QuotaSnapshot } from '../src/nineRouterQuota';
+import { quotaExhaustionForModel, type QuotaSnapshot } from '../src/nineRouterQuota';
 import type { ProviderProfile, TelemetryRecord } from '../src/providerProfiles';
 import { renderTelemetryDashboard } from '../src/webview/telemetryDashboard';
 
@@ -81,6 +81,21 @@ describe('telemetry dashboard', () => {
     expect(html).toContain('id="provider"');
     expect(html).toContain('id="account"');
     expect(html).toContain('id="model"');
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('id="quotaTab"');
+    expect(html).toContain('id="activityTab"');
+    expect(html).toContain('id="activityPanel"');
+    expect(html).toContain('Token usage by model');
+    expect(html).toContain('Token usage <b>1 model</b>');
+    expect(html).toContain('Quota &amp; limits <b>2 hạn mức</b>');
+    expect(html).toContain('quota-heading');
+    expect(html).toContain('activity-heading');
+    expect(html).toContain('*::-webkit-scrollbar-track,*::-webkit-scrollbar-track-piece,*::-webkit-scrollbar-corner{border:0;background:transparent');
+    expect(html).toContain('*::-webkit-scrollbar-button:single-button:vertical:decrement');
+    expect(html).not.toContain('scrollbar-width:none');
+    expect(html).toContain('vscode.setState');
+    expect(html).toContain('grid-template-areas:"model token" "model latency"');
+    expect(html).toContain('.request-head span:nth-child(3),.request-head span:nth-child(4){text-align:right}');
   });
 
   it('shows a secure login action instead of inventing quota data', () => {
@@ -124,5 +139,44 @@ describe('telemetry dashboard', () => {
     expect(html).toContain('class="metric-icon"');
     expect(html).not.toContain('Gemini 3.5 Flash (High)');
     expect(html).not.toContain('/providers/');
+  });
+
+  it('renders the entire dashboard chrome in English when English is selected', () => {
+    const html = renderTelemetryDashboard(webview, [record()], quota(), 'nonce', undefined, 'en');
+
+    expect(html).toContain('<html lang="en">');
+    expect(html).toContain('Account quotas from 9Router');
+    expect(html).toContain('Delete data');
+    expect(html).toContain('Refresh');
+    expect(html).toContain('All providers');
+    expect(html).toContain('Remaining quota');
+    expect(html).not.toMatch(/Tài khoản|Hạn mức|Bộ lọc|Tất cả|Xóa dữ liệu|Làm mới|Đang bật|Chưa có/);
+    expect(html.replaceAll('9Router chính', '')).not.toMatch(/[ăâêôơưĂÂÊÔƠƯđĐáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]/);
+  });
+
+  it('detects when every active account has exhausted the selected model', () => {
+    const exhausted: QuotaSnapshot = {
+      status: 'ready',
+      origin: 'http://localhost:20128',
+      accounts: ['one', 'two'].map((id) => ({
+        id,
+        provider: 'antigravity',
+        name: id,
+        active: true,
+        quotas: [{
+          id: 'claude-opus-4-6-thinking',
+          name: 'Claude Opus 4.6 (Thinking)',
+          used: 1000,
+          total: 1000,
+          remaining: 0,
+          remainingPercentage: 0,
+          unlimited: false
+        }]
+      }))
+    };
+
+    expect(quotaExhaustionForModel(exhausted, 'ag/claude-opus-4-6-thinking')).toEqual({ accountCount: 2, resetAt: undefined });
+    exhausted.accounts[1]!.quotas[0]!.remaining = 10;
+    expect(quotaExhaustionForModel(exhausted, 'ag/claude-opus-4-6-thinking')).toBeUndefined();
   });
 });

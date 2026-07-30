@@ -7,7 +7,9 @@ import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { clearMcpOAuth, hasMcpOAuthTokens, McpOAuthProvider } from './mcpOAuthProvider';
+import { exposedToolName, normalizeMcpInputSchema, ResilientMcpJsonSchemaValidator } from './mcpSchema';
 import type { UserInteraction } from './userInteraction';
+import { renderMcpOAuthResult, type McpOAuthResultReason } from './webview/mcpOAuthResult';
 
 const MCP_SERVERS_STATE = 'nineRouter.mcpServers';
 const MCP_TOKEN_PREFIX = 'nineRouter.mcpToken.';
@@ -92,7 +94,7 @@ export const MCP_PRESETS: McpPreset[] = [
 export interface ExternalAgentTool {
   definition: Record<string, unknown>;
   label: string;
-  execute(args: Record<string, unknown>): Promise<string>;
+  execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
 }
 
 interface Connection {
@@ -122,6 +124,33 @@ export class McpManager implements vscode.Disposable {
     private readonly context: vscode.ExtensionContext,
     private readonly interaction?: UserInteraction
   ) {}
+
+  private createClient(): Client {
+    return new Client(
+      { name: 'relaycode', version: '1.0.0' },
+      { jsonSchemaValidator: new ResilientMcpJsonSchemaValidator() }
+    );
+  }
+
+  private async listAllTools(client: Client): Promise<Connection['tools']> {
+    const tools: Connection['tools'] = [];
+    const names = new Set<string>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+
+    for (let page = 0; page < 100; page += 1) {
+      const listed = await client.listTools(cursor ? { cursor } : undefined);
+      for (const tool of listed.tools) {
+        if (names.has(tool.name)) continue;
+        names.add(tool.name);
+        tools.push(tool);
+      }
+      cursor = listed.nextCursor;
+      if (!cursor || cursors.has(cursor)) break;
+      cursors.add(cursor);
+    }
+    return tools;
+  }
 
   public servers(): McpServerConfig[] {
     return this.context.globalState.get<McpServerConfig[]>(MCP_SERVERS_STATE, []);
@@ -187,7 +216,7 @@ export class McpManager implements vscode.Disposable {
         error: this.errors.get(server.id),
         hasToken,
         hasOAuthTokens,
-        authPending: this.pendingOAuth.has(server.id)
+        authPending: this.pendingOAuth.has(server.id) && !connection
       });
     }
     return statuses;
@@ -246,7 +275,7 @@ export class McpManager implements vscode.Disposable {
         if (!opened) throw new Error('Không thể mở trình duyệt để đăng nhập MCP.');
       }
     );
-    const client = new Client({ name: 'relaycode', version: '1.0.0' });
+    const client = this.createClient();
     const transport = new StreamableHTTPClientTransport(new URL(server.url), { authProvider: provider });
     const timeout = setTimeout(() => {
       const pending = this.pendingOAuth.get(id);
@@ -261,14 +290,27 @@ export class McpManager implements vscode.Disposable {
     this.changeEmitter.fire();
     try {
       await client.connect(transport);
-      const listed = await client.listTools();
-      this.connections.set(id, { client, tools: listed.tools });
+      const tools = await this.listAllTools(client);
+      this.connections.set(id, { client, tools });
       clearTimeout(timeout);
       this.pendingOAuth.delete(id);
       this.changeEmitter.fire();
     } catch (error) {
       if (error instanceof UnauthorizedError) {
+        const current = this.pendingOAuth.get(id);
+        if (this.connections.has(id) || !current || current.state !== state) {
+          this.pendingOAuth.delete(id);
+          this.errors.delete(id);
+          this.changeEmitter.fire();
+          return;
+        }
         this.errors.set(id, 'Hoàn tất đăng nhập trong trình duyệt.');
+        this.changeEmitter.fire();
+        return;
+      }
+      if (this.connections.has(id)) {
+        this.pendingOAuth.delete(id);
+        this.errors.delete(id);
         this.changeEmitter.fire();
         return;
       }
@@ -314,7 +356,7 @@ export class McpManager implements vscode.Disposable {
       const connection = this.connections.get(server.id) ?? await this.connect(server).catch(() => undefined);
       if (!connection) continue;
       for (const tool of connection.tools) {
-        const exposedName = `mcp__${safeName(server.name)}__${safeName(tool.name)}`.slice(0, 64);
+        const exposedName = exposedToolName(server.id, server.name, tool.name);
         result.push({
           label: `${server.name} / ${tool.name}`,
           definition: {
@@ -322,11 +364,15 @@ export class McpManager implements vscode.Disposable {
             function: {
               name: exposedName,
               description: `[MCP ${server.name}] ${tool.description || tool.name}`,
-              parameters: tool.inputSchema
+              parameters: normalizeMcpInputSchema(tool.inputSchema)
             }
           },
-          execute: async (args) => {
-            const response = await connection.client.callTool({ name: tool.name, arguments: args }, undefined, { timeout: 120_000 });
+          execute: async (args, signal) => {
+            const response = await connection.client.callTool(
+              { name: tool.name, arguments: args },
+              undefined,
+              { timeout: 120_000, signal }
+            );
             const content = (response.content ?? []) as Array<{ type: string; text?: string; mimeType?: string; data?: string }>;
             const text = content.map((item) => {
               if (item.type === 'text') return item.text;
@@ -345,7 +391,7 @@ export class McpManager implements vscode.Disposable {
   private async connect(server: McpServerConfig): Promise<Connection> {
     const existing = this.connections.get(server.id);
     if (existing) return existing;
-    const client = new Client({ name: 'relaycode', version: '1.0.0' });
+    const client = this.createClient();
     try {
       if (server.transport === 'stdio') {
         let extraEnv: Record<string, string> = {};
@@ -372,8 +418,8 @@ export class McpManager implements vscode.Disposable {
           await client.connect(new StreamableHTTPClientTransport(new URL(server.url!), { requestInit: { headers } }));
         }
       }
-      const listed = await client.listTools();
-      const connection = { client, tools: listed.tools };
+      const tools = await this.listAllTools(client);
+      const connection = { client, tools };
       this.connections.set(server.id, connection);
       this.errors.delete(server.id);
       return connection;
@@ -453,30 +499,72 @@ export class McpManager implements vscode.Disposable {
     await this.saveServer(desktopServer);
     const connection = this.connections.get(server.id);
     if (connection) {
-      if (this.interaction) this.interaction.notify(`Figma Desktop đã kết nối · ${connection.tools.length} công cụ sẵn sàng.`, 'success');
-      else void vscode.window.showInformationMessage(`Figma Desktop đã kết nối · ${connection.tools.length} công cụ sẵn sàng.`);
+      this.notifyFigmaDesktopConnected(connection.tools.length);
       return;
     }
 
-    this.errors.set(server.id, 'Hãy bật Dev Mode → Enable desktop MCP server trong Figma, rồi bấm Kết nối lại.');
+    await this.waitForFigmaDesktop(desktopServer);
+  }
+
+  private notifyFigmaDesktopConnected(toolCount: number): void {
+    const message = `Figma Desktop đã kết nối · ${toolCount} công cụ sẵn sàng.`;
+    if (this.interaction) this.interaction.notify(message, 'success');
+    else void vscode.window.showInformationMessage(message);
+  }
+
+  private async waitForFigmaDesktop(server: McpServerConfig): Promise<void> {
+    const unavailable = 'Figma Desktop chưa sẵn sàng · mở file Design, bật Dev Mode và Enable desktop MCP server.';
+    this.errors.set(server.id, unavailable);
     this.changeEmitter.fire();
-    if (this.interaction) {
-      const setup = await this.interaction.choose({
-        title: 'Đã chuyển sang Figma Desktop',
-        message: 'Hãy bật Desktop MCP server trong Figma rồi bấm lại thẻ Figma.',
+
+    if (!this.interaction) {
+      const action = await vscode.window.showInformationMessage(
+        'RelayCode đã cấu hình Figma Desktop nhưng server chưa chạy. Mở một file Figma Design, nhấn Shift+D, rồi bật Enable desktop MCP server.',
+        'Kiểm tra lại',
+        'Mở hướng dẫn'
+      );
+      if (action === 'Mở hướng dẫn') {
+        await vscode.env.openExternal(vscode.Uri.parse(FIGMA_DESKTOP_GUIDE));
+        return;
+      }
+      if (action !== 'Kiểm tra lại') return;
+      await this.reconnect(server.id).catch(() => undefined);
+      const connection = this.connections.get(server.id);
+      if (connection) this.notifyFigmaDesktopConnected(connection.tools.length);
+      else void vscode.window.showWarningMessage(unavailable);
+      return;
+    }
+
+    while (!this.connections.has(server.id)) {
+      const action = await this.interaction.choose({
+        title: 'Figma Desktop chưa sẵn sàng',
+        message: 'RelayCode đã lưu cấu hình, nhưng chưa tìm thấy Desktop MCP server.',
+        detail: 'Mở một file Figma Design trong ứng dụng Desktop → nhấn Shift+D để vào Dev Mode → trong mục MCP server, chọn Enable desktop MCP server.',
+        tone: 'warning',
         icon: 'plugsConnected',
         actions: [
           { id: 'close', label: 'Đóng', kind: 'secondary' },
-          { id: 'guide', label: 'Mở hướng dẫn', kind: 'primary' }
+          { id: 'guide', label: 'Mở hướng dẫn', kind: 'secondary' },
+          { id: 'retry', label: 'Kiểm tra lại', kind: 'primary' }
         ]
       });
-      if (setup === 'guide') await vscode.env.openExternal(vscode.Uri.parse(FIGMA_DESKTOP_GUIDE));
-    } else {
-      const setup = await vscode.window.showInformationMessage(
-        'Đã chuyển sang Figma Desktop. Hãy bật Desktop MCP server trong Figma rồi bấm lại thẻ Figma.',
-        'Mở hướng dẫn'
-      );
-      if (setup === 'Mở hướng dẫn') await vscode.env.openExternal(vscode.Uri.parse(FIGMA_DESKTOP_GUIDE));
+      if (!action || action === 'close') return;
+      if (action === 'guide') {
+        await vscode.env.openExternal(vscode.Uri.parse(FIGMA_DESKTOP_GUIDE));
+        continue;
+      }
+
+      this.errors.delete(server.id);
+      this.changeEmitter.fire();
+      this.interaction.notify('Đang kiểm tra Figma Desktop…', 'neutral');
+      await this.reconnect(server.id).catch(() => undefined);
+      const connection = this.connections.get(server.id);
+      if (connection) {
+        this.notifyFigmaDesktopConnected(connection.tools.length);
+        return;
+      }
+      this.errors.set(server.id, unavailable);
+      this.changeEmitter.fire();
     }
   }
 
@@ -494,13 +582,13 @@ export class McpManager implements vscode.Disposable {
       });
     });
     const address = this.callbackServer.address() as AddressInfo;
-    this.callbackUrl = `http://localhost:${address.port}/mcp/oauth/callback`;
+    this.callbackUrl = `http://localhost:${address.port}/relaycode/callback`;
     return this.callbackUrl;
   }
 
   private async handleOAuthCallback(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const callback = new URL(request.url || '/', this.callbackUrl || 'http://127.0.0.1');
-    if (callback.pathname !== '/mcp/oauth/callback') {
+    if (callback.pathname !== '/relaycode/callback') {
       response.writeHead(404).end('Not found');
       return;
     }
@@ -509,7 +597,7 @@ export class McpManager implements vscode.Disposable {
     const oauthError = callback.searchParams.get('error');
     const pending = [...this.pendingOAuth.values()].find((item) => item.state === state);
     if (!pending || !state) {
-      this.respondToBrowser(response, false, 'Phiên đăng nhập không còn hợp lệ. Hãy quay lại Antigravity và thử lại.');
+      this.respondToBrowser(response, false, undefined, 'expired');
       return;
     }
     if (oauthError || !code) {
@@ -518,7 +606,7 @@ export class McpManager implements vscode.Disposable {
       this.errors.set(pending.server.id, callback.searchParams.get('error_description') || oauthError || 'Đăng nhập bị hủy.');
       await pending.client.close().catch(() => undefined);
       this.changeEmitter.fire();
-      this.respondToBrowser(response, false, 'Đăng nhập chưa hoàn tất. Bạn có thể đóng tab này.');
+      this.respondToBrowser(response, false, pending.server.name, 'cancelled');
       return;
     }
     try {
@@ -527,27 +615,30 @@ export class McpManager implements vscode.Disposable {
       clearTimeout(pending.timeout);
       await pending.client.close().catch(() => undefined);
       await this.connect(pending.server);
+      this.pendingOAuth.delete(pending.server.id);
       this.errors.delete(pending.server.id);
       this.changeEmitter.fire();
-      this.respondToBrowser(response, true, `${pending.server.name} đã kết nối với RelayCode.`);
+      this.interaction?.notify(`${pending.server.name} đã kết nối MCP thành công.`, 'success');
+      this.respondToBrowser(response, true, pending.server.name);
     } catch (error) {
       this.pendingOAuth.delete(pending.server.id);
       clearTimeout(pending.timeout);
       this.errors.set(pending.server.id, error instanceof Error ? error.message : String(error));
       await pending.client.close().catch(() => undefined);
       this.changeEmitter.fire();
-      this.respondToBrowser(response, false, 'Không thể hoàn tất đăng nhập. Hãy quay lại Antigravity để xem lỗi.');
+      this.interaction?.notify(`Không thể kết nối ${pending.server.name}: ${error instanceof Error ? error.message : String(error)}`, 'danger');
+      this.respondToBrowser(response, false, pending.server.name, 'failed');
     }
   }
 
-  private respondToBrowser(response: http.ServerResponse, ok: boolean, message: string): void {
-    const color = ok ? '#68d7bd' : '#f08c8c';
-    const safeMessage = message.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] || char);
+  private respondToBrowser(response: http.ServerResponse, ok: boolean, serverName?: string, reason?: McpOAuthResultReason): void {
+    const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'vi');
     response.writeHead(ok ? 200 : 400, {
       'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store'
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';"
     });
-    response.end(`<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>MCP · RelayCode</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#18191b;color:#e6e7e9;font:15px/1.55 system-ui}.card{width:min(420px,calc(100% - 40px));padding:28px;border:1px solid #3c3e42;border-radius:18px;background:#242527;box-shadow:0 28px 80px #0008}.mark{width:42px;height:42px;display:grid;place-items:center;border-radius:12px;background:${color}18;color:${color};font-size:22px}.card h1{margin:18px 0 7px;font-size:20px}.card p{margin:0;color:#aeb1b5}.card small{display:block;margin-top:20px;color:#74787e}</style><body><main class="card"><div class="mark">${ok ? '✓' : '×'}</div><h1>${ok ? 'Đã kết nối MCP' : 'Chưa thể kết nối'}</h1><p>${safeMessage}</p><small>Bạn có thể đóng tab này.</small></main></body></html>`);
+    response.end(renderMcpOAuthResult({ language, ok, serverName, reason }));
   }
 
   private async disconnect(id: string): Promise<void> {
@@ -568,8 +659,4 @@ export class McpManager implements vscode.Disposable {
     this.callbackServer = undefined;
     this.changeEmitter.dispose();
   }
-}
-
-function safeName(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'tool';
 }

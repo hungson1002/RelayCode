@@ -15,3 +15,6 @@ tsconfig.json
 esbuild.mjs
 vitest.config.*
 dist/**/*.map
+index.html
+script.js
+style.css

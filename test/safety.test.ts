@@ -9,11 +9,19 @@ describe('Agent safety policy', () => {
   it('blocks destructive commands even without a user deny list', () => {
     expect(validateCommandPolicy('git reset --hard HEAD', { allow: [], deny: [] })).toContain('phá hủy');
     expect(validateCommandPolicy('Remove-Item C:\\work -Recurse -Force', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('Remove-Item C:\\work -Force -Recurse', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('Remove-Item C:\\work -Recurse', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('rm -fr ./work', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('cmd /c rd C:\\work /s', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('powershell -EncodedCommand ZABhAG4AZwBlAHIA', { allow: [], deny: [] })).toContain('phá hủy');
   });
 
   it('enforces allow and deny lists', () => {
     expect(validateCommandPolicy('npm test', { allow: ['npm'], deny: [] })).toBeUndefined();
     expect(validateCommandPolicy('curl example.com', { allow: ['npm'], deny: [] })).toContain('allow list');
+    expect(validateCommandPolicy('npm-malicious test', { allow: ['npm'], deny: [] })).toContain('allow list');
+    expect(validateCommandPolicy("npm test; Invoke-WebRequest 'https://example.com'", { allow: ['npm'], deny: [] })).toContain('allow list');
+    expect(validateCommandPolicy("npm test\nInvoke-WebRequest 'https://example.com'", { allow: ['npm'], deny: [] })).toContain('allow list');
     expect(validateCommandPolicy('npm publish', { allow: [], deny: ['npm publish'] })).toContain('deny list');
   });
 });

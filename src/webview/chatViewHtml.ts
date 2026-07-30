@@ -17,21 +17,22 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
 </head>
 <body data-language="${language}">
   <header class="route-header">
-    <div class="route-meta"><span id="connectionDot" class="dot"></span><span class="connection-copy"><strong id="connectionLabel">Đang kiểm tra</strong><small>Provider hiện tại</small></span></div>
+    <div class="route-meta" title="Trạng thái provider hiện tại"><span id="connectionDot" class="dot"></span><span class="connection-copy"><strong id="connectionLabel">Đang kiểm tra</strong><small>Provider hiện tại</small></span></div>
     <nav class="header-actions" aria-label="Điều hướng RelayCode">
-      <button id="topConnect" class="header-action connect-action"><span id="topConnectIcon" aria-hidden="true"></span><span id="topConnectLabel">Kết nối</span></button>
-      <button id="historyToggle" class="header-action"><span id="historyToggleIcon" aria-hidden="true"></span><span>Lịch sử</span></button>
-      <button id="metricsToggle" class="header-action"><span id="metricsToggleIcon" aria-hidden="true"></span><span>Số liệu</span></button>
-      <button id="settings" class="header-action icon-only" aria-label="Cài đặt" title="Cài đặt"><span id="settingsIcon" aria-hidden="true"></span></button>
+      <button id="topConnect" class="header-action connect-action" aria-label="Kết nối provider" data-tooltip="Kết nối provider"><span id="topConnectIcon" aria-hidden="true"></span><span id="topConnectLabel" class="header-action-label">Kết nối</span></button>
+      <button id="historyToggle" class="header-action" aria-label="Lịch sử chat" data-tooltip="Lịch sử chat"><span id="historyToggleIcon" aria-hidden="true"></span><span class="header-action-label">Lịch sử</span></button>
+      <button id="metricsToggle" class="header-action" aria-label="Số liệu sử dụng" data-tooltip="Số liệu sử dụng"><span id="metricsToggleIcon" aria-hidden="true"></span><span class="header-action-label">Số liệu</span></button>
+      <button id="settings" class="header-action icon-only" aria-label="Cài đặt" data-tooltip="Cài đặt"><span id="settingsIcon" aria-hidden="true"></span></button>
     </nav>
   </header>
 
-  <section id="historyPanel" class="history-panel hidden"><div class="history-heading"><strong id="historyTitle">Lịch sử chat</strong><button id="closeHistory" aria-label="Đóng">×</button></div><div id="historyList" class="history-list"></div><button id="viewAllHistory" class="history-view-all hidden" type="button">View all</button></section>
+  <section id="historyPanel" class="history-panel hidden"><div class="history-heading"><strong id="historyTitle">Lịch sử chat</strong><div class="history-heading-actions"><button id="clearAllHistory" class="history-clear-all hidden" type="button">Xóa tất cả</button><button id="closeHistory" aria-label="Đóng">×</button></div></div><div id="historyList" class="history-list"></div><button id="viewAllHistory" class="history-view-all hidden" type="button">View all</button></section>
 
   <section id="telemetryPanel" class="overlay-panel hidden"><div class="panel-heading"><div><strong>Hoạt động provider</strong><span>Token, chi phí ước tính, tốc độ và rate limit</span></div><button id="closeTelemetry" class="header-action">Đóng</button></div><div id="telemetrySummary" class="telemetry-summary"></div><div id="telemetryRate" class="telemetry-rate"></div><div id="telemetryList" class="telemetry-list"></div><button id="clearTelemetry" class="panel-link">Xóa lịch sử số liệu</button></section>
 
   <section id="mcpPanel" class="overlay-panel hidden">
     <div class="panel-heading"><div><strong>Kết nối công cụ</strong><span>Chọn dịch vụ và đăng nhập trong trình duyệt</span></div><button id="closeMcp" class="header-action">Đóng</button></div>
+    <div id="mcpConnectionNotice" class="mcp-connection-notice hidden" role="status" aria-live="polite"></div>
     <div id="mcpCatalog" class="mcp-catalog" aria-label="MCP có thể kết nối"></div>
     <div class="mcp-section-label">Đã thêm</div>
     <div id="mcpList" class="mcp-list"></div>

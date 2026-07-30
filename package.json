@@ -101,26 +101,26 @@
         {
           "type": "webview",
           "id": "nineRouter.chatView",
-          "name": "AI Coding Agent"
+          "name": "Chat"
         }
       ]
     },
     "menus": {
       "view/title": [
         {
-          "command": "nineRouter.newThread",
+          "command": "nineRouter.configure",
           "when": "view == nineRouter.chatView",
           "group": "navigation@1"
         },
         {
-          "command": "nineRouter.configure",
+          "command": "nineRouter.newThread",
           "when": "view == nineRouter.chatView",
-          "group": "navigation@3"
+          "group": "navigation@2"
         },
         {
           "command": "nineRouter.openDashboard",
           "when": "view == nineRouter.chatView",
-          "group": "navigation@2"
+          "group": "navigation@3"
         }
       ]
     },
@@ -288,6 +288,7 @@
     "@lobehub/icons-static-svg": "^1.94.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@phosphor-icons/core": "^2.1.1",
+    "ajv": "^8.20.0",
     "simple-icons": "^16.27.1"
   }
 }

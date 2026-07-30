@@ -16,21 +16,35 @@ import database from '@phosphor-icons/core/regular/database.svg';
 import downloadSimple from '@phosphor-icons/core/regular/download-simple.svg';
 import exportIcon from '@phosphor-icons/core/regular/export.svg';
 import file from '@phosphor-icons/core/regular/file.svg';
+import fileAudio from '@phosphor-icons/core/regular/file-audio.svg';
+import fileC from '@phosphor-icons/core/regular/file-c.svg';
+import fileCpp from '@phosphor-icons/core/regular/file-cpp.svg';
+import fileCSharp from '@phosphor-icons/core/regular/file-c-sharp.svg';
 import fileCode from '@phosphor-icons/core/regular/file-code.svg';
 import fileCss from '@phosphor-icons/core/regular/file-css.svg';
+import fileCsv from '@phosphor-icons/core/regular/file-csv.svg';
 import fileDoc from '@phosphor-icons/core/regular/file-doc.svg';
 import fileHtml from '@phosphor-icons/core/regular/file-html.svg';
 import fileImage from '@phosphor-icons/core/regular/file-image.svg';
+import fileIni from '@phosphor-icons/core/regular/file-ini.svg';
+import fileJpg from '@phosphor-icons/core/regular/file-jpg.svg';
 import fileJs from '@phosphor-icons/core/regular/file-js.svg';
 import fileJsx from '@phosphor-icons/core/regular/file-jsx.svg';
 import fileMd from '@phosphor-icons/core/regular/file-md.svg';
 import filePdf from '@phosphor-icons/core/regular/file-pdf.svg';
+import filePng from '@phosphor-icons/core/regular/file-png.svg';
 import filePpt from '@phosphor-icons/core/regular/file-ppt.svg';
 import filePy from '@phosphor-icons/core/regular/file-py.svg';
 import fileRs from '@phosphor-icons/core/regular/file-rs.svg';
+import fileSql from '@phosphor-icons/core/regular/file-sql.svg';
+import fileSvg from '@phosphor-icons/core/regular/file-svg.svg';
+import fileText from '@phosphor-icons/core/regular/file-text.svg';
 import files from '@phosphor-icons/core/regular/files.svg';
 import fileTs from '@phosphor-icons/core/regular/file-ts.svg';
 import fileTsx from '@phosphor-icons/core/regular/file-tsx.svg';
+import fileTxt from '@phosphor-icons/core/regular/file-txt.svg';
+import fileVideo from '@phosphor-icons/core/regular/file-video.svg';
+import fileVue from '@phosphor-icons/core/regular/file-vue.svg';
 import fileXls from '@phosphor-icons/core/regular/file-xls.svg';
 import fileZip from '@phosphor-icons/core/regular/file-zip.svg';
 import folderOpen from '@phosphor-icons/core/regular/folder-open.svg';
@@ -76,21 +90,35 @@ export const UI_ICONS = {
   downloadSimple,
   export: exportIcon,
   file,
+  fileAudio,
+  fileC,
+  fileCpp,
+  fileCSharp,
   fileCode,
   fileCss,
+  fileCsv,
   fileDoc,
   fileHtml,
   fileImage,
+  fileIni,
+  fileJpg,
   fileJs,
   fileJsx,
   fileMd,
   filePdf,
+  filePng,
   filePpt,
   filePy,
   fileRs,
+  fileSql,
+  fileSvg,
+  fileText,
   files,
   fileTs,
   fileTsx,
+  fileTxt,
+  fileVideo,
+  fileVue,
   fileXls,
   fileZip,
   folderOpen,

@@ -34,6 +34,8 @@ export interface ChatMessage {
 export interface StreamCallbacks {
   onDelta(delta: string): void;
   onStatus(status: string): void;
+  onCommentary?(content: string): void;
+  onActivityComplete?(): void;
   onToolOutput?(event: { tool: string; command?: string; chunk: string; stream: 'stdout' | 'stderr'; elapsedMs: number }): void;
   onMetrics?(metrics: RequestMetrics): void;
   onToolFailure?(failure: AgentToolFailure): Promise<AgentToolFailureDecision>;
@@ -67,6 +69,9 @@ export interface AgentRunCheckpoint {
   step: number;
   successfulMutations: number;
   completionWithoutActionCount: number;
+  mutatedPaths?: string[];
+  lastValidatedMutationCount?: number;
+  validationFailureCount?: number;
   pendingToolCalls: AgentToolCall[];
   nextToolIndex: number;
   lastStatus: string;

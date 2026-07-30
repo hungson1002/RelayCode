@@ -272,7 +272,7 @@ export class RouterClient {
     let buffer = '';
     let content = '';
     let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
-    while (true) {
+    stream: while (true) {
       const { done, value } = await reader.read();
       buffer += decoder.decode(value, { stream: !done });
       const blocks = buffer.split(/\r?\n\r?\n/);
@@ -283,13 +283,22 @@ export class RouterClient {
       }
       for (const block of blocks) {
         for (const data of parseSseData(block)) {
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            // Some OpenAI-compatible gateways keep the HTTP connection alive
+            // after the protocol-level end marker. Waiting for the socket to
+            // close leaves the Agent turn permanently "running".
+            void reader.cancel().catch(() => undefined);
+            break stream;
+          }
           try {
             const event = JSON.parse(data) as {
-              choices?: Array<{ delta?: {
-                content?: string | null;
-                tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
-              } }>;
+              choices?: Array<{
+                delta?: {
+                  content?: string | null;
+                  tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
+                };
+                finish_reason?: string | null;
+              }>;
               usage?: { prompt_tokens?: number; completion_tokens?: number };
             };
             if (event.usage) usage = event.usage;
@@ -306,6 +315,12 @@ export class RouterClient {
               if (raw.function?.arguments) current.arguments += raw.function.arguments;
               calls.set(index, current);
               onProgress?.({ type: 'tool', name: current.name, arguments: current.arguments });
+            }
+            if (event.choices?.some((choice) => choice.finish_reason != null)) {
+              // Kiro and some other compatible providers use finish_reason as
+              // the only protocol-level terminator: no [DONE] event follows.
+              void reader.cancel().catch(() => undefined);
+              break stream;
             }
           } catch {
             // Compatible gateways may emit keepalive events that are not JSON.

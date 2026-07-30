@@ -6,7 +6,7 @@ type AnthropicContent =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string };
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 
 type AnthropicMessage = { role: 'user' | 'assistant'; content: string | AnthropicContent[] };
 
@@ -178,34 +178,80 @@ export class AnthropicClient {
   private convertAgentMessages(messages: Array<Record<string, unknown>>): { system: string; messages: AnthropicMessage[] } {
     const system: string[] = [];
     const converted: AnthropicMessage[] = [];
-    for (const message of messages) {
+    const append = (role: 'user' | 'assistant', content: string | AnthropicContent[]) => {
+      const blocks: AnthropicContent[] = typeof content === 'string'
+        ? (content ? [{ type: 'text', text: content }] : [])
+        : content;
+      if (!blocks.length) return;
+      const previous = converted.at(-1);
+      if (previous?.role === role) {
+        const previousBlocks: AnthropicContent[] = typeof previous.content === 'string'
+          ? (previous.content ? [{ type: 'text', text: previous.content }] : [])
+          : previous.content;
+        previous.content = [...previousBlocks, ...blocks];
+        return;
+      }
+      converted.push({ role, content: blocks });
+    };
+
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index]!;
       const role = String(message.role ?? '');
       if (role === 'system') {
         system.push(String(message.content ?? ''));
         continue;
       }
-      if (role === 'tool') {
-        converted.push({
-          role: 'user',
-          content: [{ type: 'tool_result', tool_use_id: String(message.tool_call_id ?? ''), content: String(message.content ?? '') }]
-        });
-        continue;
-      }
+      // Tool results are consumed together with the assistant tool_use message below.
+      // Ignoring an orphan here is safer than sending an invalid Anthropic sequence.
+      if (role === 'tool') continue;
       if (role !== 'user' && role !== 'assistant') continue;
       const content: AnthropicContent[] = [];
       const rawContent = message.content;
       if (typeof rawContent === 'string' && rawContent) content.push({ type: 'text', text: rawContent });
       else if (Array.isArray(rawContent)) content.push(...this.convertContent(rawContent as ChatMessage['content']) as AnthropicContent[]);
+      const toolUseIds: string[] = [];
       if (role === 'assistant' && Array.isArray(message.tool_calls)) {
         for (const rawCall of message.tool_calls as Array<Record<string, unknown>>) {
           const fn = rawCall.function as Record<string, unknown> | undefined;
-          if (!fn || typeof fn.name !== 'string') continue;
+          const id = typeof rawCall.id === 'string' ? rawCall.id.trim() : '';
+          if (!id || !fn || typeof fn.name !== 'string') continue;
           let input: Record<string, unknown> = {};
           try { input = JSON.parse(String(fn.arguments ?? '{}')) as Record<string, unknown>; } catch { /* Keep empty input. */ }
-          content.push({ type: 'tool_use', id: String(rawCall.id ?? fn.name), name: fn.name, input });
+          content.push({ type: 'tool_use', id, name: fn.name, input });
+          toolUseIds.push(id);
         }
       }
-      converted.push({ role, content: content.length ? content : '' });
+      append(role, content);
+
+      if (role === 'assistant' && toolUseIds.length) {
+        const results = new Map<string, string>();
+        let resultIndex = index + 1;
+        while (resultIndex < messages.length && String(messages[resultIndex]?.role ?? '') === 'tool') {
+          const result = messages[resultIndex]!;
+          const id = String(result.tool_call_id ?? '').trim();
+          if (id && toolUseIds.includes(id) && !results.has(id)) results.set(id, String(result.content ?? ''));
+          resultIndex++;
+        }
+        const resultBlocks: AnthropicContent[] = toolUseIds.map((id) => {
+          const result = results.get(id);
+          if (result === undefined) {
+            return {
+              type: 'tool_result',
+              tool_use_id: id,
+              content: 'ERROR: RelayCode recovered an interrupted run. This tool was not executed; issue it again only if it is still needed.',
+              is_error: true
+            };
+          }
+          return {
+            type: 'tool_result',
+            tool_use_id: id,
+            content: result,
+            ...(/^(ERROR|DENIED):?/i.test(result) ? { is_error: true } : {})
+          };
+        });
+        append('user', resultBlocks);
+        index = resultIndex - 1;
+      }
     }
     return { system: system.join('\n\n'), messages: converted };
   }

@@ -126,6 +126,10 @@ Useful slash commands:
 
 After a task, RelayCode shows the number of changed files and total additions/removals. Use **Review** for the full diff or individual hunks, then choose **Accept** or **Undo**. Undoing a newly created file removes that file.
 
+After source edits, the Agent locates the nearest changed project—including nested apps and monorepos—and runs its relevant test, type-check, lint or build commands from the correct working directory. If validation fails, the error is returned to the same conversation so the Agent can correct the code and rerun the checks before it reports completion. Node.js, Rust, Go, Python, .NET, Java, Swift, Ruby, PHP and CMake projects are detected automatically.
+
+Commands run in the native shell for the current operating system. On Windows, RelayCode uses strict non-interactive PowerShell and treats both cmdlet and native-program failures as failures; on macOS and Linux it uses a non-interactive POSIX shell. Files changed by commands remain visible in Review and can be undone like direct Agent edits.
+
 Agent sessions retain recent turns, so follow-ups such as “continue” preserve the current task context. While a provider is silent, the activity timeline shows elapsed wait time; the inactivity limit is configurable with `nineRouter.agentInactivityTimeoutSeconds`.
 
 ## Permissions and safety

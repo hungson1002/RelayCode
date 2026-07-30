@@ -74,6 +74,38 @@ describe('provider factory', () => {
     expect(progress.some((event) => event.name === 'write_file' && event.arguments?.includes('src/index.'))).toBe(true);
   });
 
+  it('finishes an Agent turn at finish_reason even when the gateway sends no done marker and keeps the socket open', async () => {
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode([
+          'data: {"choices":[{"delta":{"content":"Done."}}]}',
+          '',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":2}}',
+          '',
+          ''
+        ].join('\n')));
+      },
+      cancel: cancelled
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' }
+    })));
+    const client = new RouterClient({ endpoint: 'http://127.0.0.1:20128/v1', apiKey: 'test-key' });
+
+    const result = await client.completeWithTools(
+      'agent-model',
+      [{ role: 'user', content: 'Say done.' }],
+      []
+    );
+
+    expect(result.content).toBe('Done.');
+    expect(result.toolCalls).toEqual([]);
+    expect(result.metrics).toMatchObject({ inputTokens: 4, outputTokens: 2, estimated: false });
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+
   it('checks agentic models with a tool request instead of a one-token chat ping', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { tool_calls: [{ id: 'call-1', function: { name: 'read_file', arguments: '{"path":"package.json"}' } }] } }],
@@ -115,5 +147,67 @@ describe('AnthropicClient', () => {
     const body = JSON.parse(String(init.body));
     expect(body.system).toBe('You are an agent.');
     expect(body.tools[0]).toMatchObject({ name: 'read_file', input_schema: { type: 'object' } });
+  });
+
+  it('groups every tool result into the user message immediately after tool use', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      content: [{ type: 'text', text: 'Done.' }]
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AnthropicClient({ endpoint: 'https://api.anthropic.com/v1', apiKey: 'test-key' });
+
+    await client.completeWithTools('claude-test', [
+      { role: 'user', content: 'Inspect the workspace.' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'tool-a', type: 'function', function: { name: 'read_file', arguments: '{"path":"a.ts"}' } },
+          { id: 'tool-b', type: 'function', function: { name: 'read_file', arguments: '{"path":"b.ts"}' } }
+        ]
+      },
+      { role: 'tool', tool_call_id: 'tool-a', content: 'A' },
+      { role: 'tool', tool_call_id: 'tool-b', content: 'B' },
+      { role: 'user', content: 'Continue without restarting.' }
+    ], []);
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(body.messages).toHaveLength(3);
+    expect(body.messages[1]).toMatchObject({ role: 'assistant' });
+    expect(body.messages[2].role).toBe('user');
+    expect(body.messages[2].content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tool-a', content: 'A' },
+      { type: 'tool_result', tool_use_id: 'tool-b', content: 'B' },
+      { type: 'text', text: 'Continue without restarting.' }
+    ]);
+  });
+
+  it('repairs an interrupted Anthropic history with a missing tool result', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      content: [{ type: 'text', text: 'Recovered.' }]
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AnthropicClient({ endpoint: 'https://api.anthropic.com/v1', apiKey: 'test-key' });
+
+    await client.completeWithTools('claude-test', [
+      { role: 'user', content: 'Make changes.' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          { id: 'tool-a', type: 'function', function: { name: 'write_file', arguments: '{"path":"a.ts"}' } },
+          { id: 'tool-b', type: 'function', function: { name: 'run_tests', arguments: '{}' } }
+        ]
+      },
+      { role: 'tool', tool_call_id: 'tool-a', content: 'ERROR: disk busy' },
+      { role: 'user', content: 'Correct the failure.' }
+    ], []);
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(body.messages[2].content).toEqual([
+      { type: 'tool_result', tool_use_id: 'tool-a', content: 'ERROR: disk busy', is_error: true },
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'tool-b', is_error: true }),
+      { type: 'text', text: 'Correct the failure.' }
+    ]);
   });
 });

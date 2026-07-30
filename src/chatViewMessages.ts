@@ -17,7 +17,6 @@ export type WebviewMessage =
   | { type: 'acceptChange'; id: string }
   | { type: 'undoChange'; id: string }
   | { type: 'reviewChange'; id: string }
-  | { type: 'openFullDiff'; id: string }
   | { type: 'applyChangeHunk'; id: string; hunkId: number; action: 'accept' | 'undo' }
   | { type: 'acceptAllChanges' }
   | { type: 'undoAllChanges' }
@@ -30,7 +29,7 @@ export type WebviewMessage =
   | { type: 'connect'; endpoint: string; apiKey?: string; model?: string; provider?: ProviderKind; profileId?: string; profileName?: string; inputPricePerMillion?: number; outputPricePerMillion?: number }
   | { type: 'activateProfile'; id: string }
   | { type: 'deleteProfile'; id: string }
-  | { type: 'viewTooNarrow' }
+  | { type: 'collapseSidebar'; width: number }
   | { type: 'dialogResult'; id: string; action?: string; value?: string }
   | { type: 'checkModels' }
   | { type: 'cancelModelCheck' }
@@ -55,11 +54,13 @@ export type WebviewMessage =
   | { type: 'openDashboard' }
   | { type: 'openExternal'; url: string }
   | { type: 'openFile'; path: string }
+  | { type: 'openPlanArtifact'; turnIndex: number }
   | { type: 'pickFiles'; kind: 'files' | 'images' | 'resources' }
   | { type: 'pasteImage'; name: string; mimeType: string; dataUrl: string }
   | { type: 'removeAttachment'; index: number }
   | { type: 'loadSession'; id: string }
   | { type: 'deleteSession'; id: string }
+  | { type: 'deleteAllSessions' }
   | { type: 'editMessage'; index: number; prompt: string; mode: ChatMode; model: string }
   | { type: 'disconnectProvider' }
   | { type: 'send'; prompt: string; mode: ChatMode; model: string; includeSelection: boolean; reasoningEffort?: ReasoningEffort; serviceTier?: 'default' | 'fast' }

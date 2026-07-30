@@ -3,7 +3,7 @@ import { relative, resolve } from 'node:path';
 import { AgentRuntime } from './agentRuntime';
 import { normalizeEndpoint } from './routerClient';
 import { RouterProcessManager, type RouterLaunchProgress, type RouterRuntimeStatus } from './routerProcessManager';
-import type { AgentRunCheckpoint, AgentToolFailureDecision, ChatMessage, ChatMode, RouterModel } from './types';
+import type { AgentRunCheckpoint, AgentToolFailureDecision, ChatMessage, ChatMode, ReasoningEffort, RouterModel } from './types';
 import { capabilitiesForModel, createProvider, type ProviderKind } from './provider';
 import { ProviderProfileStore, TelemetryStore, type ProviderProfile } from './providerProfiles';
 import { MCP_PRESETS, McpManager, type McpServerConfig } from './mcpManager';
@@ -16,9 +16,12 @@ import { renderChatViewHtml } from './webview/chatViewHtml';
 import { CHAT_VIEW_STYLES } from './webview/chatViewStyles';
 import { CHAT_VIEW_CONTROLLER } from './webview/chatViewController';
 import { renderTelemetryDashboard } from './webview/telemetryDashboard';
+import { planDocumentTitle, renderPlanDocumentHtml } from './webview/planDocument';
 import { registerChatViewMessageHandler, type WebviewMessage } from './chatViewMessages';
-import { NineRouterQuotaService, type QuotaSnapshot } from './nineRouterQuota';
+import { NineRouterQuotaService, quotaExhaustionForModel, type QuotaSnapshot } from './nineRouterQuota';
 import type { ChoiceDialogOptions, PromptDialogOptions, UserInteraction } from './userInteraction';
+import { selectVisibleChanges } from './changeReviewState';
+import { ActiveRunStateCoordinator, activeRunAlreadyFinalized } from './activeRunState';
 
 const API_KEY_SECRET = 'nineRouter.apiKey';
 const DISCONNECTED_STATE = 'nineRouter.manuallyDisconnected';
@@ -35,10 +38,22 @@ const LAST_TERMINAL_STATE = 'nineRouter.lastTerminalOutput';
 const ACTIVE_RUN_STATE = 'nineRouter.activeRun';
 const GOAL_STATE = 'nineRouter.activeGoal';
 const IDE_CONTEXT_STATE = 'nineRouter.ideContextEnabled';
+const CHANGE_REVIEW_SCHEME = 'relaycode-review';
 
 interface StoredAttachment {
   name: string;
   path?: string;
+}
+
+interface StoredPlanArtifact {
+  type: 'plan';
+  title: string;
+  prompt: string;
+  plan: string;
+  model: string;
+  reasoningEffort?: ReasoningEffort;
+  serviceTier?: 'default' | 'fast';
+  createdAt: number;
 }
 
 interface StoredTurn {
@@ -47,6 +62,7 @@ interface StoredTurn {
   timestamp: number;
   error?: boolean;
   attachments?: StoredAttachment[];
+  artifact?: StoredPlanArtifact;
 }
 
 interface StoredSession {
@@ -67,11 +83,25 @@ interface PendingChange {
   added: number;
   removed: number;
   taskId: string;
+  sessionId?: string;
+  staged?: boolean;
+}
+
+interface ChangeState {
+  path: string;
+  original: Uint8Array;
+  updated: Uint8Array;
+  existed: boolean;
+  added: number;
+  removed: number;
+  taskId: string;
+  sessionId?: string;
   staged?: boolean;
 }
 
 interface StoredActiveRun {
   runId: string;
+  sessionId?: string;
   prompt: string;
   answer: string;
   mode: ChatMode;
@@ -93,11 +123,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private models: RouterModel[] = [];
   private history: ChatMessage[] = [];
   private abortController: AbortController | undefined;
+  private stopGeneration = 0;
   private routerProcess = new RouterProcessManager();
   private pendingAttachments: Array<{ path: string; name: string; mimeType: string; size: number }> = [];
   private approvals = new Map<string, (allow: boolean) => void>();
   private toolFailureResolvers = new Map<string, (decision: AgentToolFailureDecision) => void>();
-  private changes = new Map<string, { path: string; original: Uint8Array; updated: Uint8Array; existed: boolean; added: number; removed: number; taskId: string; staged?: boolean }>();
+  private changes = new Map<string, ChangeState>();
+  private changesVisible = false;
+  private visibleChangesSessionId: string | undefined;
+  private changeOperationBusy = false;
+  private changesPostTimer: NodeJS.Timeout | undefined;
   private currentSessionId = this.createSessionId();
   private transcript: StoredTurn[] = [];
   private readonly profileStore: ProviderProfileStore;
@@ -110,9 +145,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private readonly dialogResolvers = new Map<string, (result: { action?: string; value?: string }) => void>();
   private modelCheckController: AbortController | undefined;
   private metricsPanel: vscode.WebviewPanel | undefined;
+  private planPanel: vscode.WebviewPanel | undefined;
   private quotaSnapshot: QuotaSnapshot | undefined;
   private currentTaskId = '';
   private recoveryTimer: NodeJS.Timeout | undefined;
+  private readonly activeRunState = new ActiveRunStateCoordinator<StoredActiveRun | undefined>();
+  private readonly reviewDocuments = new Map<string, string>();
+  private resumingRunId: string | undefined;
   private readonly output = vscode.window.createOutputChannel('RelayCode · Agent');
   private skills: AgentSkill[] = [];
   private activeSkillNames = new Set<string>();
@@ -134,10 +173,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     };
     this.mcpManager = new McpManager(context, this.interaction);
     context.subscriptions.push(this.mcpManager.onDidChange(() => void this.postMcpServers()));
+    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(CHANGE_REVIEW_SCHEME, {
+      provideTextDocumentContent: (uri) => this.reviewDocuments.get(uri.toString()) ?? ''
+    }));
     this.checkpointManager = new GitCheckpointManager(context);
+    const legacySessionId = context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE)?.sessionId
+      ?? context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, [])[0]?.id;
     for (const [index, change] of context.workspaceState.get<PendingChange[]>(PENDING_CHANGES_STATE, []).entries()) {
       this.changes.set(`recovered-${index}-${Date.now()}`, {
         ...change,
+        sessionId: change.sessionId ?? legacySessionId,
         original: Buffer.from(change.original, 'base64'),
         updated: Buffer.from(change.updated, 'base64')
       });
@@ -193,14 +238,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   public newThread(): void {
+    if (this.abortController) {
+      this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi tạo cuộc trò chuyện mới.', 'warning');
+      return;
+    }
     this.history = [];
     this.transcript = [];
     this.activeSkillNames.clear();
     this.currentSessionId = this.createSessionId();
+    this.changesVisible = false;
+    this.visibleChangesSessionId = undefined;
     this.pendingAttachments = [];
     void this.context.workspaceState.update(GOAL_STATE, undefined);
+    void this.clearActiveRun();
+    void this.post({ type: 'agentRecoveryDismissed' });
     void this.post({ type: 'goalState' });
     void this.post({ type: 'reset' });
+    void this.postChangesState();
     void this.postAttachments();
   }
 
@@ -267,7 +321,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.postChangesState();
         await this.postTelemetry();
         const recoveredRun = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
-        if (recoveredRun) {
+        const sessions = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
+        const storedGoal = this.context.workspaceState.get<StoredGoal>(GOAL_STATE);
+        if (recoveredRun && this.abortController && !this.abortController.signal.aborted) {
+          await this.post({
+            type: 'activeTurnState',
+            runId: recoveredRun.runId,
+            startedAt: recoveredRun.startedAt,
+            status: recoveredRun.checkpoint?.lastStatus || 'Đang tiếp tục tác vụ'
+          });
+        } else if (recoveredRun && storedGoal?.status !== 'paused' && activeRunAlreadyFinalized(recoveredRun, sessions)) {
+          await this.clearActiveRun(recoveredRun.runId);
+          await this.post({ type: 'agentRecoveryDismissed' });
+        } else if (recoveredRun) {
           await this.post({ type: 'recoveredTurn', ...recoveredRun });
         }
         if (!this.context.globalState.get<boolean>(ONBOARDING_STATE, false)) {
@@ -300,20 +366,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         }
       } else if (message.type === 'resumeAgent') {
         const recovered = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
-        if (recovered?.checkpoint && recovered.mode !== 'chat') {
-          await this.send({
-            type: 'send',
-            prompt: recovered.prompt,
-            mode: recovered.mode,
-            model: message.model || recovered.checkpoint.model || recovered.model,
-            includeSelection: false
-          }, recovered.checkpoint, recovered.runId);
+        if (recovered?.checkpoint && recovered.mode !== 'chat' && !this.abortController && this.resumingRunId !== recovered.runId) {
+          this.resumingRunId = recovered.runId;
+          await this.post({ type: 'agentRecoveryDismissed' });
+          try {
+            await this.send({
+              type: 'send',
+              prompt: recovered.prompt,
+              mode: recovered.mode,
+              model: message.model || recovered.checkpoint.model || recovered.model,
+              includeSelection: false
+            }, recovered.checkpoint, recovered.runId);
+          } finally {
+            if (this.resumingRunId === recovered.runId) this.resumingRunId = undefined;
+          }
         }
       } else if (message.type === 'discardAgentRun') {
+        const recovered = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
         await this.clearActiveRun();
         await this.post({ type: 'agentRecoveryDismissed' });
+        if (recovered?.sessionId) {
+          this.currentSessionId = recovered.sessionId;
+          this.visibleChangesSessionId = recovered.sessionId;
+          this.changesVisible = true;
+          await this.postChangesState();
+        }
       } else if (message.type === 'pauseGoal') {
-        this.abortController?.abort();
+        this.stopActiveTurn();
         await this.setGoalStatus('paused', 'Đã tạm dừng. Có thể tiếp tục từ checkpoint gần nhất.');
       } else if (message.type === 'resumeGoal') {
         const recovered = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
@@ -346,68 +425,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.post({ type: 'goalState' });
       } else if (message.type === 'acceptChange') {
         const change = this.changes.get(message.id);
-        if (change?.staged && !await this.applyStagedChange(change)) return;
-        this.changes.delete(message.id);
-        await this.postChangesState();
+        if (!change || !this.visibleChangeEntries().some(([id]) => id === message.id) || this.abortController || this.changeOperationBusy) return;
+        this.changeOperationBusy = true;
+        await this.post({ type: 'changeOperation', busy: true });
+        try {
+          if (change.staged && !await this.applyStagedChange(change)) return;
+          this.changes.delete(message.id);
+          await this.post({ type: 'changeResolved', ids: [message.id], action: 'accepted' });
+          await this.postChangesState();
+        } finally {
+          this.changeOperationBusy = false;
+          await this.post({ type: 'changeOperation', busy: false });
+        }
       } else if (message.type === 'undoChange') {
         const change = this.changes.get(message.id);
-        if (change) {
+        if (!change || !this.visibleChangeEntries().some(([id]) => id === message.id) || this.abortController || this.changeOperationBusy) return;
+        this.changeOperationBusy = true;
+        await this.post({ type: 'changeOperation', busy: true });
+        try {
           if (!await this.restoreChange(change)) return;
           this.changes.delete(message.id);
+          await this.post({ type: 'changeResolved', ids: [message.id], action: 'undone' });
           await this.postChangesState();
+        } finally {
+          this.changeOperationBusy = false;
+          await this.post({ type: 'changeOperation', busy: false });
         }
       } else if (message.type === 'reviewChange') {
         await this.reviewChange(message.id);
-      } else if (message.type === 'openFullDiff') {
-        await this.openFullDiff(message.id);
       } else if (message.type === 'applyChangeHunk') {
         await this.applyChangeHunk(message.id, message.hunkId, message.action);
       } else if (message.type === 'acceptAllChanges') {
-        for (const [id, change] of [...this.changes]) {
-          if (change.staged && !await this.applyStagedChange(change)) continue;
-          this.changes.delete(id);
-        }
-        await this.postChangesState();
+        await this.acceptAllChanges();
       } else if (message.type === 'undoAllChanges') {
-        if (!this.changes.size) return;
-        const choice = await this.interaction.choose({
-          title: 'Hoàn tác tất cả thay đổi?',
-          message: `Khôi phục ${this.changes.size} file về trạng thái trước khi Agent sửa.`,
-          detail: 'Các file Agent vừa tạo cũng sẽ bị xóa.',
-          tone: 'danger',
-          icon: 'trash',
-          actions: [
-            { id: 'cancel', label: 'Hủy', kind: 'secondary' },
-            { id: 'confirm', label: 'Undo all', kind: 'danger' }
-          ]
-        });
-        if (choice !== 'confirm') return;
-        for (const [id, change] of this.changes.entries()) {
-          if (await this.restoreChange(change)) this.changes.delete(id);
-        }
-        await this.postChangesState();
+        await this.undoAllChanges();
       } else if (message.type === 'acceptTaskChanges') {
-        for (const [id, change] of this.changes) {
-          if (change.taskId !== message.taskId) continue;
-          if (change.staged && !await this.applyStagedChange(change)) continue;
-          this.changes.delete(id);
-        }
-        await this.postChangesState();
+        await this.acceptAllChanges(message.taskId);
       } else if (message.type === 'undoTaskChanges') {
-        const entries = [...this.changes.entries()].filter(([, change]) => change.taskId === message.taskId);
-        const choice = await this.interaction.choose({
-          title: 'Hoàn tác tác vụ?',
-          message: `${entries.length} file sẽ được khôi phục.`,
-          tone: 'warning',
-          icon: 'arrowCounterClockwise',
-          actions: [
-            { id: 'cancel', label: 'Hủy', kind: 'secondary' },
-            { id: 'confirm', label: 'Hoàn tác tác vụ', kind: 'danger' }
-          ]
-        });
-        if (choice !== 'confirm') return;
-        for (const [id, change] of entries) if (await this.restoreChange(change)) this.changes.delete(id);
-        await this.postChangesState();
+        await this.undoTaskChanges(message.taskId);
       } else if (message.type === 'setPermissionMode') {
         await this.context.globalState.update(PERMISSION_MODE_STATE, message.mode);
         await this.post({ type: 'permissionMode', mode: message.mode });
@@ -428,7 +483,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       } else if (message.type === 'diagnostics') {
         await this.diagnostics();
       } else if (message.type === 'stopTurn') {
-        this.abortController?.abort();
+        this.stopActiveTurn();
       } else if (message.type === 'startRouter') {
         await this.startRouter();
       } else if (message.type === 'retryConnection') {
@@ -443,6 +498,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await vscode.env.openExternal(vscode.Uri.parse(target.toString()));
       } else if (message.type === 'openFile') {
         await this.openWorkspaceFile(message.path);
+      } else if (message.type === 'openPlanArtifact') {
+        const turn = this.transcript[message.turnIndex];
+        const artifact = turn?.artifact;
+        if (!artifact || artifact.type !== 'plan') throw new Error('Không tìm thấy kế hoạch trong cuộc trò chuyện này.');
+        this.openPlanDocument(
+          artifact.prompt,
+          artifact.plan,
+          artifact.model,
+          artifact.reasoningEffort,
+          artifact.serviceTier,
+          artifact.createdAt
+        );
       } else if (message.type === 'pickFiles') {
         await this.pickFiles(message.kind);
       } else if (message.type === 'pasteImage') {
@@ -451,9 +518,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.pendingAttachments.splice(message.index, 1);
         await this.postAttachments();
       } else if (message.type === 'loadSession') {
+        if (this.abortController) {
+          this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi đổi cuộc trò chuyện.', 'warning');
+          return;
+        }
         await this.loadSession(message.id);
       } else if (message.type === 'deleteSession') {
+        if (this.abortController) {
+          this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi xóa cuộc trò chuyện.', 'warning');
+          return;
+        }
         await this.deleteSession(message.id);
+      } else if (message.type === 'deleteAllSessions') {
+        if (this.abortController) {
+          this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi xóa lịch sử.', 'warning');
+          return;
+        }
+        await this.deleteAllSessions();
       } else if (message.type === 'editMessage') {
         await this.editMessage(message);
       } else if (message.type === 'disconnectProvider') {
@@ -485,9 +566,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.postProfileState();
         await this.post({ type: 'profileLoaded', profile, hasApiKey: Boolean(await this.profileStore.apiKey(profile)) });
         await this.refreshConnection(false);
-      } else if (message.type === 'viewTooNarrow') {
-        this.view?.show?.(false);
-        await vscode.commands.executeCommand('workbench.action.increaseViewWidth');
+      } else if (message.type === 'collapseSidebar') {
+        if (!this.view?.visible) return;
+        await vscode.commands.executeCommand('workbench.action.closeSidebar');
       } else if (message.type === 'checkModels') {
         await this.checkModels();
       } else if (message.type === 'cancelModelCheck') {
@@ -504,27 +585,34 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       } else if (message.type === 'getMcpServers') {
         await this.postMcpServers();
       } else if (message.type === 'saveMcpServer') {
-        const saved = await this.mcpManager.saveServer(message.server, message.token, message.env);
-        if (message.server.authMode === 'oauth' && saved) await this.mcpManager.login(saved.id);
-        await this.postMcpServers();
+        await this.runMcpConnectionAction(async () => {
+          const saved = await this.mcpManager.saveServer(message.server, message.token, message.env);
+          if (message.server.authMode === 'oauth') await this.mcpManager.login(saved.id);
+          return saved;
+        }, { id: message.server.id || undefined });
       } else if (message.type === 'removeMcpServer') {
         await this.mcpManager.removeServer(message.id);
         await this.postMcpServers();
       } else if (message.type === 'installMcpPreset') {
-        await this.mcpManager.installPreset(message.presetId);
-        await this.postMcpServers();
+        await this.runMcpConnectionAction(
+          () => this.mcpManager.installPreset(message.presetId),
+          { catalogId: message.presetId }
+        );
       } else if (message.type === 'loginMcp') {
-        await this.mcpManager.login(message.id);
-        await this.postMcpServers();
+        await this.runMcpConnectionAction(async () => {
+          await this.mcpManager.login(message.id);
+        }, { id: message.id });
       } else if (message.type === 'reconnectMcp') {
-        await this.mcpManager.reconnect(message.id);
-        await this.postMcpServers();
+        await this.runMcpConnectionAction(async () => {
+          await this.mcpManager.reconnect(message.id);
+        }, { id: message.id });
       } else if (message.type === 'logoutMcp') {
         await this.mcpManager.logout(message.id);
         await this.postMcpServers();
       } else if (message.type === 'configureMcpApiKey') {
-        await this.mcpManager.configureApiKey(message.id);
-        await this.postMcpServers();
+        await this.runMcpConnectionAction(async () => {
+          await this.mcpManager.configureApiKey(message.id);
+        }, { id: message.id });
       } else if (message.type === 'setupLocalProvider') {
         await this.setupLocalProvider();
       } else if (message.type === 'send') {
@@ -540,6 +628,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           await this.send(message);
         }
       } else if (message.type === 'newThread') {
+        if (this.abortController) {
+          this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi tạo cuộc trò chuyện mới.', 'warning');
+          return;
+        }
         this.newThread();
       } else if (message.type === 'refreshSkills') {
         this.skills = await discoverSkills(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
@@ -670,6 +762,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       return;
     }
     try {
+      // Reuse the saved profile immediately when Chat opens. For a local
+      // 9Router installation, bring the gateway up quietly in the background;
+      // installation and credential decisions still remain explicit.
+      if (provider === '9router' && routerRuntime?.state !== 'ready') {
+        const routerCommand = vscode.workspace.getConfiguration('nineRouter').get('routerCommand', '9router');
+        if (await this.routerProcess.isInstalled(routerCommand)) {
+          await this.routerProcess.ensureRunning(this.endpoint, routerCommand, (progress) => {
+            const labels: Record<RouterLaunchProgress, string> = {
+              checking: 'Đang kiểm tra 9Router',
+              installing: 'Đang cài 9Router',
+              starting: 'Đang khởi động 9Router',
+              waiting: 'Đang chờ 9Router sẵn sàng',
+              ready: '9Router đã sẵn sàng',
+              stopped: '9Router đã dừng'
+            };
+            void this.post({ type: 'routerLaunch', progress, message: labels[progress] });
+          });
+          routerRuntime = await this.routerProcess.inspect(this.endpoint);
+        }
+      }
       this.models = (await createProvider({ kind: provider, endpoint: this.endpoint, apiKey }).listModels(AbortSignal.timeout(10_000))).map((model) => ({ ...model, capabilities: capabilitiesForModel(model.id) }));
       for (const id of this.context.globalState.get<string[]>(CUSTOM_MODELS_STATE, [])) {
         if (!this.models.some((item) => item.id === id)) this.models.push({ id, name: `${id} · tùy chỉnh` });
@@ -931,7 +1043,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private telemetryDashboardHtml(webview: vscode.Webview): string {
     const quota = this.quotaSnapshot ?? this.quotaService.loading(this.quotaEndpoint());
-    return renderTelemetryDashboard(webview, this.telemetryStore.list(), quota, getNonce(), this.profileStore.active());
+    const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'vi');
+    return renderTelemetryDashboard(webview, this.telemetryStore.list(), quota, getNonce(), this.profileStore.active(), language);
   }
 
   private async refreshQuotaDashboard(panel: vscode.WebviewPanel, silent = false): Promise<void> {
@@ -1019,6 +1132,64 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     await this.post({ type: 'mcpServers', servers: await this.mcpManager.statuses(), presets: MCP_PRESETS });
   }
 
+  private async runMcpConnectionAction(
+    action: () => Promise<McpServerConfig | void>,
+    target: { id?: string; catalogId?: string }
+  ): Promise<void> {
+    let resolvedTarget = target;
+    let actionError: unknown;
+    try {
+      const server = await action();
+      if (server) resolvedTarget = { id: server.id, catalogId: server.catalogId };
+    } catch (error) {
+      actionError = error;
+    }
+
+    const servers = await this.mcpManager.statuses();
+    await this.post({ type: 'mcpServers', servers, presets: MCP_PRESETS });
+    await this.post({ type: 'openMcpPanel' });
+    const server = servers.find((item) =>
+      (resolvedTarget.id && item.id === resolvedTarget.id)
+      || (resolvedTarget.catalogId && item.catalogId === resolvedTarget.catalogId)
+    );
+
+    if (actionError) {
+      await this.post({
+        type: 'mcpOutcome',
+        tone: 'danger',
+        serverId: server?.id,
+        message: `Không thể kết nối ${server?.name || 'MCP'}: ${this.errorText(actionError)}`
+      });
+      return;
+    }
+    if (server?.connected) {
+      await this.post({
+        type: 'mcpOutcome',
+        tone: 'success',
+        serverId: server.id,
+        message: `${server.name} đã kết nối thành công · ${server.toolCount} công cụ sẵn sàng.`
+      });
+      return;
+    }
+    if (server?.authPending) {
+      await this.post({
+        type: 'mcpOutcome',
+        tone: 'warning',
+        serverId: server.id,
+        message: `Đang chờ hoàn tất đăng nhập ${server.name} trong trình duyệt.`
+      });
+      return;
+    }
+    if (server?.error) {
+      await this.post({
+        type: 'mcpOutcome',
+        tone: 'danger',
+        serverId: server.id,
+        message: `Không thể kết nối ${server.name}: ${server.error}`
+      });
+    }
+  }
+
   private async setupLocalProvider(): Promise<void> {
     const provider = this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');
     const status = await this.localRuntimeManager.setup(
@@ -1077,9 +1248,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   ): Promise<void> {
     let prompt = message.prompt.trim();
     if (!prompt) return;
+    const stopGeneration = this.stopGeneration;
+    const storedResume = resumeRunId ? this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE) : undefined;
+    if (storedResume?.sessionId) this.currentSessionId = storedResume.sessionId;
+    this.changesVisible = true;
+    this.visibleChangesSessionId = storedResume?.sessionId ?? this.currentSessionId;
     const goalControl = prompt.trim().match(/^\/goal\s+(pause|resume|clear|edit)$/i)?.[1]?.toLowerCase();
     if (goalControl === 'pause') {
-      this.abortController?.abort();
+      this.stopActiveTurn();
       await this.setGoalStatus('paused', 'Đã tạm dừng. Có thể tiếp tục từ checkpoint gần nhất.');
       return;
     }
@@ -1148,8 +1324,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (spent >= monthlyLimit) throw new Error(`Đã chạm giới hạn chi phí tháng $${monthlyLimit.toFixed(2)}.`);
     }
 
-    this.abortController?.abort();
-    this.abortController = new AbortController();
+    if (stopGeneration !== this.stopGeneration) return;
+    if (this.abortController && !this.abortController.signal.aborted) {
+      this.interaction.notify('Tác vụ hiện tại vẫn đang chạy. Hãy dừng hoặc xếp yêu cầu tiếp theo.', 'warning');
+      return;
+    }
+    const turnController = new AbortController();
+    this.abortController = turnController;
     this.currentTaskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const recent = this.context.globalState.get<string[]>(RECENT_MODELS_STATE, []);
     const nextRecent = [message.model, ...recent.filter((item) => item !== message.model)].slice(0, 8);
@@ -1182,8 +1363,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       .slice(-12)
       .map((turn) => ({ role: turn.role, content: turn.content }));
     const runId = resumeRunId || `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const runGeneration = this.activeRunState.begin();
     const activeRun: StoredActiveRun = {
       runId,
+      sessionId: this.currentSessionId,
       prompt,
       answer: '',
       mode: message.mode,
@@ -1191,7 +1374,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       startedAt,
       checkpoint: resumeCheckpoint
     };
-    await this.context.workspaceState.update(ACTIVE_RUN_STATE, activeRun);
+    await this.persistActiveRun(activeRun, runGeneration);
     if (!resumesExistingTurn) {
       this.transcript.push({ role: 'user', content: prompt, timestamp: startedAt, attachments: attachments.map((item) => ({ name: item.name, path: item.path })) });
     }
@@ -1208,14 +1391,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     });
 
     let answer = '';
+    const planChatSummary = message.mode === 'plan'
+      ? (config.get<'vi' | 'en'>('language', 'vi') === 'en'
+        ? 'Plan is ready. Open the Implementation Plan tab to review, revise or proceed.'
+        : 'Đã lập xong kế hoạch. Mở tab Kế hoạch thực hiện để xem, chỉnh sửa hoặc thực hiện.')
+      : '';
     const taskChangedPaths = new Set<string>();
     const onDelta = (delta: string) => {
       answer += delta;
-      void this.post({ type: 'delta', delta });
+      if (message.mode !== 'plan') void this.post({ type: 'delta', delta });
       if (!this.recoveryTimer) {
         this.recoveryTimer = setTimeout(() => {
           this.recoveryTimer = undefined;
-          void this.context.workspaceState.update(ACTIVE_RUN_STATE, { ...activeRun, answer });
+          void this.persistActiveRun({ ...activeRun, answer }, runGeneration);
         }, 500);
       }
     };
@@ -1229,7 +1417,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           throw new Error('9Router chưa phản hồi health check.');
         }
         const available = await providerClient.listModels(
-          AbortSignal.any([this.abortController!.signal, AbortSignal.timeout(8_000)])
+          AbortSignal.any([turnController.signal, AbortSignal.timeout(8_000)])
         );
         if (available.length && !available.some((item) => item.id === message.model)) {
           throw new Error(`Model ${message.model} không còn trong danh sách của provider.`);
@@ -1279,7 +1467,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         for (const candidate of candidates) {
           const candidateController = new AbortController();
           const abortCandidate = () => candidateController.abort();
-          this.abortController.signal.addEventListener('abort', abortCandidate, { once: true });
+          turnController.signal.addEventListener('abort', abortCandidate, { once: true });
           let timeout: NodeJS.Timeout | undefined;
           let heartbeat: NodeJS.Timeout | undefined;
           let lastActivityAt = Date.now();
@@ -1308,7 +1496,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             lastError = undefined;
             break;
           } catch (error) {
-            lastError = candidateController.signal.reason instanceof Error && !this.abortController.signal.aborted
+            lastError = candidateController.signal.reason instanceof Error && !turnController.signal.aborted
               ? candidateController.signal.reason
               : error;
             if (answer || candidate === candidates[candidates.length - 1]) throw lastError;
@@ -1318,14 +1506,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           } finally {
             if (timeout) clearTimeout(timeout);
             if (heartbeat) clearInterval(heartbeat);
-            this.abortController.signal.removeEventListener('abort', abortCandidate);
+            turnController.signal.removeEventListener('abort', abortCandidate);
           }
         }
         if (lastError) throw lastError;
         if (usedModel !== message.model) await this.post({ type: 'notice', message: `Đã tự chuyển sang model dự phòng \`${usedModel}\`.` });
         this.history.push({ role: 'assistant', content: answer });
       } else {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const activeDocument = vscode.window.activeTextEditor?.document.uri;
+        const activeWorkspace = activeDocument ? vscode.workspace.getWorkspaceFolder(activeDocument) : undefined;
+        const workspaceRoot = activeWorkspace?.uri.fsPath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) throw new Error('Hãy mở một thư mục workspace để chạy Agent mode.');
         if (message.mode === 'agent' && !vscode.workspace.isTrusted) {
           const choice = await this.interaction.choose({
@@ -1371,10 +1561,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           let timeout: NodeJS.Timeout | undefined;
           let heartbeat: NodeJS.Timeout | undefined;
           let lastActivityAt = Date.now();
+          let lastAgentStatus = 'Đang phân tích yêu cầu';
           let touchActivity = () => {};
           const candidateController = new AbortController();
           const abortCandidate = () => candidateController.abort();
-          this.abortController.signal.addEventListener('abort', abortCandidate, { once: true });
+          turnController.signal.addEventListener('abort', abortCandidate, { once: true });
           try {
             const inactivityTimeout = new Promise<never>((_, reject) => {
               touchActivity = () => {
@@ -1389,7 +1580,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               heartbeat = setInterval(() => {
                 const waitingSeconds = Math.floor((Date.now() - lastActivityAt) / 1_000);
                 if (waitingSeconds >= 8) {
-                  void this.post({ type: 'status', message: `Model đang suy nghĩ · ${waitingSeconds}s` });
+                  void this.post({ type: 'status', message: `${lastAgentStatus} · ${waitingSeconds}s` });
                 }
               }, 5_000);
             });
@@ -1427,13 +1618,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                   }
                 : undefined,
               config.get<boolean>('autoValidateChanges', true),
-              codexTuning
+              codexTuning,
+              inactivitySeconds * 1_000
             ).run(runtimePrompt, candidate, {
               onDelta: (delta) => {
                 touchActivity();
                 onDelta(delta);
               },
+              onCommentary: (content) => {
+                touchActivity();
+                if (message.mode !== 'plan') void this.post({ type: 'commentary', content });
+              },
+              onActivityComplete: () => {
+                if (message.mode !== 'plan') void this.post({ type: 'activityComplete' });
+              },
               onStatus: (status) => {
+                lastAgentStatus = status;
                 touchActivity();
                 void this.post({ type: 'status', message: status });
               },
@@ -1454,7 +1654,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 activeRun.checkpoint = checkpoint;
                 activeRun.model = checkpoint.model;
                 activeRun.answer = answer;
-                await this.context.workspaceState.update(ACTIVE_RUN_STATE, activeRun);
+                await this.persistActiveRun({ ...activeRun }, runGeneration);
               }
             }, candidateController.signal, resumeCheckpoint);
             await Promise.race([run, inactivityTimeout]);
@@ -1469,67 +1669,174 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           } finally {
             if (timeout) clearTimeout(timeout);
             if (heartbeat) clearInterval(heartbeat);
-            this.abortController.signal.removeEventListener('abort', abortCandidate);
+            turnController.signal.removeEventListener('abort', abortCandidate);
           }
         }
         if (message.mode === 'agent' && taskChangedPaths.size) {
-          const taskChanges = [...this.changes.values()].filter((change) => taskChangedPaths.has(change.path));
+          const taskChanges = [...this.changes.values()].filter((change) => change.sessionId === this.currentSessionId && taskChangedPaths.has(change.path));
           if (taskChanges.length) {
-            const added = taskChanges.reduce((sum, change) => sum + change.added, 0);
-            const removed = taskChanges.reduce((sum, change) => sum + change.removed, 0);
-            const files = taskChanges
-              .map((change) => {
-                const path = vscode.workspace.asRelativePath(change.path).replace(/\\/g, '/');
-                return `• [${path}](${path}:1) (+${change.added} -${change.removed})`;
-              })
-              .join('\n');
-            onDelta(`\n\n**Thay đổi thực tế:** ${taskChanges.length} file (+${added} -${removed})\n\n${files}`);
+            if (!answer.trim()) onDelta('Agent đã hoàn tất thay đổi và chuẩn bị kết quả để bạn review.');
           }
         }
       }
       const completedAt = Date.now();
-      this.transcript.push({ role: 'assistant', content: answer || 'Agent kết thúc nhưng model không trả về nội dung.', timestamp: completedAt });
+      const planArtifact: StoredPlanArtifact | undefined = message.mode === 'plan' && answer.trim()
+        ? {
+            type: 'plan',
+            title: planDocumentTitle(answer, prompt),
+            prompt,
+            plan: answer,
+            model: message.model,
+            reasoningEffort: message.reasoningEffort,
+            serviceTier: message.serviceTier,
+            createdAt: completedAt
+          }
+        : undefined;
+      this.transcript.push({
+        role: 'assistant',
+        content: planChatSummary || answer || 'Agent kết thúc nhưng model không trả về nội dung.',
+        timestamp: completedAt,
+        artifact: planArtifact
+      });
+      const finalAnswer = this.transcript[this.transcript.length - 1]?.content ?? answer;
+      const completedChanges = [...this.changes.entries()]
+        .filter(([, change]) => change.sessionId === this.currentSessionId && taskChangedPaths.has(change.path))
+        .map(([id, change]) => ({
+          id,
+          path: vscode.workspace.asRelativePath(change.path),
+          added: change.added,
+          removed: change.removed,
+          taskId: change.taskId,
+          staged: change.staged
+        }));
+      this.output.appendLine(`[turn:${runId}] runtime complete; posting turnEnd before persistence`);
+      await this.post({
+        type: 'turnEnd',
+        timestamp: completedAt,
+        content: finalAnswer,
+        artifact: planArtifact ? { type: 'plan', title: planArtifact.title } : undefined,
+        turnIndex: this.transcript.length - 1,
+        changes: completedChanges,
+        files: completedChanges.length,
+        added: completedChanges.reduce((sum, change) => sum + change.added, 0),
+        removed: completedChanges.reduce((sum, change) => sum + change.removed, 0)
+      });
+      this.output.appendLine(`[turn:${runId}] turnEnd posted`);
       await this.saveSession(message.mode, message.model);
-      await this.clearActiveRun(runId);
+      await this.clearActiveRun(runId, runGeneration);
       if (this.context.workspaceState.get<StoredGoal>(GOAL_STATE)?.status === 'running') {
         await this.setGoalStatus('ready', 'Hoàn thành và sẵn sàng để review.');
       }
-      await this.post({ type: 'turnEnd', timestamp: completedAt });
+      if (planArtifact) {
+        this.openPlanDocument(prompt, answer, message.model, message.reasoningEffort, message.serviceTier, completedAt);
+      }
       if (message.mode === 'agent' && config.get<boolean>('notifyOnComplete', true) && !this.view?.visible) {
         vscode.window.showInformationMessage(`Agent đã kết thúc · ${taskChangedPaths.size} file được thay đổi trong tác vụ này.`);
       }
     } catch (error) {
       const completedAt = Date.now();
-      if (this.abortController?.signal.aborted) {
+      if (turnController.signal.aborted) {
         this.transcript.push({ role: 'assistant', content: answer || 'Đã dừng.', timestamp: completedAt });
+        await this.post({ type: 'turnEnd', cancelled: true, timestamp: completedAt });
         await this.saveSession(message.mode, message.model);
         const goal = this.context.workspaceState.get<StoredGoal>(GOAL_STATE);
         if (goal?.status === 'running') {
           await this.setGoalStatus('paused', 'Đã tạm dừng. Có thể tiếp tục từ checkpoint gần nhất.');
         } else if (!goal && !this.disposing) {
-          await this.clearActiveRun(runId);
+          await this.clearActiveRun(runId, runGeneration);
         }
-        await this.post({ type: 'turnEnd', cancelled: true, timestamp: completedAt });
         return;
       }
       const provider = this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');
       const errorMessage = await this.diagnoseProviderError(error, provider, message.model);
       this.output.appendLine(`[error] ${errorMessage}`);
       this.transcript.push({ role: 'assistant', content: errorMessage, timestamp: completedAt, error: true });
-      await this.saveSession(message.mode, message.model);
       await this.post({ type: 'turnEnd', error: errorMessage, timestamp: completedAt });
+      await this.saveSession(message.mode, message.model);
       if (this.context.workspaceState.get<StoredGoal>(GOAL_STATE)?.status === 'running') {
         await this.setGoalStatus('failed', errorMessage);
       }
       if (message.mode !== 'chat' && activeRun.checkpoint) {
-        await this.context.workspaceState.update(ACTIVE_RUN_STATE, activeRun);
-        await this.post({ type: 'recoveredTurn', ...activeRun });
+        await this.persistActiveRun({ ...activeRun }, runGeneration);
       } else {
-        await this.clearActiveRun(runId);
+        await this.clearActiveRun(runId, runGeneration);
       }
     } finally {
-      this.abortController = undefined;
+      if (this.abortController === turnController) this.abortController = undefined;
     }
+  }
+
+  private openPlanDocument(
+    prompt: string,
+    plan: string,
+    model: string,
+    reasoningEffort: ReasoningEffort | undefined,
+    serviceTier: 'default' | 'fast' | undefined,
+    createdAt: number
+  ): void {
+    const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'vi');
+    const title = planDocumentTitle(plan, prompt);
+    const sessionId = this.currentSessionId;
+    this.planPanel?.dispose();
+    const panel = vscode.window.createWebviewPanel(
+      'nineRouter.implementationPlan',
+      language === 'en' ? 'Implementation Plan' : 'Kế hoạch thực hiện',
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.planPanel = panel;
+    panel.webview.html = renderPlanDocumentHtml(panel.webview, { title, prompt, plan, createdAt, language });
+    panel.onDidDispose(() => {
+      if (this.planPanel === panel) this.planPanel = undefined;
+    });
+    panel.webview.onDidReceiveMessage(async (message: { type?: string; url?: string }) => {
+      if (message.type === 'openExternal' && message.url) {
+        const target = new URL(message.url);
+        if (['http:', 'https:'].includes(target.protocol)) await vscode.env.openExternal(vscode.Uri.parse(target.toString()));
+        return;
+      }
+      if (message.type === 'save') {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+        const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 56) || 'implementation-plan';
+        const target = await vscode.window.showSaveDialog({
+          defaultUri: root ? vscode.Uri.joinPath(root, `${slug}.md`) : undefined,
+          filters: { Markdown: ['md'] },
+          saveLabel: language === 'en' ? 'Save plan' : 'Lưu kế hoạch'
+        });
+        if (!target) return;
+        await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(plan));
+        await vscode.window.showTextDocument(target, { preview: false });
+        return;
+      }
+      if (message.type === 'revise') {
+        panel.dispose();
+        this.reveal();
+        await this.post({ type: 'setComposerMode', mode: 'plan' });
+        await this.post({ type: 'planRevision' });
+        return;
+      }
+      if (message.type === 'proceed') {
+        if (this.abortController) {
+          await panel.webview.postMessage({ type: 'proceedReady' });
+          this.interaction.notify(language === 'en' ? 'Stop the current task before starting this plan.' : 'Hãy dừng tác vụ hiện tại trước khi thực hiện kế hoạch này.', 'warning');
+          return;
+        }
+        panel.dispose();
+        this.currentSessionId = sessionId;
+        this.visibleChangesSessionId = sessionId;
+        this.reveal();
+        await this.post({ type: 'setComposerMode', mode: 'agent' });
+        await this.send({
+          type: 'send',
+          prompt: `Thực hiện kế hoạch đã được người dùng phê duyệt dưới đây. Trước khi sửa, kiểm tra lại trạng thái workspace hiện tại và chỉ làm trong project đang mở.\n\nYêu cầu ban đầu:\n${prompt}\n\nKế hoạch đã duyệt:\n${plan}`,
+          mode: 'agent',
+          model,
+          includeSelection: false,
+          reasoningEffort,
+          serviceTier
+        });
+      }
+    });
   }
 
   private askApproval(description: string): Promise<boolean> {
@@ -1544,6 +1851,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     });
   }
 
+  private stopActiveTurn(): void {
+    this.stopGeneration += 1;
+    const controller = this.abortController;
+    const active = Boolean(controller && !controller.signal.aborted);
+    if (controller && !controller.signal.aborted) controller.abort(new Error('Stopped by user.'));
+    for (const resolveApproval of this.approvals.values()) resolveApproval(false);
+    this.approvals.clear();
+    for (const resolveFailure of this.toolFailureResolvers.values()) resolveFailure({ action: 'skip' });
+    this.toolFailureResolvers.clear();
+    for (const resolveDialog of this.dialogResolvers.values()) resolveDialog({});
+    this.dialogResolvers.clear();
+    void this.post({ type: 'cancelPendingInteractions' });
+    void this.post({ type: 'stopAcknowledged', active });
+    if (active) void this.post({ type: 'status', message: 'Đang dừng tác vụ' });
+  }
+
   private askToolFailure(
     id: string,
     tool: string,
@@ -1553,7 +1876,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   ): Promise<AgentToolFailureDecision> {
     return new Promise((resolve) => {
       this.toolFailureResolvers.set(id, resolve);
-      void this.post({ type: 'toolFailure', id, tool, message, model, attempt });
+      void this.post({ type: 'toolFailure', id, tool, message: compactToolFailure(message), model, attempt });
       setTimeout(() => {
         if (!this.toolFailureResolvers.delete(id)) return;
         resolve({ action: 'skip' });
@@ -1577,16 +1900,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     return choice === 'switch';
   }
 
-  private async clearActiveRun(expectedRunId?: string): Promise<void> {
+  private persistActiveRun(activeRun: StoredActiveRun, generation: number): Promise<void> {
+    return this.activeRunState.persist(
+      activeRun,
+      generation,
+      (value) => Promise.resolve(this.context.workspaceState.update(ACTIVE_RUN_STATE, value))
+    );
+  }
+
+  private async clearActiveRun(expectedRunId?: string, generation?: number): Promise<void> {
     if (this.recoveryTimer) {
       clearTimeout(this.recoveryTimer);
       this.recoveryTimer = undefined;
     }
-    if (expectedRunId) {
+    if (expectedRunId && generation === undefined) {
       const active = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
       if (active?.runId && active.runId !== expectedRunId) return;
     }
-    await this.context.workspaceState.update(ACTIVE_RUN_STATE, undefined);
+    await this.activeRunState.clear(
+      (value) => Promise.resolve(this.context.workspaceState.update(ACTIVE_RUN_STATE, value)),
+      generation
+    );
   }
 
   private async setGoalStatus(status: StoredGoal['status'], lastStatus: string): Promise<void> {
@@ -1601,22 +1935,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const targetPath = staged && workspaceRoot && agentRoot
       ? resolve(workspaceRoot, relative(agentRoot, change.path))
       : change.path;
-    const normalizedChange = { ...change, path: targetPath, staged };
-    const existing = [...this.changes.entries()].find(([, item]) => item.path === targetPath);
+    const normalizedChange = { ...change, path: targetPath, staged, sessionId: this.currentSessionId };
+    this.changesVisible = true;
+    this.visibleChangesSessionId = this.currentSessionId;
+    const existing = [...this.changes.entries()].find(([, item]) => item.path === targetPath && item.sessionId === this.currentSessionId);
     const original = existing?.[1].original ?? change.original;
     const existed = existing?.[1].existed ?? change.existed;
     if (this.bytesEqual(original, normalizedChange.updated)) {
       if (existing) this.changes.delete(existing[0]);
-      void this.postChangesState();
+      this.scheduleChangesState();
       return;
     }
     const counts = this.lineChanges(original, normalizedChange.updated);
-    if (existing) this.changes.set(existing[0], { ...normalizedChange, original, existed, taskId: existing[1].taskId, staged: existing[1].staged || staged, ...counts });
+    if (existing) this.changes.set(existing[0], { ...normalizedChange, original, existed, taskId: existing[1].taskId, sessionId: existing[1].sessionId ?? this.currentSessionId, staged: existing[1].staged || staged, ...counts });
     else {
       const id = `change-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       this.changes.set(id, { ...normalizedChange, taskId: this.currentTaskId || `task-${Date.now()}`, ...counts });
     }
-    void this.postChangesState();
+    this.scheduleChangesState();
   }
 
   private lineChanges(original: Uint8Array, updated: Uint8Array): { added: number; removed: number } {
@@ -1633,7 +1969,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private async postChangesState(): Promise<void> {
-    const changes = [...this.changes.entries()].map(([id, change]) => ({ id, path: vscode.workspace.asRelativePath(change.path), added: change.added, removed: change.removed, taskId: change.taskId, staged: change.staged }));
+    if (this.changesPostTimer) {
+      clearTimeout(this.changesPostTimer);
+      this.changesPostTimer = undefined;
+    }
+    const visibleEntries = this.visibleChangeEntries();
+    const changes = visibleEntries.map(([id, change]) => ({ id, path: vscode.workspace.asRelativePath(change.path), added: change.added, removed: change.removed, taskId: change.taskId, staged: change.staged }));
     const persisted: PendingChange[] = [...this.changes.values()].map((change) => ({
       path: change.path,
       original: Buffer.from(change.original).toString('base64'),
@@ -1641,61 +1982,226 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       existed: change.existed,
       added: change.added,
       removed: change.removed,
-      taskId: change.taskId
-      ,staged: change.staged
+      taskId: change.taskId,
+      sessionId: change.sessionId,
+      staged: change.staged
     }));
     await this.context.workspaceState.update(PENDING_CHANGES_STATE, persisted);
     await this.post({ type: 'changesState', changes, files: changes.length, added: changes.reduce((sum, item) => sum + item.added, 0), removed: changes.reduce((sum, item) => sum + item.removed, 0) });
   }
 
-  private async reviewChange(id: string): Promise<void> {
-    await this.openFullDiff(id);
+  private visibleChangeEntries(): Array<[string, ChangeState]> {
+    return selectVisibleChanges([...this.changes.entries()], this.changesVisible, this.visibleChangesSessionId);
   }
 
-  private async openFullDiff(id: string): Promise<void> {
+  private scheduleChangesState(): void {
+    if (this.changesPostTimer) clearTimeout(this.changesPostTimer);
+    this.changesPostTimer = setTimeout(() => {
+      this.changesPostTimer = undefined;
+      void this.postChangesState();
+    }, 80);
+  }
+
+  private async stagedConflict(change: ChangeState): Promise<boolean> {
+    if (!change.staged) return false;
+    let current: Uint8Array | undefined;
+    try { current = await vscode.workspace.fs.readFile(vscode.Uri.file(change.path)); } catch { current = undefined; }
+    return change.existed ? !current || !this.bytesEqual(current, change.original) : Boolean(current);
+  }
+
+  private async restoreConflict(change: ChangeState): Promise<boolean> {
+    if (change.staged) return false;
+    try {
+      const current = await vscode.workspace.fs.readFile(vscode.Uri.file(change.path));
+      return !this.bytesEqual(current, change.updated);
+    } catch {
+      return change.existed;
+    }
+  }
+
+  private async acceptAllChanges(taskId?: string): Promise<void> {
+    if (this.changeOperationBusy || this.abortController) return;
+    const entries = this.visibleChangeEntries().filter(([, change]) => !taskId || change.taskId === taskId);
+    if (!entries.length) return;
+    this.changeOperationBusy = true;
+    await this.post({ type: 'changeOperation', busy: true });
+    try {
+      const conflicts = (await Promise.all(entries.map(async ([, change]) => await this.stagedConflict(change) ? change : undefined))).filter((change): change is ChangeState => Boolean(change));
+      if (conflicts.length) {
+        const choice = await this.interaction.choose({
+          title: 'File đã thay đổi ngoài Agent',
+          message: `${conflicts.length} file đã thay đổi sau khi Agent chuẩn bị bản sửa.`,
+          detail: `${taskId ? 'Chấp nhận tác vụ' : 'Chấp nhận tất cả'} sẽ ghi đè các thay đổi hiện tại bằng bản đang chờ review.`,
+          tone: 'warning',
+          icon: 'warning',
+          actions: [
+            { id: 'cancel', label: 'Giữ file hiện tại', kind: 'secondary' },
+            { id: 'overwrite', label: 'Chấp nhận tất cả', kind: 'danger' }
+          ]
+        });
+        if (choice !== 'overwrite') return;
+      }
+      const resolvedIds: string[] = [];
+      for (const [id, change] of entries) {
+        try {
+          if (change.staged && !await this.applyStagedChange(change, 'force')) continue;
+          this.changes.delete(id);
+          resolvedIds.push(id);
+        } catch (error) {
+          this.output.appendLine(`[change] accept failed for ${change.path}: ${this.errorText(error)}`);
+        }
+      }
+      if (resolvedIds.length) await this.post({ type: 'changeResolved', ids: resolvedIds, action: 'accepted' });
+      await this.postChangesState();
+    } finally {
+      this.changeOperationBusy = false;
+      await this.post({ type: 'changeOperation', busy: false });
+    }
+  }
+
+  private async undoAllChanges(): Promise<void> {
+    if (this.changeOperationBusy || this.abortController) return;
+    const entries = this.visibleChangeEntries();
+    if (!entries.length) return;
+    this.changeOperationBusy = true;
+    await this.post({ type: 'changeOperation', busy: true });
+    try {
+      const conflicts = (await Promise.all(entries.map(async ([, change]) => await this.restoreConflict(change) ? change : undefined))).filter((change): change is ChangeState => Boolean(change));
+      const choice = await this.interaction.choose({
+        title: 'Hoàn tác tất cả thay đổi?',
+        message: `Khôi phục ${entries.length} file về trạng thái trước khi Agent sửa.`,
+        detail: conflicts.length
+          ? `${conflicts.length} file đã bị sửa thêm bên ngoài Agent. Chọn Hoàn tác tất cả để ghi đè các thay đổi đó.`
+          : 'Các file Agent vừa tạo cũng sẽ bị xóa.',
+        tone: 'danger',
+        icon: 'trash',
+        actions: [
+          { id: 'cancel', label: 'Hủy', kind: 'secondary' },
+          { id: 'confirm', label: 'Hoàn tác tất cả', kind: 'danger' }
+        ]
+      });
+      if (choice !== 'confirm') return;
+      const resolvedIds: string[] = [];
+      for (const [id, change] of entries) {
+        try {
+          if (await this.restoreChange(change, 'force')) { this.changes.delete(id); resolvedIds.push(id); }
+        } catch (error) {
+          this.output.appendLine(`[change] undo failed for ${change.path}: ${this.errorText(error)}`);
+        }
+      }
+      if (resolvedIds.length) await this.post({ type: 'changeResolved', ids: resolvedIds, action: 'undone' });
+      await this.postChangesState();
+    } finally {
+      this.changeOperationBusy = false;
+      await this.post({ type: 'changeOperation', busy: false });
+    }
+  }
+
+  private async undoTaskChanges(taskId: string): Promise<void> {
+    if (this.changeOperationBusy || this.abortController) return;
+    const entries = this.visibleChangeEntries().filter(([, change]) => change.taskId === taskId);
+    if (!entries.length) return;
+    this.changeOperationBusy = true;
+    await this.post({ type: 'changeOperation', busy: true });
+    try {
+      const conflicts = (await Promise.all(entries.map(async ([, change]) => await this.restoreConflict(change) ? change : undefined))).filter((change): change is ChangeState => Boolean(change));
+      const choice = await this.interaction.choose({
+        title: 'Hoàn tác tác vụ?',
+        message: `${entries.length} file sẽ được khôi phục.`,
+        detail: conflicts.length ? `${conflicts.length} file đã thay đổi ngoài Agent và sẽ được ghi đè.` : undefined,
+        tone: 'warning',
+        icon: 'arrowCounterClockwise',
+        actions: [
+          { id: 'cancel', label: 'Hủy', kind: 'secondary' },
+          { id: 'confirm', label: 'Hoàn tác tác vụ', kind: 'danger' }
+        ]
+      });
+      if (choice !== 'confirm') return;
+      const resolvedIds: string[] = [];
+      for (const [id, change] of entries) {
+        try {
+          if (await this.restoreChange(change, 'force')) { this.changes.delete(id); resolvedIds.push(id); }
+        } catch (error) {
+          this.output.appendLine(`[change] task undo failed for ${change.path}: ${this.errorText(error)}`);
+        }
+      }
+      if (resolvedIds.length) await this.post({ type: 'changeResolved', ids: resolvedIds, action: 'undone' });
+      await this.postChangesState();
+    } finally {
+      this.changeOperationBusy = false;
+      await this.post({ type: 'changeOperation', busy: false });
+    }
+  }
+
+  private async reviewChange(id: string): Promise<void> {
     const change = this.changes.get(id);
-    if (!change) return;
-    const root = this.context.storageUri ?? this.context.globalStorageUri;
-    const reviewDir = vscode.Uri.joinPath(root, 'reviews');
-    await vscode.workspace.fs.createDirectory(reviewDir);
-    const before = vscode.Uri.joinPath(reviewDir, `${id}-${change.path.split(/[\\/]/).pop() ?? 'before'}`);
-    const after = vscode.Uri.joinPath(reviewDir, `${id}-after-${change.path.split(/[\\/]/).pop() ?? 'after'}`);
-    await vscode.workspace.fs.writeFile(before, change.original);
-    if (change.staged) await vscode.workspace.fs.writeFile(after, change.updated);
-    if (/\.(png|jpe?g|webp|gif)$/i.test(change.path)) {
-      await vscode.commands.executeCommand('vscode.open', change.staged ? after : vscode.Uri.file(change.path), { preview: true });
+    if (!change || !this.visibleChangeEntries().some(([changeId]) => changeId === id)) return;
+    const relativePath = vscode.workspace.asRelativePath(change.path);
+    const fileName = relativePath.replace(/\\/g, '/').split('/').at(-1) || 'change.txt';
+    const reviewId = `${Date.now()}-${id.replace(/[^a-z0-9_-]/gi, '')}`;
+    const beforeUri = vscode.Uri.from({ scheme: CHANGE_REVIEW_SCHEME, path: `/${reviewId}/before/${fileName}` });
+    const afterUri = vscode.Uri.from({ scheme: CHANGE_REVIEW_SCHEME, path: `/${reviewId}/after/${fileName}` });
+    this.reviewDocuments.set(beforeUri.toString(), Buffer.from(change.original).toString('utf8'));
+    this.reviewDocuments.set(afterUri.toString(), Buffer.from(change.updated).toString('utf8'));
+    // A diff against an empty document paints a newly created file as one
+    // enormous green block. Open new files normally; reserve before/after diff
+    // for actual modifications where both sides carry useful information.
+    if (!change.existed) {
+      const previewUri = change.staged ? afterUri : vscode.Uri.file(change.path);
+      await vscode.commands.executeCommand('vscode.open', previewUri, { preview: true });
       return;
     }
-    await vscode.commands.executeCommand('vscode.diff', before, change.staged ? after : vscode.Uri.file(change.path), `${vscode.workspace.asRelativePath(change.path)} (before / after)`);
+    await vscode.commands.executeCommand(
+      'vscode.diff',
+      beforeUri,
+      afterUri,
+      `${relativePath} (before ↔ after)`,
+      { preview: true }
+    );
   }
 
   private async applyChangeHunk(id: string, hunkId: number, action: 'accept' | 'undo'): Promise<void> {
     const change = this.changes.get(id);
-    if (!change) return;
-    const hunk = createDiffHunks(change.original, change.updated).find((item) => item.id === hunkId);
-    if (!hunk) throw new Error('Hunk không còn tồn tại; hãy mở Review lại.');
-    if (action === 'accept') {
-      const previousOriginal = change.original;
-      change.original = applyForward(change.original, hunk);
-      if (change.staged && !await this.applyStagedChange({ ...change, original: previousOriginal, updated: change.original })) {
-        change.original = previousOriginal;
-        return;
+    if (!change || !this.visibleChangeEntries().some(([changeId]) => changeId === id) || this.abortController || this.changeOperationBusy) return;
+    this.changeOperationBusy = true;
+    await this.post({ type: 'changeOperation', busy: true });
+    try {
+      if (!change.staged) {
+        let current: Uint8Array | undefined;
+        try { current = await vscode.workspace.fs.readFile(vscode.Uri.file(change.path)); } catch { current = undefined; }
+        if (!current || !this.bytesEqual(current, change.updated)) {
+          this.interaction.notify('File đã thay đổi bên ngoài Review. Hãy mở lại Review trước khi sửa từng vùng.', 'warning');
+          return;
+        }
       }
-      if (change.staged) change.existed = true;
-    } else {
-      change.updated = applyReverse(change.updated, hunk);
-      if (!change.staged) await vscode.workspace.fs.writeFile(vscode.Uri.file(change.path), change.updated);
+      const hunk = createDiffHunks(change.original, change.updated).find((item) => item.id === hunkId);
+      if (!hunk) throw new Error('Vùng thay đổi không còn tồn tại; hãy mở lại Review.');
+      if (action === 'accept') {
+        const previousOriginal = change.original;
+        change.original = applyForward(change.original, hunk);
+        if (change.staged && !await this.applyStagedChange({ ...change, original: previousOriginal, updated: change.original })) {
+          change.original = previousOriginal;
+          return;
+        }
+        if (change.staged) change.existed = true;
+      } else {
+        change.updated = applyReverse(change.updated, hunk);
+        if (!change.staged) await vscode.workspace.fs.writeFile(vscode.Uri.file(change.path), change.updated);
+      }
+      if (this.bytesEqual(change.original, change.updated)) {
+        this.changes.delete(id);
+        await this.post({ type: 'changeResolved', ids: [id], action: action === 'accept' ? 'accepted' : 'undone' });
+      } else this.changes.set(id, { ...change, ...this.lineChanges(change.original, change.updated) });
+      await this.postChangesState();
+      if (this.changes.has(id)) await this.reviewChange(id);
+      else await this.post({ type: 'closeChangeReview' });
+    } finally {
+      this.changeOperationBusy = false;
+      await this.post({ type: 'changeOperation', busy: false });
     }
-    if (this.bytesEqual(change.original, change.updated)) this.changes.delete(id);
-    else {
-      const counts = this.lineChanges(change.original, change.updated);
-      this.changes.set(id, { ...change, ...counts });
-    }
-    await this.postChangesState();
-    if (this.changes.has(id)) await this.openFullDiff(id);
   }
 
-  private async applyStagedChange(change: { path: string; original?: Uint8Array; updated: Uint8Array; existed: boolean; staged?: boolean }): Promise<boolean> {
+  private async applyStagedChange(change: { path: string; original?: Uint8Array; updated: Uint8Array; existed: boolean; staged?: boolean }, conflictPolicy: 'prompt' | 'force' = 'prompt'): Promise<boolean> {
     if (!change.staged) return true;
     const uri = vscode.Uri.file(change.path);
     let current: Uint8Array | undefined;
@@ -1703,7 +2209,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const conflict = change.existed
       ? !current || (change.original ? !this.bytesEqual(current, change.original) : false)
       : Boolean(current);
-    if (conflict) {
+    if (conflict && conflictPolicy === 'prompt') {
       const choice = await this.interaction.choose({
         title: 'File đã thay đổi',
         message: `${vscode.workspace.asRelativePath(change.path)} khác với lúc Agent chuẩn bị bản sửa.`,
@@ -1724,13 +2230,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     return true;
   }
 
-  private async restoreChange(change: { path: string; original: Uint8Array; updated: Uint8Array; existed: boolean; staged?: boolean }): Promise<boolean> {
+  private async restoreChange(change: { path: string; original: Uint8Array; updated: Uint8Array; existed: boolean; staged?: boolean }, conflictPolicy: 'prompt' | 'force' = 'prompt'): Promise<boolean> {
     if (change.staged) return true;
     const uri = vscode.Uri.file(change.path);
     if (change.existed) {
       try {
         const current = await vscode.workspace.fs.readFile(uri);
-        if (!this.bytesEqual(current, change.updated)) {
+        if (!this.bytesEqual(current, change.updated) && conflictPolicy === 'prompt') {
           const choice = await this.interaction.choose({
             title: 'Khôi phục file đã thay đổi?',
             message: `${vscode.workspace.asRelativePath(change.path)} đã được sửa thêm sau thay đổi của Agent.`,
@@ -1749,6 +2255,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await vscode.workspace.fs.writeFile(uri, change.original);
       }
     } else {
+      let current: Uint8Array | undefined;
+      try { current = await vscode.workspace.fs.readFile(uri); } catch { current = undefined; }
+      if (current && !this.bytesEqual(current, change.updated) && conflictPolicy === 'prompt') {
+        const choice = await this.interaction.choose({
+          title: 'Xóa file đã thay đổi?',
+          message: `${vscode.workspace.asRelativePath(change.path)} đã được sửa thêm sau khi Agent tạo file.`,
+          detail: 'Hoàn tác sẽ xóa cả các thay đổi mới trong file này.',
+          tone: 'danger',
+          icon: 'warning',
+          actions: [
+            { id: 'cancel', label: 'Giữ file hiện tại', kind: 'secondary' },
+            { id: 'delete', label: 'Xóa file', kind: 'danger' }
+          ]
+        });
+        if (choice !== 'delete') return false;
+      }
       try { await vscode.workspace.fs.delete(uri, { useTrash: false }); } catch { /* File đã bị xóa thủ công. */ }
     }
     return true;
@@ -1788,6 +2310,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const session = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []).find((item) => item.id === id);
     if (!session) throw new Error('Không tìm thấy cuộc trò chuyện này.');
     this.currentSessionId = session.id;
+    this.changesVisible = true;
+    this.visibleChangesSessionId = session.id;
+    for (const [changeId, change] of this.changes) {
+      if (!change.sessionId) this.changes.set(changeId, { ...change, sessionId: session.id });
+    }
     this.transcript = session.turns;
     this.activeSkillNames = new Set(
       session.activeSkills?.map((name) => name.toLowerCase())
@@ -1809,6 +2336,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         : []
     })));
     await this.post({ type: 'restoreSession', turns, mode: session.mode, model: session.model });
+    await this.postChangesState();
   }
 
   private async editMessage(message: Extract<WebviewMessage, { type: 'editMessage' }>): Promise<void> {
@@ -1866,6 +2394,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const sessions = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
     const session = sessions.find((item) => item.id === id);
     if (!session) return;
+    const pendingChanges = [...this.changes.values()].filter((change) => change.sessionId === id).length;
+    if (pendingChanges) {
+      this.interaction.notify(`Cuộc trò chuyện còn ${pendingChanges} file chờ review. Hãy Accept hoặc Undo trước khi xóa.`, 'warning');
+      return;
+    }
     const choice = await this.interaction.choose({
       title: 'Xóa cuộc trò chuyện?',
       message: `"${session.title}" sẽ bị xóa khỏi lịch sử.`,
@@ -1879,8 +2412,51 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     });
     if (choice !== 'delete') return;
     await this.context.globalState.update(CHAT_SESSIONS_STATE, sessions.filter((item) => item.id !== id));
+    const activeRun = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
+    if (activeRun?.sessionId === id) {
+      await this.clearActiveRun(activeRun.runId);
+      await this.post({ type: 'agentRecoveryDismissed' });
+    }
     if (id === this.currentSessionId) this.newThread();
     await this.post({ type: 'sessions', sessions: this.sessionSummaries() });
+  }
+
+  private async deleteAllSessions(): Promise<void> {
+    const sessions = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
+    if (!sessions.length) return;
+    const storedSessionIds = new Set(sessions.map((session) => session.id));
+    const pendingSessionIds = new Set(
+      [...this.changes.values()]
+        .map((change) => change.sessionId)
+        .filter((id): id is string => Boolean(id && storedSessionIds.has(id)))
+    );
+    if (pendingSessionIds.size) {
+      this.interaction.notify(
+        `Còn ${pendingSessionIds.size} cuộc trò chuyện có file chờ review. Hãy Accept hoặc Undo trước khi xóa tất cả lịch sử.`,
+        'warning'
+      );
+      return;
+    }
+    const choice = await this.interaction.choose({
+      title: 'Xóa tất cả lịch sử chat?',
+      message: `${sessions.length} cuộc trò chuyện đã lưu sẽ bị xóa.`,
+      detail: 'Thao tác này không thể hoàn tác.',
+      tone: 'danger',
+      icon: 'trash',
+      actions: [
+        { id: 'cancel', label: 'Hủy', kind: 'secondary' },
+        { id: 'delete', label: 'Xóa tất cả', kind: 'danger' }
+      ]
+    });
+    if (choice !== 'delete') return;
+    await this.context.globalState.update(CHAT_SESSIONS_STATE, []);
+    const activeRun = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
+    if (activeRun) {
+      await this.clearActiveRun(activeRun.runId);
+      await this.post({ type: 'agentRecoveryDismissed' });
+    }
+    this.newThread();
+    await this.post({ type: 'sessions', sessions: [] });
   }
 
   private async attachmentViews(attachments: Array<{ path: string; name: string; mimeType: string; size: number }>): Promise<Array<{ name: string; preview?: string }>> {
@@ -1976,6 +2552,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (!prompt.startsWith('/')) return false;
     const command = prompt.trim().toLowerCase();
     if (command === '/clear' || command === '/new') {
+      if (this.abortController) {
+        this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi tạo cuộc trò chuyện mới.', 'warning');
+        return true;
+      }
       this.newThread();
       return true;
     }
@@ -2033,7 +2613,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     if (command === '/review' || command === '/diff') {
       await this.post({ type: 'openChanges' });
-      if (!this.changes.size) await this.post({ type: 'notice', message: '**Không có thay đổi đang chờ review.**' });
+      if (!this.visibleChangeEntries().length) await this.post({ type: 'notice', message: '**Không có thay đổi đang chờ review.**' });
       return true;
     }
     if (command === '/status') {
@@ -2042,7 +2622,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       const goal = this.context.workspaceState.get<StoredGoal>(GOAL_STATE);
       await this.post({
         type: 'notice',
-        message: `**Trạng thái RelayCode**\n\n• Chat: \`${this.currentSessionId}\`\n• Model: \`${model || 'chưa chọn'}\`\n• Mode: **${mode}**\n• Provider: \`${profile?.name ?? 'chưa chọn'}\`\n• IDE context: **${ideContext ? 'bật' : 'tắt'}**\n• Goal: **${goal?.status ?? 'không có'}**\n• Skills: **${this.skills.length}**\n• MCP: **${this.mcpManager.servers().length}**\n• Thay đổi chờ review: **${this.changes.size}**`
+        message: `**Trạng thái RelayCode**\n\n• Chat: \`${this.currentSessionId}\`\n• Model: \`${model || 'chưa chọn'}\`\n• Mode: **${mode}**\n• Provider: \`${profile?.name ?? 'chưa chọn'}\`\n• IDE context: **${ideContext ? 'bật' : 'tắt'}**\n• Goal: **${goal?.status ?? 'không có'}**\n• Skills: **${this.skills.length}**\n• MCP: **${this.mcpManager.servers().length}**\n• Thay đổi chờ review: **${this.visibleChangeEntries().length}**`
       });
       return true;
     }
@@ -2231,6 +2811,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private errorText(error: unknown): string {
     const raw = error instanceof Error ? error.message : String(error);
+    if (/function call turn comes immediately after a user turn|function response turn/i.test(raw)) {
+      return 'Provider từ chối lịch sử function-call vì thứ tự giữa lời gọi tool và kết quả tool không hợp lệ. RelayCode đã sửa cơ chế chuẩn hóa lịch sử; hãy bấm Thử lại để tiếp tục từ trạng thái hiện tại.';
+    }
     if (error instanceof Error && error.name === 'TimeoutError') {
       return 'Provider không phản hồi trong thời gian kiểm tra. Với 9Router local, hãy khởi động lại dịch vụ rồi thử lại.';
     }
@@ -2246,6 +2829,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private async diagnoseProviderError(error: unknown, provider: ProviderKind, model: string): Promise<string> {
     const initial = this.errorText(error);
     if (provider !== '9router') return initial;
+    if (/HTTP 429|rate.?limit|quota|capacity|resource.?exhausted|usage.?limit|hết hạn mức/i.test(initial)) {
+      try {
+        this.quotaSnapshot = await this.quotaService.load(this.quotaEndpoint());
+        const exhausted = quotaExhaustionForModel(this.quotaSnapshot, model);
+        if (exhausted) {
+          const reset = exhausted.resetAt
+            ? ` Hạn mức gần nhất dự kiến reset lúc ${new Date(exhausted.resetAt).toLocaleString()}.`
+            : '';
+          return `Model \`${model}\` đã hết hạn mức trên toàn bộ ${exhausted.accountCount} tài khoản đang bật trong 9Router.${reset} Hãy chờ reset hoặc chọn model khác.`;
+        }
+      } catch { /* Keep the provider's original error when quota cannot be verified. */ }
+    }
     if (/HTTP 403|bearer token|invalid token|unauthorized|forbidden/i.test(initial)) {
       return this.authFailureMessage(model, initial);
     }
@@ -2288,8 +2883,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.dialogResolvers.clear();
     this.abortController?.abort();
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    if (this.changesPostTimer) clearTimeout(this.changesPostTimer);
     if (this.connectionMonitorTimer) clearInterval(this.connectionMonitorTimer);
     this.modelCheckController?.abort();
+    this.reviewDocuments.clear();
+    this.planPanel?.dispose();
     this.metricsPanel?.dispose();
     this.routerProcess.dispose();
     this.mcpManager.dispose();
@@ -2319,6 +2917,12 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Extension tự chạy dịch vụ nền rồi mở trang quản lý bằng trình duyệt mặc định.': 'RelayCode starts the background service and opens its management page in your default browser.',
     'Token, chi phí ước tính, tốc độ và rate limit': 'Tokens, estimated cost, latency and rate limits',
     'Chọn dịch vụ và đăng nhập trong trình duyệt': 'Choose a service and sign in through your browser',
+    'Trang, database và tài liệu': 'Pages, databases and documents',
+    'Issue, project và comment': 'Issues, projects and comments',
+    'Lỗi, event và hiệu năng': 'Errors, events and performance',
+    'Design context và canvas': 'Design context and canvas',
+    'Tạo UI và lấy mã thiết kế': 'Create UI and retrieve design code',
+    'Chọn một dịch vụ ở trên hoặc thêm MCP riêng.': 'Choose a service above or add a custom MCP.',
     'Dùng workspace thật với quyền đã chọn': 'Use the real workspace with the selected approval policy',
     'Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.': 'Agent can read the project, edit files and run commands in the workspace.',
     'Không cần mở terminal hoặc chuyển sang trình duyệt.': 'No terminal or browser switching is required.',
@@ -2345,6 +2949,10 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Đã ngắt kết nối.': 'Disconnected.',
     'Đã ngắt provider.': 'Provider disconnected.',
     '9Router đã tắt': '9Router stopped',
+    '9Router sẵn sàng': '9Router ready',
+    'Provider đã sẵn sàng': 'Provider is ready',
+    'Provider chưa thể sử dụng': 'Provider is unavailable',
+    'Gateway và API đang sẵn sàng nhận yêu cầu từ Chat hoặc Agent.': 'The gateway and API are ready for Chat or Agent requests.',
     'Đang cài 9Router': 'Installing 9Router',
     'Kết nối lại': 'Reconnect',
     'Xóa MCP': 'Remove MCP',
@@ -2373,6 +2981,8 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Cấu hình provider': 'Provider settings',
     'Ngôn ngữ giao diện': 'Interface language',
     'Hồ sơ đang dùng': 'Active profile',
+    'Provider hiện tại': 'Current provider',
+    'Xóa hồ sơ': 'Delete profile',
     '+ Hồ sơ mới': '+ New profile',
     'Tên hồ sơ': 'Profile name',
     'Ví dụ: OpenAI cá nhân': 'For example: Personal OpenAI',
@@ -2390,9 +3000,13 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Lưu trong Secret Storage': 'Stored in SecretStorage',
     'Lưu và kết nối': 'Save and connect',
     'Nhập model ID từ 9Router': 'Enter a model ID from 9Router',
+    'Nhập key mới hoặc để trống để giữ key đã lưu': 'Enter a new key or leave blank to keep the saved key',
+    'Provider local không dùng API key': 'Local providers do not use an API key',
+    'Tùy chọn': 'Optional',
     'Dùng model này': 'Use this model',
     'Nói điều bạn muốn xây.': 'Describe what you want to build.',
     'Nhập yêu cầu sửa, chạy hoặc kiểm tra code…': 'Ask RelayCode to edit, run or review code…',
+    'Nhập yêu cầu, dùng /, $ hoặc @…': 'Ask anything, use /, $ or @…',
     'Sandbox bắt buộc': 'Sandbox required',
     'Sandbox ưu tiên': 'Sandbox preferred',
     'Chạy trực tiếp': 'Run directly',
@@ -2410,6 +3024,9 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Bật Full access?': 'Enable Full access?',
     'Bật Full access': 'Enable Full access',
     'Mở diff đầy đủ': 'Open full diff',
+    'Xem lại thay đổi': 'Review changes',
+    'Hoàn tác file': 'Undo file',
+    'Chấp nhận file': 'Accept file',
     'Ảnh đính kèm': 'Attached image',
     'Đóng ảnh': 'Close image',
     'Xem ảnh': 'View image',
@@ -2427,6 +3044,41 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Cài đặt': 'Settings',
     'Tác vụ dài': 'Long-running task',
     'Sẵn sàng để review': 'Ready for review',
+    'Đang tự động kiểm tra thay đổi': 'Automatically validating changes',
+    'Kiểm tra tự động thất bại': 'Automatic validation failed',
+    'Kiểm tra tự động đã hoàn thành': 'Automatic validation completed',
+    'Agent đang sửa lỗi': 'Agent is fixing the issue',
+    'Agent chưa tạo thay đổi': 'Agent has not made changes',
+    'Đang phân tích hướng thực hiện': 'Analyzing the approach',
+    'Đang phân tích yêu cầu': 'Analyzing request',
+    'Đang phân tích file': 'Analyzing file',
+    'Đang suy nghĩ bước tiếp theo': 'Thinking about the next step',
+    'Đang kiểm tra provider': 'Checking provider',
+    'Kết nối model gián đoạn': 'Model connection interrupted',
+    'Provider đã hoạt động lại': 'Provider is available again',
+    'đang gửi lại bước hiện tại': 'retrying the current step',
+    'Đang chờ model': 'Waiting for model',
+    'Model đang suy nghĩ': 'Model is thinking',
+    'Model đang xử lý': 'Model is working',
+    'Đang chạy kiểm tra': 'Running tests',
+    'Đang chạy lệnh': 'Running command',
+    'Đang tạo ảnh': 'Generating image',
+    'Đang tìm model tạo ảnh': 'Finding an image model',
+    'Đang tạo thư mục': 'Creating directory',
+    'Đang xóa file': 'Deleting file',
+    'Đang di chuyển file': 'Moving file',
+    'Đang sửa file': 'Editing file',
+    'Đang kiểm tra đường dẫn': 'Checking path',
+    'Đang xem thư mục': 'Reading directory',
+    'Đang đọc tài nguyên skill': 'Reading skill resource',
+    'Đang đọc trang web': 'Reading webpage',
+    'Đang đọc Git diff': 'Reading Git diff',
+    'Đang đọc file': 'Reading file',
+    'Đang xem cấu trúc dự án': 'Inspecting project structure',
+    'Đang tìm trong dự án': 'Searching project',
+    'Đang dùng MCP': 'Using MCP',
+    'Đang dùng công cụ': 'Using tool',
+    'Hoàn tất': 'Completed',
     'Đang làm việc': 'Working',
     'Đã tạm dừng': 'Paused',
     'Cần xử lý': 'Needs attention',
@@ -2439,6 +3091,159 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Bỏ tin nhắn khỏi hàng đợi': 'Remove queued message',
     'Xếp tin nhắn tiếp theo': 'Queue next message',
     'Gửi tiếp sau khi tác vụ hiện tại hoàn thành': 'Send after the current task finishes',
+    'Gateway local · nhiều tài khoản': 'Local gateway · multiple accounts',
+    'Trường này không được để trống.': 'This field is required.',
+    'Mô tả mục tiêu dài hạn…': 'Describe a long-term goal…',
+    'Mô tả mục tiêu để Agent lập kế hoạch…': 'Describe the goal for Agent to plan…',
+    'Hỏi nhanh qua model đang chọn…': 'Ask the selected model…',
+    'Model hoạt động': 'Model available',
+    'Model không khả dụng': 'Model unavailable',
+    'Đang kiểm tra model': 'Checking models',
+    'Cần giữ lại ít nhất một hồ sơ': 'At least one profile must remain',
+    'Hãy chọn một hồ sơ đã lưu': 'Select a saved profile',
+    'Đã kiểm tra provider': 'Provider checked',
+    'Đã kết nối lại model': 'Model reconnected',
+    'Model đã phản hồi': 'Model responded',
+    'Đã chạy lệnh': 'Command completed',
+    'Đã chạy kiểm tra': 'Tests completed',
+    'Không thể tạo ảnh': 'Unable to generate image',
+    'Đã tạo ảnh': 'Image generated',
+    'Đã tìm model tạo ảnh': 'Image model found',
+    'Đã tạo thư mục': 'Directory created',
+    'Đã xóa file': 'File deleted',
+    'Đã di chuyển file': 'File moved',
+    'Đã sửa file': 'File edited',
+    'Đã kiểm tra đường dẫn': 'Path checked',
+    'Đã xem thư mục': 'Directory read',
+    'Đã đọc Git diff': 'Git diff read',
+    'Đã đọc skill': 'Skill read',
+    'Đã đọc trang web': 'Webpage read',
+    'Đã phân tích file': 'File analyzed',
+    'Đã đọc file': 'File read',
+    'Đã xem cấu trúc dự án': 'Project structure inspected',
+    'Đã tìm trong dự án': 'Project searched',
+    'Đã xác định hướng thực hiện': 'Approach identified',
+    'Đã xác định bước tiếp theo': 'Next step identified',
+    'Đã phân tích yêu cầu': 'Request analyzed',
+    'Xem chi tiết hoạt động': 'View activity details',
+    'Đã dừng theo yêu cầu': 'Stopped as requested',
+    'Từ chối': 'Reject',
+    'Chấp nhận': 'Accept',
+    'Không còn vùng thay đổi nào.': 'No change regions remain.',
+    'Tổng token': 'Total tokens',
+    'Chi phí ước tính': 'Estimated cost',
+    'Latency trung bình': 'Average latency',
+    'Chưa nhận được header rate limit từ provider.': 'The provider has not returned rate-limit headers.',
+    'Mở trang tạo API key': 'Open API key page',
+    'Đang chờ đăng nhập': 'Waiting for sign-in',
+    'Có API key · cần kết nối lại': 'API key saved · reconnect required',
+    'Đang chờ đăng nhập trên trình duyệt': 'Waiting for browser sign-in',
+    'Cần kết nối lại': 'Reconnect required',
+    'Chưa đăng nhập': 'Not signed in',
+    'Ngoại tuyến': 'Offline',
+    'Đăng xuất': 'Sign out',
+    'Đang mở…': 'Opening…',
+    'Đổi key': 'Change key',
+    'Nhập key': 'Enter key',
+    'Tất cả lịch sử': 'All history',
+    'Xóa tất cả lịch sử chat?': 'Clear all chat history?',
+    'Xóa tất cả': 'Clear all',
+    ' cuộc trò chuyện đã lưu sẽ bị xóa.': ' saved conversations will be deleted.',
+    'Thao tác này không thể hoàn tác.': 'This action cannot be undone.',
+    'Xóa cuộc trò chuyện': 'Delete conversation',
+    'Đã sao chép': 'Copied',
+    'Sao chép': 'Copy',
+    'Chỉnh sửa tin nhắn': 'Edit message',
+    'Gửi lại sẽ thay thế các phản hồi phía sau.': 'Resending will replace the responses that follow.',
+    'Gửi lại': 'Resend',
+    'Chỉnh sửa': 'Edit',
+    'Kế hoạch thực hiện': 'Implementation plan',
+    'Sẵn sàng để xem và phê duyệt': 'Ready to review and approve',
+    'Mở kế hoạch': 'Open plan',
+    'Dừng phản hồi': 'Stop response',
+    'Đã dừng.': 'Stopped.',
+    'Tệp và thư mục': 'Files and folders',
+    'Đính kèm ngữ cảnh từ workspace': 'Attach context from the workspace',
+    'Đặt mục tiêu để agent tiếp tục theo đuổi': 'Set a goal for Agent to keep pursuing',
+    'Lập kế hoạch trước khi thực hiện': 'Plan before implementation',
+    'Thêm skill vào yêu cầu': 'Add a skill to the request',
+    'Chạy tác vụ dài có thể tạm dừng và tiếp tục': 'Run a long task that can be paused and resumed',
+    'Bắt đầu một cuộc chat mới': 'Start a new chat',
+    'Rút gọn ngữ cảnh cuộc chat': 'Compact this chat context',
+    'Tìm và chèn skill': 'Find and insert a skill',
+    'Mở danh sách model': 'Open the model list',
+    'Chuyển sang chế độ Plan': 'Switch to Plan mode',
+    'Xem các file đã thay đổi': 'View changed files',
+    'Mở các thay đổi đang chờ review': 'Open changes awaiting review',
+    'Bật hoặc tắt file đang mở trong ngữ cảnh': 'Toggle the open file in context',
+    'Tạo khung AGENTS.md cho dự án': 'Create an AGENTS.md scaffold for the project',
+    'Xem provider, MCP và skills': 'View provider, MCP and skills status',
+    'Mở công cụ MCP': 'Open MCP tools',
+    'Mở cấu hình': 'Open settings',
+    'Mở Output Channel': 'Open Output Channel',
+    'Xuất gói chẩn đoán': 'Export diagnostics package',
+    'Đoạn code đang chọn': 'Selected code',
+    'Một file trong workspace': 'A workspace file',
+    'Cây file của thư mục': 'Folder file tree',
+    'Output terminal gần nhất': 'Latest terminal output',
+    'Thay đổi Git hiện tại': 'Current Git changes',
+    'Problems của workspace': 'Workspace problems',
+    'Workspace chưa được tin cậy. Agent, terminal và MCP sẽ bị khóa cho đến khi bạn bật Workspace Trust.': 'This workspace is not trusted. Agent, terminal and MCP remain locked until Workspace Trust is enabled.',
+    'Khởi động gateway, kiểm tra API và mở bảng điều khiển mà không cần tự chạy lệnh.': 'Start the gateway, check the API and open the dashboard without running commands manually.',
+    'Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.': 'A local provider needs no API key, but its app, model and API server must be running.',
+    'Mở Cài đặt để kiểm tra endpoint và API key của provider này.': 'Open Settings to check this provider endpoint and API key.',
+    'RelayCode đã phát hiện 9Router từ terminal và sẽ dùng lại tiến trình này, không khởi động thêm.': 'RelayCode detected 9Router from the terminal and will reuse that process.',
+    'Tác vụ bị gián đoạn khi IDE reload.': 'The task was interrupted when the IDE reloaded.',
+    'Khôi phục phiên Agent': 'Recover Agent session',
+    'Bỏ phiên': 'Discard session',
+    'Kết nối hoạt động bình thường.': 'Connection is working normally.',
+    'Không thể kết nối provider.': 'Unable to connect to the provider.',
+    'Đã hủy · Kiểm tra lại': 'Canceled · Check again',
+    'Đang kiểm tra dịch vụ cục bộ.': 'Checking the local service.',
+    'Quá trình chạy nền, bạn có thể tiếp tục dùng IDE.': 'This runs in the background; you can keep using the IDE.',
+    'Agent cần quyền': 'Agent needs permission',
+    'Cho phép': 'Allow',
+    'Tool chưa hoàn thành': 'Tool did not complete',
+    'Chọn model khác rồi tiếp tục từ bước đang dở': 'Choose another model and continue from the interrupted step',
+    'Hiện thêm': 'Show more',
+    'Xem thêm': 'Show more',
+    'MCP server cần có tên.': 'The MCP server needs a name.',
+    'MCP stdio cần command.': 'An MCP stdio server needs a command.',
+    'MCP HTTP cần URL.': 'An MCP HTTP server needs a URL.',
+    'Không tìm thấy MCP này.': 'MCP connection not found.',
+    'Không tìm thấy MCP server.': 'MCP server not found.',
+    'MCP này không dùng API key riêng.': 'This MCP connection does not use a separate API key.',
+    'OAuth chỉ dùng cho MCP HTTP.': 'OAuth is only available for MCP over HTTP.',
+    'Không thể mở trình duyệt để đăng nhập MCP.': 'Unable to open the browser for MCP sign-in.',
+    'Phiên đăng nhập đã hết hạn. Hãy thử lại.': 'The sign-in session expired. Try again.',
+    'Hoàn tất đăng nhập trong trình duyệt.': 'Complete sign-in in your browser.',
+    'Phiên MCP đã hết hạn. Hãy bấm Đăng nhập lại.': 'The MCP session expired. Sign in again.',
+    'Đăng nhập trên trình duyệt, tạo API key rồi dán vào đây.': 'Sign in in your browser, create an API key and paste it here.',
+    'Dán API key': 'Paste API key',
+    'API key không được để trống.': 'API key is required.',
+    'Figma đã chặn OAuth trước khi tạo trang đăng nhập vì RelayCode chưa nằm trong MCP Catalog của Figma.': 'Figma blocked OAuth before creating a sign-in page because RelayCode is not in the Figma MCP Catalog.',
+    'OAuth Remote bị Figma từ chối · có thể dùng Figma Desktop': 'Remote OAuth was rejected by Figma · Figma Desktop is available',
+    'Figma Remote OAuth bị từ chối': 'Figma Remote OAuth was rejected',
+    'Bạn có thể dùng MCP tích hợp trong Figma Desktop mà không cần OAuth.': 'You can use the MCP server built into Figma Desktop without OAuth.',
+    'Mở hướng dẫn': 'Open guide',
+    'Dùng Figma Desktop': 'Use Figma Desktop',
+    'Figma Desktop chưa sẵn sàng': 'Figma Desktop is not ready',
+    'RelayCode đã lưu cấu hình, nhưng chưa tìm thấy Desktop MCP server.': 'RelayCode saved the configuration, but the Desktop MCP server was not found.',
+    'Mở một file Figma Design trong ứng dụng Desktop → nhấn Shift+D để vào Dev Mode → trong mục MCP server, chọn Enable desktop MCP server.': 'Open a Figma Design file in the Desktop app → press Shift+D for Dev Mode → under MCP server, select Enable desktop MCP server.',
+    'Đang kiểm tra Figma Desktop…': 'Checking Figma Desktop…',
+    'Figma Desktop chưa sẵn sàng · mở file Design, bật Dev Mode và Enable desktop MCP server.': 'Figma Desktop is not ready · open a Design file, enter Dev Mode, and enable the desktop MCP server.',
+    'Hãy bật Dev Mode → Enable desktop MCP server trong Figma, rồi bấm Kết nối lại.': 'Enable Dev Mode → Enable desktop MCP server in Figma, then select Reconnect.',
+    'Đã chuyển sang Figma Desktop': 'Switched to Figma Desktop',
+    'Hãy bật Desktop MCP server trong Figma rồi bấm lại thẻ Figma.': 'Enable the Desktop MCP server in Figma, then select the Figma card again.',
+    'Phiên đăng nhập không còn hợp lệ. Hãy quay lại Antigravity và thử lại.': 'The sign-in session is no longer valid. Return to Antigravity and try again.',
+    'Đăng nhập bị hủy.': 'Sign-in canceled.',
+    'Đăng nhập chưa hoàn tất. Bạn có thể đóng tab này.': 'Sign-in is not complete. You can close this tab.',
+    'Không thể hoàn tất đăng nhập. Hãy quay lại Antigravity để xem lỗi.': 'Unable to complete sign-in. Return to Antigravity to view the error.',
+    'Đã kết nối MCP': 'MCP connected',
+    'Chưa thể kết nối': 'Unable to connect',
+    ' công cụ sẵn sàng': ' tools ready',
+    ' sẵn sàng': ' ready',
+    ' đã kết nối': ' connected',
     'Ngắt': 'Disconnect',
     'Đóng': 'Close',
     'Hủy': 'Cancel',
@@ -2464,4 +3269,15 @@ function localizeUiPayload(value: unknown, language: 'vi' | 'en'): unknown {
 
 function formatDashboardNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, notation: 'compact' }).format(value || 0);
+}
+
+function compactToolFailure(value: string): string {
+  return value
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\s+at (?:aggregateBindingErrorsIntoJsError|unwrapBindingResult|#build|buildEnvironment|Object\.build|Object\.buildApp|CAC\.<anonymous>)[\s\S]*$/i, '')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 5_000);
 }
