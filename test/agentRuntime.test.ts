@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { join, resolve } from 'node:path';
 import type { ProviderClient } from '../src/provider';
 import type { AgentRunCheckpoint, RequestMetrics } from '../src/types';
 
@@ -26,6 +27,8 @@ import {
   compactProgressCommentary,
   normalizeCompletedToolHistory
 } from '../src/agentRuntime';
+
+const WORKSPACE_ROOT = resolve('test-workspace');
 
 const metrics: RequestMetrics = {
   inputTokens: 1,
@@ -89,7 +92,7 @@ describe('AgentRuntime completion verification', () => {
     } as unknown as ProviderClient;
     const runtime = new AgentRuntime(
       client,
-      'C:\\workspace',
+      WORKSPACE_ROOT,
       async () => true,
       () => undefined,
       false,
@@ -132,7 +135,7 @@ describe('AgentRuntime completion verification', () => {
     const client = {
       listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools
     } as unknown as ProviderClient;
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Inspect this workspace', 'agent-model', { onDelta: vi.fn(), onStatus: vi.fn() });
 
@@ -147,7 +150,7 @@ describe('AgentRuntime completion verification', () => {
   it('does not report completion when a requested edit made no tool calls', async () => {
     const client = clientWithResponses(['Đã hoàn tất.', 'Đã xong.', 'Hoàn thành.']);
     const deltas: string[] = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await expect(runtime.run('Tạo file index.html', 'test-model', {
       onDelta: (delta) => deltas.push(delta),
@@ -161,7 +164,7 @@ describe('AgentRuntime completion verification', () => {
   it('allows a read-only answer without a mutation', async () => {
     const client = clientWithResponses(['Project này dùng TypeScript.']);
     const deltas: string[] = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Giải thích project này', 'test-model', {
       onDelta: (delta) => deltas.push(delta),
@@ -185,7 +188,7 @@ describe('AgentRuntime completion verification', () => {
       checkModel: vi.fn(),
       completeWithTools
     } as unknown as ProviderClient;
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
     const onCommentary = vi.fn();
     const onActivityComplete = vi.fn();
     const onDelta = vi.fn();
@@ -233,7 +236,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       checkModel: vi.fn(),
       completeWithTools
     } as unknown as ProviderClient;
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
     const onCommentary = vi.fn();
 
     await runtime.run('Inspect this workspace', 'test-model', {
@@ -260,7 +263,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       checkModel: vi.fn(),
       completeWithTools
     } as unknown as ProviderClient;
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
     const onCommentary = vi.fn();
 
     await runtime.run('Inspect this workspace', 'test-model', {
@@ -288,7 +291,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     } as unknown as ProviderClient;
     const runtime = new AgentRuntime(
       client,
-      'C:\\workspace',
+      WORKSPACE_ROOT,
       async () => true,
       () => undefined,
       false,
@@ -334,14 +337,14 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       completeWithTools
     } as unknown as ProviderClient;
     const changes: Array<{ path: string; added: number; removed: number }> = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, (change) => changes.push(change));
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, (change) => changes.push(change));
 
     await runtime.run('Tạo ảnh hero cho landing page', 'agent-model', { onDelta: vi.fn(), onStatus: vi.fn() });
 
     expect(client.generateImage).toHaveBeenCalledWith('image-model', 'A clean product hero', '1024x1024', undefined);
-    expect(changes).toEqual([expect.objectContaining({ path: 'C:\\workspace\\assets\\hero.png', added: 1, removed: 1 })]);
+    expect(changes).toEqual([expect.objectContaining({ path: join(WORKSPACE_ROOT, 'assets', 'hero.png'), added: 1, removed: 1 })]);
     expect(vi.mocked((await import('vscode')).workspace.fs.writeFile)).toHaveBeenCalledWith(
-      expect.objectContaining({ fsPath: 'C:\\workspace\\assets\\hero.png' }),
+      expect.objectContaining({ fsPath: join(WORKSPACE_ROOT, 'assets', 'hero.png') }),
       generated
     );
   });
@@ -369,7 +372,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       checkModel: vi.fn(),
       completeWithTools
     } as unknown as ProviderClient;
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Tạo cho tôi ảnh mèo', 'ag/claude-sonnet-4-6', { onDelta: vi.fn(), onStatus: vi.fn() });
 
@@ -400,7 +403,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       completeWithTools
     } as unknown as ProviderClient;
     const statuses: string[] = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Review cấu trúc dự án hiện tại', 'agent-model', {
       onDelta: vi.fn(),
@@ -428,7 +431,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     ));
     vi.stubGlobal('fetch', fetchMock);
     const statuses: string[] = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     try {
       await runtime.run('Read https://example.com/docs', 'agent-model', {
@@ -475,7 +478,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       .mockRejectedValueOnce(new Error('disk busy'))
       .mockResolvedValueOnce(undefined);
     const failures: string[] = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Tạo file index.html', 'test-model', {
       onDelta: vi.fn(),
@@ -513,7 +516,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     } as unknown as ProviderClient;
     const vscodeApi = await import('vscode');
     vi.mocked(vscodeApi.workspace.fs.writeFile).mockRejectedValueOnce(new Error('disk busy'));
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Inspect both files.', 'test-model', {
       onDelta: vi.fn(),
@@ -548,7 +551,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     const vscodeApi = await import('vscode');
     vi.mocked(vscodeApi.workspace.fs.writeFile).mockResolvedValue(undefined);
     let saved: AgentRunCheckpoint | undefined;
-    const firstRuntime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const firstRuntime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await expect(firstRuntime.run('Tạo a.txt và b.txt', 'test-model', {
       onDelta: vi.fn(),
@@ -562,14 +565,14 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     })).rejects.toThrow('simulate reload');
 
     expect(saved?.nextToolIndex).toBe(1);
-    const resumedRuntime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const resumedRuntime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
     await resumedRuntime.run('Tạo a.txt và b.txt', 'antigravity/gemini-3.5-flash-low', {
       onDelta: vi.fn(),
       onStatus: vi.fn()
     }, undefined, saved);
 
     const writtenPaths = vi.mocked(vscodeApi.workspace.fs.writeFile).mock.calls.map(([uri]) => uri.fsPath);
-    expect(writtenPaths).toEqual(['C:\\workspace\\a.txt', 'C:\\workspace\\b.txt']);
+    expect(writtenPaths).toEqual([join(WORKSPACE_ROOT, 'a.txt'), join(WORKSPACE_ROOT, 'b.txt')]);
     expect(completeWithTools).toHaveBeenCalledTimes(2);
     expect(completeWithTools.mock.calls[1]?.[0]).toBe('antigravity/gemini-3.5-flash-low');
   });
@@ -593,7 +596,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       completeWithTools
     } as unknown as ProviderClient;
     const deltas: string[] = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Phân tích tác vụ dài', 'test-model', {
       onDelta: (delta) => deltas.push(delta),
@@ -627,8 +630,8 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     } as unknown as ProviderClient;
     const vscodeApi = await import('vscode');
     vi.mocked(vscodeApi.workspace.fs.stat).mockImplementation(async (uri) => {
-      if (uri.fsPath === 'C:\\workspace\\package.json') return { type: 1, ctime: 0, mtime: 0, size: 0 };
-      if (uri.fsPath === 'C:\\workspace') return { type: 2, ctime: 0, mtime: 0, size: 0 };
+      if (uri.fsPath === join(WORKSPACE_ROOT, 'package.json')) return { type: 1, ctime: 0, mtime: 0, size: 0 };
+      if (uri.fsPath === WORKSPACE_ROOT) return { type: 2, ctime: 0, mtime: 0, size: 0 };
       throw new Error('missing');
     });
     vi.mocked(vscodeApi.workspace.fs.readFile).mockImplementation(async (uri) => new TextEncoder().encode(
@@ -640,7 +643,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     const deltas: string[] = [];
     const runtime = new AgentRuntime(
       client,
-      'C:\\workspace',
+      WORKSPACE_ROOT,
       async () => true,
       () => undefined,
       false,
@@ -676,8 +679,8 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     } as unknown as ProviderClient;
     const vscodeApi = await import('vscode');
     vi.mocked(vscodeApi.workspace.fs.stat).mockImplementation(async (uri) => {
-      if (uri.fsPath === 'C:\\workspace\\apps\\demo\\package.json') return { type: 1, ctime: 0, mtime: 0, size: 0 };
-      if (uri.fsPath === 'C:\\workspace\\apps\\demo') return { type: 2, ctime: 0, mtime: 0, size: 0 };
+      if (uri.fsPath === join(WORKSPACE_ROOT, 'apps', 'demo', 'package.json')) return { type: 1, ctime: 0, mtime: 0, size: 0 };
+      if (uri.fsPath === join(WORKSPACE_ROOT, 'apps', 'demo')) return { type: 2, ctime: 0, mtime: 0, size: 0 };
       throw new Error('missing');
     });
     vi.mocked(vscodeApi.workspace.fs.readFile).mockImplementation(async (uri) => new TextEncoder().encode(
@@ -685,14 +688,14 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     ));
     const commandRunner = vi.fn().mockResolvedValue('Tests passed.');
     const statuses: string[] = [];
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined, false, [], { allow: [], deny: [] }, commandRunner);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined, false, [], { allow: [], deny: [] }, commandRunner);
 
     await runtime.run('Fix the nested app', 'test-model', { onDelta: vi.fn(), onStatus: (status) => statuses.push(status) });
 
     expect(commandRunner).toHaveBeenCalledWith('npm test', 'run_tests', expect.any(Object), undefined);
-    expect(statuses.some((status) => status.includes('apps\\demo'))).toBe(true);
+    expect(statuses.some((status) => status.includes(join('apps', 'demo')))).toBe(true);
     expect(completeWithTools.mock.calls[2]?.[1]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: 'user', content: expect.stringContaining('Working directory: apps\\demo') })
+      expect.objectContaining({ role: 'user', content: expect.stringContaining(`Working directory: ${join('apps', 'demo')}`) })
     ]));
   });
 
@@ -710,15 +713,15 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     } as unknown as ProviderClient;
     const vscodeApi = await import('vscode');
     vi.mocked(vscodeApi.workspace.fs.stat).mockImplementation(async (uri) => {
-      if (uri.fsPath === 'C:\\workspace\\package.json') return { type: 1, ctime: 0, mtime: 0, size: 0 };
-      if (uri.fsPath === 'C:\\workspace') return { type: 2, ctime: 0, mtime: 0, size: 0 };
+      if (uri.fsPath === join(WORKSPACE_ROOT, 'package.json')) return { type: 1, ctime: 0, mtime: 0, size: 0 };
+      if (uri.fsPath === WORKSPACE_ROOT) return { type: 2, ctime: 0, mtime: 0, size: 0 };
       throw new Error('missing');
     });
     vi.mocked(vscodeApi.workspace.fs.readFile).mockImplementation(async (uri) => new TextEncoder().encode(
       uri.fsPath.endsWith('package.json') ? '{"scripts":{"test":"vitest run"}}' : 'old'
     ));
     let saved: AgentRunCheckpoint | undefined;
-    const firstRuntime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const firstRuntime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
     await expect(firstRuntime.run('Fix src/app.ts', 'test-model', {
       onDelta: vi.fn(), onStatus: vi.fn(),
       onCheckpoint: (checkpoint) => {
@@ -729,7 +732,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
 
     expect(saved?.mutatedPaths).toContain('src/app.ts');
     const commandRunner = vi.fn().mockResolvedValue('Tests passed.');
-    const resumedRuntime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined, false, [], { allow: [], deny: [] }, commandRunner);
+    const resumedRuntime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined, false, [], { allow: [], deny: [] }, commandRunner);
     await resumedRuntime.run('Fix src/app.ts', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() }, undefined, saved);
 
     expect(commandRunner).toHaveBeenCalledWith('npm test', 'run_tests', expect.any(Object), undefined);
@@ -749,7 +752,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       lastStatus: 'Interrupted',
       updatedAt: Date.now()
     };
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Continue', 'new-model', { onDelta: vi.fn(), onStatus: vi.fn() }, undefined, checkpoint);
 
@@ -788,7 +791,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
       lastStatus: 'Interrupted',
       updatedAt: Date.now()
     };
-    const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
     await runtime.run('Continue.', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() }, undefined, checkpoint);
 
@@ -814,7 +817,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     const toolStarted = new Promise<void>((resolve) => { started = resolve; });
     const runtime = new AgentRuntime(
       client,
-      'C:\\workspace',
+      WORKSPACE_ROOT,
       async () => true,
       () => undefined,
       false,
@@ -850,7 +853,7 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     const waitingForApproval = new Promise<void>((resolve) => { approvalStarted = resolve; });
     const runtime = new AgentRuntime(
       client,
-      'C:\\workspace',
+      WORKSPACE_ROOT,
       async () => {
         approvalStarted();
         return new Promise<boolean>(() => undefined);

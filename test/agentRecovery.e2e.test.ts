@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { join, resolve } from 'node:path';
 import type { ProviderClient } from '../src/provider';
 import type { AgentRunCheckpoint, RequestMetrics } from '../src/types';
 
@@ -20,6 +21,8 @@ vi.mock('vscode', () => ({
 }));
 
 import { AgentRuntime } from '../src/agentRuntime';
+
+const WORKSPACE_ROOT = resolve('test-workspace');
 
 const metrics: RequestMetrics = {
   inputTokens: 2,
@@ -47,7 +50,7 @@ it('persists an interrupted Agent cursor and resumes without replaying completed
     completeWithTools
   } as unknown as ProviderClient;
   const workspaceState = new Map<string, unknown>();
-  const runtime = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+  const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
 
   await expect(runtime.run('Create both files', 'agent-model', {
     onDelta: vi.fn(),
@@ -61,15 +64,15 @@ it('persists an interrupted Agent cursor and resumes without replaying completed
   })).rejects.toThrow('extension host reloaded');
 
   const recovered = workspaceState.get('activeRun') as AgentRunCheckpoint;
-  const resumed = new AgentRuntime(client, 'C:\\workspace', async () => true, () => undefined);
+  const resumed = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
   await resumed.run('Create both files', 'agent-model', {
     onDelta: vi.fn(),
     onStatus: vi.fn()
   }, undefined, recovered);
 
   expect(writeFile.mock.calls.map(([uri]: [{ fsPath: string }, Uint8Array]) => uri.fsPath)).toEqual([
-    'C:\\workspace\\first.txt',
-    'C:\\workspace\\second.txt'
+    join(WORKSPACE_ROOT, 'first.txt'),
+    join(WORKSPACE_ROOT, 'second.txt')
   ]);
   expect(completeWithTools).toHaveBeenCalledTimes(2);
 });
