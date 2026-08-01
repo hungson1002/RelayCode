@@ -1,68 +1,214 @@
 <div align="center">
-  <img src="docs/assets/hero.png" alt="RelayCode — AI Coding Agent" width="100%">
+  <img src="docs/assets/hero.png" alt="RelayCode AI coding workspace" width="100%">
   <br><br>
-  <strong>An AI coding workspace for VS Code and Antigravity — built around your models, your tools and your approval.</strong>
-  <br><br>
-  <sub>A product by <strong>Huxon</strong></sub>
-  <br><br>
-  <a href="https://github.com/hungson1002/RelayCode/blob/main/README.md">English</a> · <a href="https://github.com/hungson1002/RelayCode/blob/main/README.vi.md">Tiếng Việt</a>
+  <h1>RelayCode</h1>
+  <p><strong>An AI coding workspace for VS Code and Antigravity.</strong></p>
+  <p>Ask questions, plan changes, edit your workspace, run validation, and review every change before it is accepted.</p>
+  <p>
+    <a href="https://github.com/hungson1002/RelayCode/releases">Releases</a> ·
+    <a href="https://github.com/hungson1002/RelayCode/issues">Issues</a> ·
+    <a href="README.vi.md">Tiếng Việt</a>
+  </p>
 </div>
 
 ---
 
-## What is RelayCode?
+## RelayCode in five seconds
 
-RelayCode by **Huxon** brings **Agent**, **Chat** and **Plan** workflows into one focused sidebar. Connect a cloud API, a local model or 9Router; give the Agent a task; watch its terminal and tool activity; then review every file before accepting it.
+**RelayCode is a model-agnostic AI coding agent that lives inside your IDE.** It can answer questions about a project, make approved changes, run the right checks, connect to MCP tools, and show you a reviewable diff before you keep or undo the result.
 
-It is designed for developers who want a model-agnostic coding agent without giving up visibility or control.
+**It is for developers, technical teams, and curious builders who want AI help without handing over a hidden, uncontrolled terminal session.** You choose the provider, model, tools, permission level, and final changes.
 
 <p align="center">
-  <img src="docs/assets/workflow.png" alt="Ask, work, review, accept or undo workflow" width="100%">
+  <img src="docs/assets/workflow.png" alt="RelayCode workflow: ask, work, review, accept or undo" width="100%">
 </p>
 
-## Highlights
+## Why RelayCode?
 
-| Area | What you get |
-| --- | --- |
-| **Agent, Chat & Plan** | Use Agent for workspace tasks, Chat for direct questions and Plan for a review-first approach. |
-| **Any model source** | 9Router, Cockpit Tools, OpenAI, Anthropic Claude, OpenAI-compatible APIs, Ollama and LM Studio. |
-| **Visible execution** | Follow commands, terminal output, tool calls and task progress directly in the conversation. |
-| **Reviewable edits** | Inspect changed files and individual hunks, then Accept or Undo per file, task or change set. |
-| **Approval policies** | Ask for approval, allow edits or enable Full access with an explicit confirmation. |
-| **Safer runs** | Workspace Trust, command policies, lazy Git checkpoints and reviewable changes. |
-| **MCP tools** | Connect supported services through OAuth, API keys, HTTP or local stdio MCP servers. |
-| **Model health** | Check which models respond, keep favorites and configure confirmed fallback routing. |
-| **Usage visibility** | Inspect tokens, estimated cost, latency and available rate-limit headers. |
-| **Agent image generation** | Discover image models, generate PNG/JPEG/WebP assets and review or undo the resulting file. |
-| **Persistent workspace** | Chat history, pending reviews, task recovery, profiles and diagnostics survive reloads. |
-| **English & Vietnamese** | Change the interface language from the extension settings panel. |
+Most AI coding tools optimize for speed first. RelayCode is designed for **speed with visibility**:
 
-## Supported providers
+- The model can work in the same workspace as you.
+- Tool calls, terminal activity, and progress remain understandable while a task is running.
+- File edits are collected into a change set instead of disappearing into the background.
+- You can review a file or hunk, accept it, undo it, or leave it pending.
+- Approval modes make the amount of autonomy explicit.
+- Your provider and model are replaceable; the workflow is not tied to one AI vendor.
+
+## What RelayCode can do
+
+### 1. Three ways to work
+
+| Mode | Best for | What it does |
+| --- | --- | --- |
+| **Chat** | Questions, explanations, debugging ideas, code review | Talks to the selected model without editing files, running commands, or calling Agent tools. |
+| **Agent** | Building, fixing, refactoring, and validating a project | Reads workspace context, uses approved tools, edits files, runs commands, and reports the result. |
+| **Plan** | Larger or risky changes | Turns an outcome into a short plan that you can inspect before execution. |
+
+You can switch modes from the composer and start a new thread without losing your saved history.
+
+### 2. Workspace-aware coding
+
+Agent can:
+
+- Read files, folders, selections, problems, Git diffs, and terminal context.
+- Create, update, move, rename, and delete files inside the trusted workspace.
+- Inspect nested applications and monorepos.
+- Detect the nearest project and run its relevant test, type-check, lint, or build command.
+- Feed validation failures back into the same conversation so the model can repair and retry.
+- Continue a task after an IDE reload using the saved Agent cursor and pending tool state.
+- Keep recent conversation context for follow-up messages such as “continue” or “fix that one issue.”
+
+### 3. Reviewable file changes
+
+After an Agent task, RelayCode shows:
+
+- Changed files and total additions/removals.
+- A native IDE diff for before/after review.
+- Individual changed hunks where supported.
+- **Review**, **Accept**, and **Undo** actions.
+- Safe handling for newly created files: undoing a new file removes it from the workspace.
+- Pending changes that survive a reload until you resolve them.
+
+### 4. Visible execution
+
+While Agent is working, the chat can show:
+
+- The current activity and elapsed wait time.
+- Tool calls and terminal output.
+- Validation commands and their results.
+- Provider errors and recovery suggestions.
+- A scroll-to-bottom control when new output arrives while you are reading older messages.
+
+When the task is complete, temporary progress and terminal noise are collapsed away so the final answer and changed-file review remain easy to find.
+
+### 5. Permission and autonomy controls
+
+RelayCode makes permissions visible instead of silently changing behavior:
+
+- **Ask**: request approval before Agent actions.
+- **Allow edits**: permit workspace file edits while retaining protection for riskier operations.
+- **Full access**: allow file edits and commands with one explicit confirmation.
+- **Allow once**: approve only the current action.
+- **Allow similar**: approve matching commands for the current conversation when available.
+- **Always allow file edits**: switch to the edit permission mode without repeatedly asking for file changes.
+
+Duplicate approval cards are deduplicated, and every approval can be denied.
+
+### 6. Multiple providers and models
+
+RelayCode separates the coding workflow from the model source. Supported provider types include:
 
 | Provider | Authentication | Default endpoint |
 | --- | --- | --- |
-| 9Router | API key | `http://localhost:20128/v1` |
-| Cockpit Tools | Client Key | `http://127.0.0.1:1455/v1` |
-| OpenAI | API key | Official OpenAI API |
-| Anthropic Claude | API key | Anthropic Messages API |
-| OpenAI-compatible | Depends on the provider | Your custom endpoint |
-| Ollama | None by default | `http://localhost:11434/v1` |
-| LM Studio | None by default | `http://localhost:1234/v1` |
+| **9Router** | API key | `http://localhost:20128/v1` |
+| **Cockpit Tools** | Client key | `http://127.0.0.1:1455/v1` |
+| **OpenAI** | API key | Official OpenAI API |
+| **Anthropic Claude** | API key | Anthropic Messages API |
+| **OpenAI-compatible** | Provider-specific | Any compatible endpoint you configure |
+| **Ollama** | None by default | `http://localhost:11434/v1` |
+| **LM Studio** | None by default | `http://localhost:1234/v1` |
 
-Local providers do not normally require an API key, but their local server must be running and a model must be downloaded.
+You can create provider profiles, switch between them, save credentials securely, refresh models, mark favorites, and configure fallback models. Local providers still need their local server running and a model installed.
 
-Image generation is available in **Agent** mode when the active provider implements the OpenAI-compatible `/images/generations` endpoint. **Chat** mode remains model-only and never runs tools or commands.
+### 7. Model health and routing
+
+RelayCode can:
+
+- Probe available models with a small request.
+- Distinguish healthy, limited, checking, and unavailable states.
+- Show provider rate-limit information when the provider exposes it.
+- Ask for confirmation before switching to a fallback model.
+- Route different conversations through different provider profiles.
+- Record latency and token usage for troubleshooting and comparison.
+
+### 8. MCP integrations
+
+Model Context Protocol lets Agent use external tools that you configure. RelayCode supports:
+
+- Streamable HTTP MCP servers.
+- Local stdio MCP servers.
+- Browser OAuth when the server supports dynamic client registration.
+- API-key and bearer-token authentication.
+- Separately stored MCP environment values and credentials.
+
+This can connect Agent to documentation, browsers, design systems, issue trackers, databases, and other MCP-compatible services. MCP data is sent only to the server you configure.
+
+### 9. Skills and project instructions
+
+RelayCode discovers standard `SKILL.md` packages from:
+
+- `.agents/skills` in the current workspace.
+- `~/.agents/skills` for the current user.
+
+Type `$` in the composer to search installed skills. A skill is loaded when you explicitly call it, for example:
+
+```text
+$design-frontend Build a polished landing page in plain HTML and CSS.
+```
+
+RelayCode also reads applicable `AGENTS.md` instructions from user and project scope, including the closest instruction file for the active workspace.
+
+### 10. Fast workspace context
+
+Use these composer tokens to attach focused context:
+
+```text
+@selection       selected editor text
+@file:path/to/app.ts
+@folder:path/to/folder
+@terminal        recent terminal context
+@git-diff        current Git changes
+@problems        current IDE diagnostics
+```
+
+Useful slash commands include:
+
+```text
+/goal <outcome>  /new          /compact       /skills
+/model           /plan         /review        /status
+/diagnostics     /mcp          /settings      /logs
+/export
+```
+
+### 11. Agent image generation
+
+When the active provider exposes an OpenAI-compatible `/images/generations` endpoint, Agent can:
+
+- Discover image-capable models.
+- Generate PNG, JPEG, or WebP assets from a prompt.
+- Place the generated asset in the workspace.
+- Show it as a reviewable file change that can be accepted or undone.
+
+Chat mode remains text-only and does not run workspace tools or commands.
+
+### 12. Usage and diagnostics
+
+The usage dashboard can show:
+
+- Input and output tokens.
+- Estimated cost when provider prices are configured.
+- Request latency.
+- Provider rate-limit headers.
+- Recent requests grouped by provider profile and model.
+
+RelayCode also provides connection diagnostics, model health checks, Agent logs, and an exportable diagnostic package. API keys and tokens are excluded from diagnostic exports.
+
+### 13. History and recovery
+
+RelayCode keeps local chat history, thread titles, provider profiles, pending reviews, and active-run checkpoints. If the IDE or extension host reloads during a task, the Agent can resume from its saved cursor without replaying completed writes.
 
 ## Install
 
-### From a release
+### Manual VSIX installation
 
-1. Download the latest `relaycode-<version>.vsix` from the [RelayCode releases page](https://github.com/hungson1002/RelayCode/releases).
+1. Download the latest `relaycode-<version>.vsix` from the [RelayCode Releases](https://github.com/hungson1002/RelayCode/releases) page.
 2. Open VS Code or Antigravity.
-3. Run **Extensions: Install from VSIX…** from the Command Palette.
-4. Select the downloaded file and reload the IDE.
+3. Open the Command Palette.
+4. Run **Extensions: Install from VSIX...**.
+5. Select the downloaded VSIX.
+6. Run **Developer: Reload Window**.
 
-### From source
+### Build from source
 
 ```powershell
 git clone https://github.com/hungson1002/RelayCode.git
@@ -71,112 +217,74 @@ npm install
 npm run check
 ```
 
-Press `F5` to open an Extension Development Host.
+Press `F5` to launch an Extension Development Host.
 
 ## First connection
 
 1. Open the **RelayCode** icon in the Activity Bar.
-2. Select **Settings**.
-3. Choose a provider or create a provider profile.
+2. Open **Settings**.
+3. Select a provider or create a provider profile.
 4. Enter the endpoint and API key when required.
-5. Save, select a model and send a small test prompt.
+5. Save the profile, choose a model, and send a small test prompt.
 
-For 9Router, RelayCode can detect the local service, offer to install it, start it without a separate terminal and open its management page in your browser.
+For **9Router**, RelayCode can detect the local service, offer to install it, start it without a separate terminal, and open its management page.
 
-For Cockpit Tools, enable **API Service**, create a **Client Key**, then select Cockpit in RelayCode. RelayCode discovers models through Cockpit's local OpenAI-compatible gateway; it never reads Cockpit account credentials.
+For **Cockpit Tools**, enable **API Service**, create a **Client Key**, and select Cockpit. RelayCode discovers models through Cockpit's local OpenAI-compatible gateway and does not read Cockpit account credentials.
 
-## Working with the Agent
+## Safety model
 
-The composer supports files, pasted images and quick workspace context:
+Agent execution requires a trusted workspace. Important safeguards include:
 
-```text
-@selection
-@file:path/to/file.ts
-@folder:path/to/folder
-@terminal
-@git-diff
-@problems
-```
+- Workspace Trust before Agent, terminal, or MCP execution.
+- Configurable command allow and deny lists.
+- A deny list for destructive command fragments, including in Full access.
+- A Git checkpoint before the first file mutation when possible.
+- Reviewable pending changes that can be accepted or undone.
+- Approval prompts for file edits and commands according to the selected mode.
+- Secure credential storage through VS Code `SecretStorage`.
 
-Type `$` to search installed agent skills. RelayCode discovers standard `SKILL.md` packages from `.agents/skills` in the workspace and `~/.agents/skills` for the user. A skill's full instructions are loaded only when you mention it, for example:
-
-```text
-$design-frontend Build a polished landing page in plain HTML and CSS.
-```
-
-RelayCode also reads global and project-scoped `AGENTS.md` files, including the closest applicable file for the active editor.
-
-Useful slash commands:
-
-```text
-/goal <outcome>
-/new
-/compact
-/skills
-/model
-/plan
-/review
-/status
-/diagnostics
-/mcp
-/settings
-/logs
-/export
-```
-
-After a task, RelayCode shows the number of changed files and total additions/removals. Use **Review** for the full diff or individual hunks, then choose **Accept** or **Undo**. Undoing a newly created file removes that file.
-
-After source edits, the Agent locates the nearest changed project—including nested apps and monorepos—and runs its relevant test, type-check, lint or build commands from the correct working directory. If validation fails, the error is returned to the same conversation so the Agent can correct the code and rerun the checks before it reports completion. Node.js, Rust, Go, Python, .NET, Java, Swift, Ruby, PHP and CMake projects are detected automatically.
-
-Commands run in the native shell for the current operating system. On Windows, RelayCode uses strict non-interactive PowerShell and treats both cmdlet and native-program failures as failures; on macOS and Linux it uses a non-interactive POSIX shell. Files changed by commands remain visible in Review and can be undone like direct Agent edits.
-
-Agent sessions retain recent turns, so follow-ups such as “continue” preserve the current task context. While a provider is silent, the activity timeline shows elapsed wait time; the inactivity limit is configurable with `nineRouter.agentInactivityTimeoutSeconds`.
-
-## Permissions and safety
-
-RelayCode offers three approval levels:
-
-- **Ask for approval** — confirm actions before the Agent performs them.
-- **Allow edits** — permit workspace edits while retaining safeguards for riskier operations.
-- **Full access** — allow file edits and commands without repeated prompts. Enabling it always requires confirmation.
-
-Important safeguards:
-
-- VS Code Workspace Trust is required for Agent, terminal and MCP execution.
-- A deny list blocks configured destructive command fragments even in Full access.
-- Git repositories receive a background checkpoint immediately before the first file mutation when possible.
-- Pending changes stay reviewable and can be recovered after an IDE reload.
-- Provider and MCP credentials are stored in VS Code `SecretStorage`.
-
-## MCP
-
-MCP lets the Agent work with external tools such as design systems, issue trackers, documentation, browsers and databases.
-
-RelayCode supports:
-
-- Browser OAuth when the MCP server allows dynamic client registration.
-- API-key and bearer-token authentication.
-- Streamable HTTP MCP servers.
-- Local stdio MCP servers with separately stored environment secrets.
-
-Some providers restrict OAuth to approved applications. In those cases, use the provider's desktop MCP server, API-key flow or a manually registered OAuth application.
+RelayCode is an assistant, not a replacement for code review. Check diffs, commands, generated assets, and provider output before shipping production changes.
 
 ## Privacy
 
-- RelayCode does not operate an analytics service.
-- Prompts and selected context are sent only to the active provider.
-- MCP input is sent only to MCP servers you configured.
-- Credentials are kept in `SecretStorage` and excluded from diagnostics.
-- Chat history, telemetry and pending reviews remain on the local machine.
+- RelayCode does not operate its own analytics service.
+- Prompts and selected context are sent to the active provider you choose.
+- MCP input is sent only to MCP servers you configure.
+- Provider and MCP credentials are stored in `SecretStorage`.
+- Credentials are excluded from diagnostic exports.
+- Chat history, telemetry, and pending reviews remain on the local machine.
 
-Read the complete policy in <a href="https://github.com/hungson1002/RelayCode/blob/main/PRIVACY.md">PRIVACY.md</a>.
+Read the full [privacy policy](PRIVACY.md).
+
+## Configuration
+
+Settings are available under the `nineRouter.*` namespace. Important options include:
+
+| Setting | Purpose |
+| --- | --- |
+| `nineRouter.provider` | Default provider type. |
+| `nineRouter.endpoint` | OpenAI-compatible endpoint for the active provider. |
+| `nineRouter.defaultMode` | Start in Chat or Agent mode. |
+| `nineRouter.defaultModel` | Select a model automatically at startup. |
+| `nineRouter.fallbackModels` | Ordered fallback models when the selected model fails. |
+| `nineRouter.planBeforeRun` | Ask Agent to provide a short plan before tools. |
+| `nineRouter.autoValidateChanges` | Run the nearest project validation after edits. |
+| `nineRouter.confirmFallback` | Ask before switching models. |
+| `nineRouter.commandAllowList` | Optional command prefixes Agent may run. |
+| `nineRouter.commandDenyList` | Command fragments Agent must never run. |
+| `nineRouter.agentInactivityTimeoutSeconds` | Stop a request after prolonged inactivity. |
+| `nineRouter.contextMaxChars` | Maximum context sent before compaction. |
+| `nineRouter.monthlyCostLimit` | Optional estimated monthly cost limit. |
+| `nineRouter.language` | English or Vietnamese interface. |
 
 ## Current limitations
 
+- Agent quality and tool support depend on the selected model and provider.
 - Cloud cost estimates require input/output prices in the provider profile.
-- Model checks make a minimal request and may consume quota.
+- Model health checks use a small request and may consume provider quota.
 - OAuth availability depends on each MCP provider's authorization policy.
-- Agent quality and tool support vary by model.
+- Image generation requires an image-capable provider endpoint.
+- Local providers must be running on your machine before RelayCode can use them.
 
 ## Development
 
@@ -188,8 +296,8 @@ npm run build
 npm run package
 ```
 
-The project currently requires Node.js 20+ and VS Code 1.100+.
+The project requires Node.js 20+ and VS Code 1.100+. The release workflow tests on Node.js 24.
 
 ## License
 
-<a href="https://github.com/hungson1002/RelayCode/blob/main/LICENSE">MIT</a>
+[MIT](LICENSE)
