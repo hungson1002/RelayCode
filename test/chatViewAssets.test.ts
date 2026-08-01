@@ -24,16 +24,21 @@ describe('Chat webview assets', () => {
 
   it('renders a safe terminal approval card and a scroll-back activity indicator', () => {
     expect(html).toContain('id="runningScrollIndicator"');
-    expect(html.indexOf('<footer class="composer-shell">')).toBeLessThan(html.indexOf('id="runningScrollIndicator"'));
+    expect(html.indexOf('id="runningScrollIndicator"')).toBeLessThan(html.indexOf('<footer class="composer-shell">'));
     expect(CHAT_VIEW_CONTROLLER).toContain("finishApproval('once')");
     expect(CHAT_VIEW_CONTROLLER).toContain("finishApproval('similar')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("finishApproval('always')");
     expect(CHAT_VIEW_CONTROLLER).toContain("finishApproval('deny')");
     expect(CHAT_VIEW_CONTROLLER).toContain("command.textContent = data.command");
     expect(CHAT_VIEW_CONTROLLER).not.toContain("'<strong>Agent cần quyền</strong><span>' + data.message");
     expect(CHAT_VIEW_STYLES).toContain('.permission-card-v2');
+    expect(CHAT_VIEW_CONTROLLER).toContain("permissionText.className = 'permission-text'");
+    expect(CHAT_VIEW_STYLES).toContain('.permission-card-v2 .permission-text{display:grid;align-content:center');
+    expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link{position:relative!important;top:0!important;align-items:center!important;line-height:inherit!important;vertical-align:baseline!important}');
+    expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link .file-type-icon{align-self:center!important;vertical-align:middle!important;transform:translateY(2px)!important}');
     expect(CHAT_VIEW_STYLES).toContain('.running-scroll-indicator');
-    expect(CHAT_VIEW_STYLES).toContain('.composer-shell>.running-scroll-indicator');
-    expect(CHAT_VIEW_STYLES).toContain('bottom:calc(100% + 8px)');
+    expect(CHAT_VIEW_STYLES).toContain('.console>.running-scroll-indicator');
+    expect(CHAT_VIEW_STYLES).toContain('bottom:132px');
     expect(html).toContain('class="running-scroll-arrow"');
     expect(html).toContain('class="running-scroll-dots"');
     expect(CHAT_VIEW_STYLES).toContain('.running-scroll-indicator.is-running .running-scroll-dots');
@@ -280,18 +285,16 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).not.toContain("element.classList.remove('sweeping')");
   });
 
-  it('keeps chronological activity while compacting technical output after a turn finishes', () => {
+  it('shows live activity but removes progress and technical output after a turn finishes', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function finalizeLiveActivity()');
     expect(CHAT_VIEW_CONTROLLER).toContain('function compactTechnicalHistory(');
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'activityComplete') {\n    finalizeLiveActivity()");
-    expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.agent-activity').forEach((node) => node.remove());");
-    expect(CHAT_VIEW_CONTROLLER).toContain("const technicalNodes = [...turnMessage.querySelectorAll('.terminal-card')]");
+    expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.agent-commentary,.activity-history-summary,.agent-activity,.terminal-card').forEach((node) => node.remove());");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (data.cancelled) discardTechnicalHistory(turnMessage);");
     expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.activity-history-summary,.agent-activity,.terminal-card')");
     expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.message.complete .agent-activity').forEach((node) => node.remove());");
     expect(CHAT_VIEW_CONTROLLER).toContain('function scrollMessagesToBottom()');
     expect(CHAT_VIEW_CONTROLLER).toContain("setRunning(true);\n    scrollMessagesToBottom();");
-    expect(CHAT_VIEW_CONTROLLER).not.toContain("querySelectorAll('.terminal-card').forEach((terminal) => terminal.remove())");
     expect(CHAT_VIEW_CONTROLLER).toContain("type: 'resumeAgent', model: $('model').value");
   });
 
@@ -302,6 +305,19 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain('this.resumingRunId !== recovered.runId');
     expect(providerSource).toContain('activeRunAlreadyFinalized(recoveredRun, sessions)');
     expect(providerSource).toContain('this.persistActiveRun({ ...activeRun, answer }, runGeneration)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('messages').querySelector('.empty')?.remove()");
+  });
+
+  it('keeps the typewriter close to provider streaming speed', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('Math.max(4, Math.min(32, Math.ceil(pendingAssistantText.length / 10)))');
+    expect(CHAT_VIEW_CONTROLLER).toContain('typingTimer = setTimeout(tick, 8)');
+  });
+
+  it('deduplicates approval prompts and supports a persistent edit permission', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('item.dataset.approvalKey');
+    expect(providerSource).toContain('private pendingApprovalByKey = new Map<string, Promise<boolean>>()');
+    expect(providerSource).toContain("message.decision === 'always'");
+    expect(providerSource).toContain("globalState.update(PERMISSION_MODE_STATE, 'edit')");
   });
 
   it('keeps resolved history while removing resolved files from the live tray', () => {
@@ -494,15 +510,14 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("type: 'webviewDiagnostic'");
   });
 
-  it('renders a compact Codex-style transcript with expandable trace and terminal details', () => {
+  it('renders Codex-style live trace and keeps only the conclusion after completion', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function setActivityExpanded(');
     expect(CHAT_VIEW_CONTROLLER).toContain('function appendAgentCommentary(');
     expect(CHAT_VIEW_CONTROLLER).toContain('function finalizeLiveActivity(');
     expect(CHAT_VIEW_CONTROLLER).toContain('finalizeLiveActivity();');
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'commentary'");
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'activityComplete'");
-    expect(CHAT_VIEW_CONTROLLER).toContain("activityCopy('đã chạy lệnh', 'ran commands')");
-    expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.agent-activity').forEach((node) => node.remove())");
+    expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.agent-commentary,.activity-history-summary,.agent-activity,.terminal-card').forEach((node) => node.remove())");
     expect(CHAT_VIEW_CONTROLLER).toContain("toggle.className = 'activity-toggle'");
     expect(CHAT_VIEW_CONTROLLER).toContain("trace.className = 'activity-trace'");
     expect(CHAT_VIEW_CONTROLLER).toContain('class="terminal-command"');
@@ -513,6 +528,7 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.terminal-command');
     expect(CHAT_VIEW_STYLES).toContain('.activity-history-summary');
     expect(CHAT_VIEW_STYLES).toContain('.change-summary-copy');
+    expect(CHAT_VIEW_STYLES).toContain('.chat-change-summary{display:block;margin:12px 0 50px');
     expect(providerSource).toContain("type: 'commentary'");
     expect(providerSource).toContain("type: 'activityComplete'");
   });
@@ -535,8 +551,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'turnEnd') {\n    // Never let the cosmetic typing animation own the lifecycle of a turn.");
     expect(CHAT_VIEW_CONTROLLER).toContain("reconcileFinalAssistantText(data.content)");
     expect(providerSource).toContain("content: finalAnswer");
-    expect(CHAT_VIEW_CONTROLLER).toContain('setTimeout(tick, 12)');
-    expect(CHAT_VIEW_CONTROLLER).toContain("const size = pendingAssistantText.length > 600 ? 3 : pendingAssistantText.length > 180 ? 2 : 1;");
+    expect(CHAT_VIEW_CONTROLLER).toContain('setTimeout(tick, 8)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('Math.max(4, Math.min(32, Math.ceil(pendingAssistantText.length / 10)))');
     expect(CHAT_VIEW_CONTROLLER).toContain('pendingTurnEnd = data;');
     expect(CHAT_VIEW_CONTROLLER).toContain("settleTurn(data);");
     expect(CHAT_VIEW_CONTROLLER).toContain("function settleTurn(data) {");

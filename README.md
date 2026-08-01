@@ -57,7 +57,7 @@ Image generation is available in **Agent** mode when the active provider impleme
 
 ### From a release
 
-1. Download `relaycode-1.0.0.vsix` from the [RelayCode releases page](https://github.com/hungson1002/RelayCode/releases).
+1. Download the latest `relaycode-<version>.vsix` from the [RelayCode releases page](https://github.com/hungson1002/RelayCode/releases).
 2. Open VS Code or Antigravity.
 3. Run **Extensions: Install from VSIX…** from the Command Palette.
 4. Select the downloaded file and reload the IDE.

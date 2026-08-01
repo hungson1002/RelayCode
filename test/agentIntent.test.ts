@@ -14,4 +14,20 @@ describe('requiresWorkspaceMutation', () => {
   it('does not treat an explanation as a mutation', () => {
     expect(requiresWorkspaceMutation('Giải thích project này hoạt động như thế nào')).toBe(false);
   });
+
+  it('does not mistake praise or acknowledgement for an edit request', () => {
+    expect(requiresWorkspaceMutation('làm tốt lắm')).toBe(false);
+    expect(requiresWorkspaceMutation('Cảm ơn bạn')).toBe(false);
+    expect(requiresWorkspaceMutation('Được rồi.')).toBe(false);
+  });
+
+  it('respects requests that explicitly prohibit workspace edits', () => {
+    expect(requiresWorkspaceMutation('Đừng sửa file, chỉ giải thích lỗi cho tôi')).toBe(false);
+    expect(requiresWorkspaceMutation('Chỉ kiểm tra code, chưa cần chỉnh gì')).toBe(false);
+  });
+
+  it('still detects explicit requests that use the Vietnamese verb làm', () => {
+    expect(requiresWorkspaceMutation('Làm cho tôi giao diện gọn hơn')).toBe(true);
+    expect(requiresWorkspaceMutation('Hãy làm UI giống Codex')).toBe(true);
+  });
 });

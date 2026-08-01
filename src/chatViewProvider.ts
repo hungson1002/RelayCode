@@ -121,6 +121,7 @@ interface StoredGoal {
 interface PendingApproval {
   resolve: (allow: boolean) => void;
   similarRule?: string;
+  key: string;
 }
 
 interface ApprovalPresentation {
@@ -141,6 +142,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private routerProcess = new RouterProcessManager();
   private pendingAttachments: Array<{ path: string; name: string; mimeType: string; size: number }> = [];
   private approvals = new Map<string, PendingApproval>();
+  private pendingApprovalByKey = new Map<string, Promise<boolean>>();
   private readonly similarApprovalRules = new Set<string>();
   private toolFailureResolvers = new Map<string, (decision: AgentToolFailureDecision) => void>();
   private changes = new Map<string, ChangeState>();
@@ -384,7 +386,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           await this.clearActiveRun(recoveredRun.runId);
           await this.post({ type: 'agentRecoveryDismissed' });
         } else if (recoveredRun) {
-          await this.post({ type: 'recoveredTurn', ...recoveredRun });
+          // Keep an interrupted run out of the initial transcript. The user
+          // can reveal it from Chat history when they actually want to resume.
         }
         if (!this.context.globalState.get<boolean>(ONBOARDING_STATE, false)) {
           await this.context.globalState.update(ONBOARDING_STATE, true);
@@ -398,9 +401,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.post({ type: 'providerKeyState', provider: message.provider, hasApiKey });
       } else if (message.type === 'approval') {
         const approval = this.approvals.get(message.id);
+        if (message.decision === 'always') {
+          await this.context.globalState.update(PERMISSION_MODE_STATE, 'edit');
+          await this.post({ type: 'permissionMode', mode: 'edit' });
+        }
         if (approval && message.decision === 'similar' && approval.similarRule) {
           this.similarApprovalRules.add(approval.similarRule);
         }
+        if (approval) this.pendingApprovalByKey.delete(approval.key);
         approval?.resolve(message.decision !== 'deny');
         this.approvals.delete(message.id);
       } else if (message.type === 'resolveToolFailure') {
@@ -414,6 +422,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           resolveFailure(decision);
           this.toolFailureResolvers.delete(message.id);
         }
+      } else if (message.type === 'showAgentRecovery') {
+        const recovered = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
+        if (recovered) await this.post({ type: 'recoveredTurn', ...recovered });
       } else if (message.type === 'resumeAgent') {
         const recovered = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
         if (recovered?.checkpoint && recovered.mode !== 'chat' && !this.abortController && this.resumingRunId !== recovered.runId) {
@@ -1971,9 +1982,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (presentation.similarRule && this.similarApprovalRules.has(presentation.similarRule)) {
       return Promise.resolve(true);
     }
+    const key = [presentation.kind, presentation.message, presentation.command || ''].join('|').trim();
+    const existing = this.pendingApprovalByKey.get(key);
+    if (existing) return existing;
     const id = `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    return new Promise((resolve) => {
-      this.approvals.set(id, { resolve, similarRule: presentation.similarRule });
+    const pending = new Promise<boolean>((resolve) => {
+      this.approvals.set(id, { resolve, similarRule: presentation.similarRule, key });
       void this.post({
         type: 'approval',
         id,
@@ -1981,12 +1995,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         title: presentation.title,
         message: presentation.message,
         command: presentation.command,
-        allowSimilar: Boolean(presentation.similarRule)
+        allowSimilar: Boolean(presentation.similarRule),
+        allowAlways: true
       });
       setTimeout(() => {
-        if (this.approvals.delete(id)) resolve(false);
+        if (this.approvals.delete(id)) {
+          this.pendingApprovalByKey.delete(key);
+          resolve(false);
+        }
       }, 120_000);
     });
+    this.pendingApprovalByKey.set(key, pending);
+    return pending;
   }
 
   private stopActiveTurn(): void {
@@ -1996,6 +2016,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (controller && !controller.signal.aborted) controller.abort(new Error('Stopped by user.'));
     for (const approval of this.approvals.values()) approval.resolve(false);
     this.approvals.clear();
+    this.pendingApprovalByKey.clear();
     for (const resolveFailure of this.toolFailureResolvers.values()) resolveFailure({ action: 'skip' });
     this.toolFailureResolvers.clear();
     for (const resolveDialog of this.dialogResolvers.values()) resolveDialog({});

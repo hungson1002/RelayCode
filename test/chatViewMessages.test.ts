@@ -24,4 +24,9 @@ describe('chat webview message validation', () => {
     expect(isWebviewMessage({ type: 'getProviderKeyState', provider: 'openai', profileId: 'profile-1' })).toBe(true);
     expect(isWebviewMessage({ type: 'getProviderKeyState', provider: 'unknown' })).toBe(false);
   });
+
+  it('accepts persistent approval decisions', () => {
+    expect(isWebviewMessage({ type: 'approval', id: 'approval-1', decision: 'always' })).toBe(true);
+    expect(isWebviewMessage({ type: 'approval', id: 'approval-1', decision: 'forever' })).toBe(false);
+  });
 });

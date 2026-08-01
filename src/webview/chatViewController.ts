@@ -384,7 +384,9 @@ function queueAssistantText(delta) {
   if (typingTimer) return;
   const tick = () => {
     if (!assistantBody) { pendingAssistantText = ''; typingTimer = 0; return; }
-    const size = pendingAssistantText.length > 600 ? 3 : pendingAssistantText.length > 180 ? 2 : 1;
+    // Keep streaming readable without making the UI lag behind a provider that
+    // has already produced a large chunk (or the complete final answer).
+    const size = Math.max(4, Math.min(32, Math.ceil(pendingAssistantText.length / 10)));
     assistantRawText += pendingAssistantText.slice(0, size);
     pendingAssistantText = pendingAssistantText.slice(size);
     renderMarkdownInto(assistantBody, assistantRawText);
@@ -392,7 +394,7 @@ function queueAssistantText(delta) {
     if (item) item.dataset.rawContent = assistantRawText;
     if (messagesPinnedToBottom) scrollMessagesToBottom();
     else updateRunningScrollIndicator();
-    if (pendingAssistantText) typingTimer = setTimeout(tick, 12);
+    if (pendingAssistantText) typingTimer = setTimeout(tick, 8);
     else {
       typingTimer = 0;
       if (pendingTurnEnd) {
@@ -1021,24 +1023,9 @@ function compactTechnicalHistory(turnMessage) {
   // Live activity belongs to the running state only. Final file changes have
   // their own review card, so retaining activity rows after completion is both
   // redundant and visually indistinguishable from a stuck Agent.
-  turnMessage.querySelectorAll('.agent-activity').forEach((node) => node.remove());
-  const technicalNodes = [...turnMessage.querySelectorAll('.terminal-card')];
-  if (!technicalNodes.length) return;
-
-  const details = document.createElement('details');
-  details.className = 'activity-history-summary';
-  const summary = document.createElement('summary');
-  summary.innerHTML = '<span class="activity-history-icon" aria-hidden="true">' + uiIcon('terminalWindow') + '</span><span class="activity-history-copy"></span><span class="activity-history-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
-  summary.querySelector('.activity-history-copy').textContent = activityCopy('đã chạy lệnh', 'ran commands');
-  const body = document.createElement('div');
-  body.className = 'activity-history-details';
-  technicalNodes[0].before(details);
-  details.append(summary, body);
-  technicalNodes.forEach((node) => body.append(node));
-  details.addEventListener('toggle', () => {
-    const caret = details.querySelector('.activity-history-caret');
-    if (caret) caret.innerHTML = uiIcon(details.open ? 'caretDown' : 'caretRight');
-  });
+  // Progress and tool output are useful while the task is running. Once it is
+  // complete, keep only the final answer and the dedicated file-change card.
+  turnMessage.querySelectorAll('.agent-commentary,.activity-history-summary,.agent-activity,.terminal-card').forEach((node) => node.remove());
 }
 
 function discardTechnicalHistory(turnMessage) {
@@ -2115,6 +2102,7 @@ $('historyToggle').addEventListener('click', (event) => {
   event.stopPropagation();
   const opening = $('historyPanel').classList.contains('hidden');
   if (opening) {
+    vscode.postMessage({ type: 'showAgentRecovery' });
     historyExpanded = false;
     renderHistory(allSessions);
     openFloatingSurface('historyPanel');
@@ -2730,6 +2718,7 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'recoveredTurn') {
     if (running) return;
     document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
+    $('messages').querySelector('.empty')?.remove();
     setRunning(false);
     const item = document.createElement('article'); item.className = 'recovery-card';
     item.dataset.runId = data.runId || '';
@@ -2894,6 +2883,10 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'approval') {
     const item = document.createElement('article');
     item.className = 'permission-card permission-card-v2';
+    item.dataset.approvalKey = [data.kind, data.title, data.message, data.command || ''].join('|');
+    const duplicate = [...document.querySelectorAll('.permission-card-v2')]
+      .find((card) => card.dataset.approvalKey === item.dataset.approvalKey);
+    if (duplicate) return;
 
     const heading = document.createElement('header');
     const icon = document.createElement('span');
@@ -2901,13 +2894,17 @@ window.addEventListener('message', ({ data }) => {
     icon.innerHTML = uiIcon(data.kind === 'command' ? 'terminalWindow' : 'shieldWarning');
     const title = document.createElement('span');
     title.className = 'permission-title';
-    title.textContent = data.title || (data.kind === 'command' ? 'Terminal' : 'RelayCode');
-    heading.append(icon, title);
-
+    title.textContent = data.title || (data.kind === 'command'
+      ? 'Terminal'
+      : (language === 'en' ? 'Permission required' : 'Cần bạn cho phép'));
     const copy = document.createElement('p');
     copy.className = 'permission-copy';
     copy.textContent = data.message || 'RelayCode needs your permission.';
-    item.append(heading, copy);
+    const permissionText = document.createElement('div');
+    permissionText.className = 'permission-text';
+    permissionText.append(title, copy);
+    heading.append(icon, permissionText);
+    item.append(heading);
 
     if (data.command) {
       const command = document.createElement('pre');
@@ -2921,14 +2918,14 @@ window.addEventListener('message', ({ data }) => {
     const deny = document.createElement('button');
     deny.type = 'button';
     deny.className = 'permission-deny';
-    deny.textContent = 'Deny';
+    deny.textContent = language === 'en' ? 'Deny' : 'Từ chối';
 
     const allowWrap = document.createElement('div');
     allowWrap.className = 'permission-allow-wrap';
     const allowOnce = document.createElement('button');
     allowOnce.type = 'button';
     allowOnce.className = 'permission-allow-once';
-    allowOnce.textContent = 'Allow once';
+    allowOnce.textContent = language === 'en' ? 'Allow once' : 'Cho phép';
     allowWrap.append(allowOnce);
 
     const finishApproval = (decision) => {
@@ -2937,28 +2934,47 @@ window.addEventListener('message', ({ data }) => {
       updateRunningScrollIndicator();
     };
 
-    if (data.allowSimilar) {
+    if (data.allowSimilar || data.allowAlways) {
       const menuTrigger = document.createElement('button');
       menuTrigger.type = 'button';
       menuTrigger.className = 'permission-menu-trigger';
-      menuTrigger.setAttribute('aria-label', 'More permission options');
+      menuTrigger.setAttribute('aria-label', language === 'en' ? 'More permission options' : 'Tùy chọn cấp quyền');
       menuTrigger.setAttribute('aria-haspopup', 'menu');
       menuTrigger.setAttribute('aria-expanded', 'false');
       menuTrigger.innerHTML = uiIcon('caretDown');
       const allowMenu = document.createElement('div');
       allowMenu.className = 'permission-menu hidden';
       allowMenu.setAttribute('role', 'menu');
-      const similar = document.createElement('button');
-      similar.type = 'button';
-      similar.className = 'permission-similar';
-      similar.setAttribute('role', 'menuitem');
-      const similarLabel = document.createElement('span');
-      similarLabel.textContent = 'Allow similar commands';
-      const similarInfo = document.createElement('span');
-      similarInfo.innerHTML = uiIcon('info');
-      similar.append(similarLabel, similarInfo);
-      similar.title = 'Allow commands with the same executable and subcommand for this chat session';
-      allowMenu.append(similar);
+      if (data.allowSimilar) {
+        const similar = document.createElement('button');
+        similar.type = 'button';
+        similar.className = 'permission-similar';
+        similar.setAttribute('role', 'menuitem');
+        const similarLabel = document.createElement('span');
+        similarLabel.textContent = language === 'en' ? 'Allow similar commands' : 'Cho phép lệnh tương tự';
+        const similarInfo = document.createElement('span');
+        similarInfo.innerHTML = uiIcon('info');
+        similar.append(similarLabel, similarInfo);
+        similar.title = language === 'en'
+          ? 'Allow commands with the same executable and subcommand for this chat session'
+          : 'Cho phép các lệnh cùng loại trong cuộc trò chuyện này';
+        allowMenu.append(similar);
+        similar.addEventListener('click', () => finishApproval('similar'));
+      }
+      if (data.allowAlways) {
+        const always = document.createElement('button');
+        always.type = 'button';
+        always.className = 'permission-always';
+        always.setAttribute('role', 'menuitem');
+        const alwaysLabel = document.createElement('span');
+        alwaysLabel.textContent = language === 'en' ? 'Always allow file edits' : 'Luôn cho phép sửa file';
+        const alwaysInfo = document.createElement('span');
+        alwaysInfo.innerHTML = uiIcon('check');
+        always.append(alwaysLabel, alwaysInfo);
+        always.title = language === 'en' ? 'Allow file edits without asking again' : 'Cho phép sửa file mà không hỏi lại';
+        allowMenu.append(always);
+        always.addEventListener('click', () => finishApproval('always'));
+      }
       allowWrap.append(menuTrigger, allowMenu);
       menuTrigger.addEventListener('click', (event) => {
         event.stopPropagation();
@@ -2966,7 +2982,6 @@ window.addEventListener('message', ({ data }) => {
         allowMenu.classList.toggle('hidden', !opening);
         menuTrigger.setAttribute('aria-expanded', String(opening));
       });
-      similar.addEventListener('click', () => finishApproval('similar'));
     }
 
     actions.append(deny, allowWrap);

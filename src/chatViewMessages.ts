@@ -7,9 +7,10 @@ export type WebviewMessage =
   | { type: 'ready' }
   | { type: 'webviewDiagnostic'; level: 'error' | 'rejection'; message: string }
   | { type: 'setLanguage'; language: 'vi' | 'en' }
-  | { type: 'approval'; id: string; decision: 'deny' | 'once' | 'similar' }
+  | { type: 'approval'; id: string; decision: 'deny' | 'once' | 'similar' | 'always' }
   | { type: 'resolveToolFailure'; id: string; action: 'retry' | 'skip' | 'change-model'; model?: string }
   | { type: 'resumeAgent'; model?: string }
+  | { type: 'showAgentRecovery' }
   | { type: 'discardAgentRun' }
   | { type: 'pauseGoal' }
   | { type: 'resumeGoal'; model?: string }
@@ -89,7 +90,7 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
     'clearTelemetry', 'getMcpServers', 'setupLocalProvider',
     'stopTurn', 'startRouter', 'retryConnection', 'checkRouterConnection',
     'openDashboard', 'deleteAllSessions', 'disconnectProvider', 'newThread',
-    'refreshSkills', 'openSettings'
+    'refreshSkills', 'openSettings', 'showAgentRecovery'
   ]);
   if (noPayload.has(value.type as string)) return true;
 
@@ -103,7 +104,7 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
     case 'getProviderKeyState':
       return isProviderKind(value.provider) && optionalString(value.profileId, 300);
     case 'approval':
-      return isString(value.id, 200) && isOneOf(value.decision, ['deny', 'once', 'similar']);
+      return isString(value.id, 200) && isOneOf(value.decision, ['deny', 'once', 'similar', 'always']);
     case 'resolveToolFailure':
       return isString(value.id, 200)
         && isOneOf(value.action, ['retry', 'skip', 'change-model'])

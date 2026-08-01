@@ -109,13 +109,13 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
         <p>Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.</p>
       </div>
     </div>
+    <button id="runningScrollIndicator" class="running-scroll-indicator hidden" type="button" aria-label="Cuộn xuống cuối cuộc trò chuyện">
+      <span class="running-scroll-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <svg class="running-scroll-arrow" aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M12 5v14m0 0 6-6m-6 6-6-6"/></svg>
+    </button>
     <section id="collapsedChanges" class="collapsed-changes hidden"><span id="collapsedChangeCount">0 files changed</span><button id="expandChanges" type="button">Xem</button></section>
     <section id="changeTray" class="change-tray hidden"><div id="changeList"></div><div class="change-tray-footer"><span id="changeCount">0 files changed</span><button id="hideChanges" class="tray-button">Ẩn</button><button id="undoAllChanges" class="tray-button">Undo all</button><button id="acceptAllChanges" class="tray-accept">Accept all</button></div></section>
     <footer class="composer-shell">
-      <button id="runningScrollIndicator" class="running-scroll-indicator hidden" type="button" aria-label="Cuộn xuống cuối cuộc trò chuyện">
-        <span class="running-scroll-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-        <svg class="running-scroll-arrow" aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M12 5v14m0 0 6-6m-6 6-6-6"/></svg>
-      </button>
       <section id="goalRail" class="goal-rail hidden" aria-live="polite">
         <span id="goalState" class="goal-state" aria-hidden="true"></span>
         <div class="goal-copy"><strong id="goalTitle">Tác vụ dài</strong><span id="goalStatus">Sẵn sàng</span></div>
