@@ -203,8 +203,7 @@ export class RouterProcessManager implements vscode.Disposable {
     });
     const child = this.process;
     closeSync(logFd);
-    child.unref();
-    this.output.appendLine(`9Router detached with PID ${child.pid ?? 'unknown'}. Log: ${logPath}`);
+    this.output.appendLine(`9Router started with PID ${child.pid ?? 'unknown'}. Log: ${logPath}`);
     child.once('error', (error) => {
       this.recentErrors.push(error.message);
     });
@@ -213,7 +212,15 @@ export class RouterProcessManager implements vscode.Disposable {
     });
 
     onProgress('waiting');
-    await this.waitUntilReady(healthUrl, child);
+    try {
+      await this.waitUntilReady(healthUrl, child);
+    } catch (error) {
+      await terminateSpawnedProcess(child);
+      if (this.process === child) this.process = undefined;
+      throw error;
+    }
+    child.unref();
+    this.output.appendLine(`9Router is ready and detached with PID ${child.pid ?? 'unknown'}.`);
     onProgress('ready');
     return dashboardUrl;
   }
@@ -288,5 +295,29 @@ export class RouterProcessManager implements vscode.Disposable {
     // IDE must not stop the local gateway; only an explicit user action may do so.
     this.process = undefined;
     this.output.dispose();
+  }
+}
+
+async function terminateSpawnedProcess(child: ChildProcess): Promise<void> {
+  if (!child.pid || child.exitCode !== null) return;
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve) => {
+      const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore'
+      });
+      killer.once('error', () => {
+        child.kill();
+        resolve();
+      });
+      killer.once('exit', () => resolve());
+      setTimeout(resolve, 2_000);
+    });
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
   }
 }

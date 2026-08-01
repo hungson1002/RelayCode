@@ -6,6 +6,10 @@ export interface DiffHunk {
   updatedCount: number;
   before: string[];
   after: string[];
+  originalTrailingNewline?: boolean;
+  updatedTrailingNewline?: boolean;
+  originalEol?: '\n' | '\r\n';
+  updatedEol?: '\n' | '\r\n';
 }
 
 type Op = { type: 'equal' | 'delete' | 'insert'; line: string };
@@ -42,6 +46,12 @@ export function countLineChanges(original: Uint8Array, updated: Uint8Array): Lin
 }
 
 export function createDiffHunks(original: Uint8Array, updated: Uint8Array): DiffHunk[] {
+  const originalText = new TextDecoder().decode(original);
+  const updatedText = new TextDecoder().decode(updated);
+  const originalTrailingNewline = originalText.endsWith('\n');
+  const updatedTrailingNewline = updatedText.endsWith('\n');
+  const originalEol = originalText.includes('\r\n') ? '\r\n' : '\n';
+  const updatedEol = updatedText.includes('\r\n') ? '\r\n' : '\n';
   const before = lines(original);
   const after = lines(updated);
   const ops = diff(before, after);
@@ -79,7 +89,29 @@ export function createDiffHunks(original: Uint8Array, updated: Uint8Array): Diff
       updatedStart,
       updatedCount: added.length,
       before: removed,
-      after: added
+      after: added,
+      originalTrailingNewline,
+      updatedTrailingNewline,
+      originalEol,
+      updatedEol
+    });
+  }
+  if (!hunks.length && (
+    originalTrailingNewline !== updatedTrailingNewline
+    || originalEol !== updatedEol
+  )) {
+    hunks.push({
+      id: 0,
+      originalStart: before.length,
+      originalCount: 0,
+      updatedStart: after.length,
+      updatedCount: 0,
+      before: [],
+      after: [],
+      originalTrailingNewline,
+      updatedTrailingNewline,
+      originalEol,
+      updatedEol
     });
   }
   return hunks;
@@ -88,13 +120,13 @@ export function createDiffHunks(original: Uint8Array, updated: Uint8Array): Diff
 export function applyForward(original: Uint8Array, hunk: DiffHunk): Uint8Array {
   const content = lines(original);
   content.splice(hunk.originalStart, hunk.originalCount, ...hunk.after);
-  return encode(content, original);
+  return encode(content, original, hunk.updatedTrailingNewline, hunk.updatedEol);
 }
 
 export function applyReverse(updated: Uint8Array, hunk: DiffHunk): Uint8Array {
   const content = lines(updated);
   content.splice(hunk.updatedStart, hunk.updatedCount, ...hunk.before);
-  return encode(content, updated);
+  return encode(content, updated, hunk.originalTrailingNewline, hunk.originalEol);
 }
 
 function diff(before: string[], after: string[]): Op[] {
@@ -161,9 +193,14 @@ function lines(value: Uint8Array): string[] {
   return new TextDecoder().decode(value).replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
 }
 
-function encode(value: string[], reference: Uint8Array): Uint8Array {
+function encode(
+  value: string[],
+  reference: Uint8Array,
+  trailingOverride?: boolean,
+  eolOverride?: '\n' | '\r\n'
+): Uint8Array {
   const source = new TextDecoder().decode(reference);
-  const trailing = source.endsWith('\n');
-  const eol = source.includes('\r\n') ? '\r\n' : '\n';
+  const trailing = trailingOverride ?? source.endsWith('\n');
+  const eol = eolOverride ?? (source.includes('\r\n') ? '\r\n' : '\n');
   return new TextEncoder().encode(value.join(eol) + (trailing && value.length ? eol : ''));
 }

@@ -19,6 +19,64 @@ const html = renderChatViewHtml({
 describe('Chat webview assets', () => {
   it('contains valid standalone controller JavaScript', () => {
     expect(() => new Function(CHAT_VIEW_CONTROLLER)).not.toThrow();
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('currentLanguage');
+  });
+
+  it('renders a safe terminal approval card and a scroll-back activity indicator', () => {
+    expect(html).toContain('id="runningScrollIndicator"');
+    expect(html.indexOf('<footer class="composer-shell">')).toBeLessThan(html.indexOf('id="runningScrollIndicator"'));
+    expect(CHAT_VIEW_CONTROLLER).toContain("finishApproval('once')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("finishApproval('similar')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("finishApproval('deny')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("command.textContent = data.command");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("'<strong>Agent cần quyền</strong><span>' + data.message");
+    expect(CHAT_VIEW_STYLES).toContain('.permission-card-v2');
+    expect(CHAT_VIEW_STYLES).toContain('.running-scroll-indicator');
+    expect(CHAT_VIEW_STYLES).toContain('.composer-shell>.running-scroll-indicator');
+    expect(CHAT_VIEW_STYLES).toContain('bottom:calc(100% + 8px)');
+    expect(html).toContain('class="running-scroll-arrow"');
+    expect(html).toContain('class="running-scroll-dots"');
+    expect(CHAT_VIEW_STYLES).toContain('.running-scroll-indicator.is-running .running-scroll-dots');
+    expect(CHAT_VIEW_STYLES).toContain('.running-scroll-indicator.is-running .running-scroll-arrow');
+    expect(CHAT_VIEW_STYLES).toContain('@media(prefers-reduced-motion:reduce){.running-scroll-dots');
+    expect(CHAT_VIEW_CONTROLLER).toContain("indicator.classList.toggle('hidden', atBottom)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("indicator.classList.toggle('is-running', running)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('messages').addEventListener('scroll'");
+  });
+
+  it('does not report temporary provider rate limits as broken models', () => {
+    expect(providerSource).toContain("status: limited ? 'limited' : 'error'");
+    expect(providerSource).toContain('Math.min(3, this.models.length)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("healthStatus === 'limited'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('Tạm giới hạn · thử lại sau');
+    expect(CHAT_VIEW_STYLES).toContain('.model-health.limited:before');
+  });
+
+  it('keeps provider status and models synchronized after connecting', () => {
+    expect(html).toContain('id="connectionBadge"');
+    expect(html).toContain('id="connectionBrand"');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function updateConnectionBadge(');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('setupProviderMark').innerHTML = brandIcon(meta.brand, meta.label)");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function scheduleModelListRecovery()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'retryConnection' })");
+    expect(CHAT_VIEW_CONTROLLER).toContain("data.connected ? 'ready' : routerReady ? 'running'");
+    expect(providerSource.indexOf("type: 'configSaved'")).toBeLessThan(providerSource.indexOf('await this.refreshConnection(true);'));
+    expect(CHAT_VIEW_STYLES).toContain('#connectionBadge.route-meta');
+    expect(CHAT_VIEW_CONTROLLER).toContain("let language = $('uiLanguage').value");
+    expect(CHAT_VIEW_CONTROLLER).toContain("language = $('uiLanguage').value");
+  });
+
+  it('normalizes a tampered language value before rendering HTML attributes', () => {
+    const unsafe = renderChatViewHtml({
+      language: '<script>bad()</script>' as 'vi',
+      nonce: 'safe',
+      cspSource: 'vscode-webview://safe',
+      styles: '',
+      controller: ''
+    });
+    expect(unsafe).toContain('<html lang="vi">');
+    expect(unsafe).not.toContain('<script>bad()</script>');
   });
 
   it('opens file review in an IDE diff tab without an extension popup', () => {
@@ -29,9 +87,12 @@ describe('Chat webview assets', () => {
     expect(html).not.toContain('id="reviewHunkList"');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('function renderChangeReview(data)');
     expect(providerSource).toContain("executeCommand(\n      'vscode.diff'");
-    expect(providerSource).toContain("if (!change.existed) {\n      const previewUri = change.staged ? afterUri : vscode.Uri.file(change.path);");
-    expect(providerSource).toContain("executeCommand('vscode.open', previewUri, { preview: true })");
+    expect(providerSource).toContain('beforeUri,\n      afterUri');
+    expect(providerSource).not.toContain("executeCommand('vscode.open', previewUri, { preview: true })");
     expect(providerSource).toContain('registerTextDocumentContentProvider(CHANGE_REVIEW_SCHEME');
+    expect(providerSource).toContain("executeCommand('editor.action.toggleWordWrap')");
+    expect(CHAT_VIEW_CONTROLLER).toContain('DSML');
+    expect(CHAT_VIEW_CONTROLLER).toContain('looksLikeProse');
   });
 
   it('defines every element ID accessed through the controller helper exactly once', () => {
@@ -45,8 +106,12 @@ describe('Chat webview assets', () => {
 
   it('keeps the connection center reachable and coalesces progressive path analysis', () => {
     expect(html).toContain('id="topConnect"');
+    expect(html).toContain('id="connectionBadge" class="route-meta" title="Trạng thái provider hiện tại" role="button" tabindex="0"');
     expect(html).toContain('id="backToChat"');
     expect(html).toContain('id="setupCheckResult"');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function openConnectionCenter()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('topConnect').addEventListener('click', openConnectionCenter)");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("if (activeProvider === '9router') {");
     expect(html).not.toContain('id="topDisconnect"');
     expect(CHAT_VIEW_CONTROLLER).toContain('activitySteps.get(info.key)');
     expect(CHAT_VIEW_CONTROLLER).toContain("key: 'edit:' + detail");
@@ -113,6 +178,16 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.toast-stack');
     expect(CHAT_VIEW_CONTROLLER).toContain('let queuedUiDialogs = []');
     expect(CHAT_VIEW_CONTROLLER).toContain('queuedUiDialogs.shift()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("openFloatingSurface('uiDialog')");
+  });
+
+  it('makes chat deletion explicit and derives concise history titles', () => {
+    expect(providerSource).toContain("title: 'Agent vẫn đang chạy'");
+    expect(providerSource).toContain("await this.deleteSession(message.id)");
+    expect(providerSource).not.toContain("Hãy dừng tác vụ đang chạy trước khi xóa cuộc trò chuyện.");
+    expect(providerSource).toContain('title: smartSessionTitle(firstPrompt)');
+    expect(providerSource).toContain("turns.find((turn) => turn.role === 'user')");
+    expect(providerSource).toContain('.sort((left, right) => right.updatedAt - left.updatedAt)');
   });
 
   it('keeps MCP visible through authentication and reports the connection outcome', () => {
@@ -258,6 +333,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("return brandIcons[kind === 'stitch' ? 'google' : kind] || brandIcons.mcp");
     expect(CHAT_VIEW_STYLES).toContain('.model-brand .brand-symbol');
     expect(CHAT_VIEW_STYLES).toContain('.provider-brand-slot');
+    expect(CHAT_VIEW_STYLES).toContain('.model-option>.model-brand>.brand-symbol{display:grid!important;place-items:center!important;transform:none!important}');
+    expect(CHAT_VIEW_STYLES).not.toContain('.model-option>.model-brand>.brand-symbol{transform:translateX(-1px)}');
   });
 
   it('provides Codex-style goal controls and a follow-up queue', () => {
@@ -286,6 +363,14 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function renderUserPrompt(body, content)');
     expect(CHAT_VIEW_CONTROLLER).toContain("chip.className = 'sent-prompt-token ' + token.kind");
     expect(CHAT_VIEW_STYLES).toContain('.sent-prompt-token.skill');
+  });
+
+  it('keeps permission and model controls compact on narrow sidebars', () => {
+    expect(CHAT_VIEW_STYLES).toContain('.composer-actions .mode-trigger:after,.composer-actions .perm-arrow{display:none!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.composer-actions .perm-wrap{display:block!important;flex:none!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.composer-actions .model-picker{flex:0 1 auto!important;width:auto!important;max-width:118px!important;');
+    expect(CHAT_VIEW_STYLES).toContain('transform:translateX(var(--perm-menu-shift,0px))!important');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function positionPermissionMenu()');
   });
 
   it('turns pasted links into compact branded composer tokens', () => {
@@ -362,13 +447,51 @@ describe('Chat webview assets', () => {
   });
 
   it('opens Chat first and reconnects the saved provider without gating the UI', () => {
-    expect(CHAT_VIEW_CONTROLLER).toContain("} else if (data.type === 'bootstrap') {\n    // Chat is the primary surface.");
+    expect(CHAT_VIEW_CONTROLLER).toContain("} else if (data.type === 'bootstrap') {");
+    expect(CHAT_VIEW_CONTROLLER).toContain('// Chat is the primary surface.');
     expect(CHAT_VIEW_CONTROLLER).toContain("if (data.connected && !setupOpenRequested) showSetup(false)");
     expect(CHAT_VIEW_CONTROLLER).not.toContain("if (!data.connected && !setupDismissed) showSetup(true)");
     expect(CHAT_VIEW_CONTROLLER).toContain("$('topConnect').classList.remove('hidden')");
     expect(CHAT_VIEW_CONTROLLER).toContain("$('topConnect').classList.toggle('online', Boolean(data.connected))");
-    expect(providerSource).toContain("if (provider === '9router' && routerRuntime?.state !== 'ready')");
+    expect(providerSource).toContain("if (provider === '9router' && vscode.workspace.isTrusted && routerRuntime?.state !== 'ready')");
+    expect(providerSource).toContain('this.requireTrustedWorkspaceForRouter();');
     expect(providerSource).toContain("await this.routerProcess.ensureRunning(this.endpoint, routerCommand");
+  });
+
+  it('does not block provider and model startup on skill discovery', () => {
+    const readyStart = providerSource.indexOf("} else if (message.type === 'ready') {");
+    const readyEnd = providerSource.indexOf("} else if (message.type === 'getProviderKeyState')", readyStart);
+    const readySource = providerSource.slice(readyStart, readyEnd);
+    expect(readySource).toContain("type: 'bootstrap'");
+    expect(readySource).toContain('await this.refreshConnection(false)');
+    expect(readySource).toContain('void this.refreshSkillsInBackground()');
+    expect(readySource.indexOf("type: 'bootstrap'")).toBeLessThan(readySource.indexOf('await this.refreshConnection(false)'));
+    expect(readySource.indexOf('await this.refreshConnection(false)')).toBeLessThan(readySource.indexOf('void this.refreshSkillsInBackground()'));
+    expect(readySource).not.toContain('await discoverSkills(');
+  });
+
+  it('registers the webview message bridge before HTML can emit ready', () => {
+    const resolveStart = providerSource.indexOf('public resolveWebviewView(view: vscode.WebviewView): void {');
+    const resolveEnd = providerSource.indexOf('\n  public reveal()', resolveStart);
+    const resolveSource = providerSource.slice(resolveStart, resolveEnd);
+    expect(resolveSource.indexOf('registerChatViewMessageHandler(')).toBeGreaterThan(-1);
+    expect(resolveSource.indexOf('view.webview.html =')).toBeGreaterThan(-1);
+    expect(resolveSource.indexOf('registerChatViewMessageHandler(')).toBeLessThan(resolveSource.indexOf('view.webview.html ='));
+  });
+
+  it('retries the startup handshake until bootstrap is acknowledged', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('function requestBootstrap()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'ready' })");
+    expect(CHAT_VIEW_CONTROLLER).toContain('startupReadyTimer = setTimeout(requestBootstrap, 1500)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("} else if (data.type === 'bootstrap') {\n    if (startupReadyTimer) clearTimeout(startupReadyTimer);");
+    expect(CHAT_VIEW_CONTROLLER).toContain('requestBootstrap();');
+  });
+
+  it('initializes provider state from the host when Antigravity drops the ready bridge event', () => {
+    expect(providerSource).toContain("this.output.appendLine('[webview] host startup fallback')");
+    expect(providerSource).toContain("void this.onMessage({ type: 'ready' })");
+    expect(providerSource).toContain('if (this.webviewInitialized) return');
+    expect(CHAT_VIEW_CONTROLLER).toContain("type: 'webviewDiagnostic'");
   });
 
   it('renders a compact Codex-style transcript with expandable trace and terminal details', () => {
@@ -412,8 +535,9 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'turnEnd') {\n    // Never let the cosmetic typing animation own the lifecycle of a turn.");
     expect(CHAT_VIEW_CONTROLLER).toContain("reconcileFinalAssistantText(data.content)");
     expect(providerSource).toContain("content: finalAnswer");
-    expect(CHAT_VIEW_CONTROLLER).toContain('setTimeout(tick, 24)');
-    expect(CHAT_VIEW_CONTROLLER).toContain('pendingTurnEnd = data;\n      releaseCompletedTurnUi(data);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('setTimeout(tick, 12)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("const size = pendingAssistantText.length > 600 ? 3 : pendingAssistantText.length > 180 ? 2 : 1;");
+    expect(CHAT_VIEW_CONTROLLER).toContain('pendingTurnEnd = data;');
     expect(CHAT_VIEW_CONTROLLER).toContain("settleTurn(data);");
     expect(CHAT_VIEW_CONTROLLER).toContain("function settleTurn(data) {");
     expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.message.streaming').forEach");
@@ -424,13 +548,66 @@ describe('Chat webview assets', () => {
     expect(providerSource.match(/type: 'recoveredTurn'/g)).toHaveLength(1);
   });
 
+  it('keeps draft provider diagnostics isolated and presents configuration errors as toasts', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("draft: true,\n    endpoint: $('configEndpoint').value");
+    expect(CHAT_VIEW_CONTROLLER).toContain("profileId: currentProfileId || undefined");
+    expect(CHAT_VIEW_CONTROLLER).toContain("showUiToast({ message: 'Hãy chọn một model trước khi gửi.', tone: 'danger' })");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("appendMessage('assistant', data.message, true)");
+    expect(providerSource).toContain("const draft = options.draft === true");
+    expect(providerSource).toContain("if (!draft) {\n        this.models = models.map");
+    expect(providerSource).toContain("{ type: 'diagnosticsResult', ok: true, draft");
+  });
+
+  it('keeps saved provider keys and only renders models returned by the active provider', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("apiKey: $('configApiKey').value || undefined");
+    expect(CHAT_VIEW_CONTROLLER).toContain("type: 'getProviderKeyState', provider: next");
+    expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'providerKeyState'");
+    expect(providerSource).toContain('this.profileStore.apiKeyFor(savedProfile.id, provider)');
+    expect(providerSource).not.toContain('CUSTOM_MODELS_STATE');
+    expect(providerSource).not.toContain("message.type === 'addCustomModel'");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("'__custom__'");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('· tùy chỉnh');
+    expect(html).not.toContain('id="customModelRow"');
+  });
+
+  it('keeps parenthesized rich links together and rejects whitespace-only model responses', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('class="rich-link-group"');
+    expect(CHAT_VIEW_STYLES).toContain('.rich-link-group{display:inline-flex');
+    expect(CHAT_VIEW_STYLES).toContain('white-space:nowrap');
+    expect(providerSource).toContain('if (!answer.trim()) throw new Error(`Model ${candidate} đã kết thúc nhưng không trả về nội dung.`)');
+    expect(providerSource).toContain('if (answer.trim() || candidate === candidates[candidates.length - 1]) throw lastError;');
+    expect(providerSource).toContain('const completedAnswer = answer.trim();');
+    expect(providerSource).toContain("content: planChatSummary || completedAnswer || 'Agent kết thúc nhưng model không trả về nội dung.'");
+  });
+
   it('can clear all saved chat history without orphaning pending reviews', () => {
     expect(html).toContain('id="clearAllHistory"');
     expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'deleteAllSessions' })");
     expect(providerSource).toContain("message.type === 'deleteAllSessions'");
     expect(providerSource).toContain('private async deleteAllSessions(): Promise<void>');
-    expect(providerSource).toContain('pendingSessionIds.size');
+    expect(providerSource).toContain("title: 'Lịch sử còn file chưa xử lý'");
+    expect(providerSource).toContain("{ id: 'review', label: 'Xem file'");
+    expect(providerSource).toContain("{ id: 'keep', label: 'Giữ tất cả & xóa'");
+    expect(providerSource).toContain("{ id: 'undo', label: 'Hoàn tác tất cả & xóa'");
+    expect(providerSource).toContain('resolvePendingChanges(pendingEntries, choice)');
+    expect(providerSource).toContain('find((session) => pendingSessionIds.has(session.id))');
     expect(providerSource).toContain("globalState.update(CHAT_SESSIONS_STATE, [])");
+  });
+
+  it('lets pending chat deletion review, keep, or undo its files safely', () => {
+    expect(providerSource).toContain("{ id: 'review', label: 'Xem file'");
+    expect(providerSource).toContain("{ id: 'keep', label: 'Giữ thay đổi & xóa'");
+    expect(providerSource).toContain("{ id: 'undo', label: 'Hoàn tác & xóa'");
+    expect(providerSource).toContain("private async resolveSessionChanges(id: string, action: 'keep' | 'undo')");
+    expect(providerSource).toContain('await this.loadSession(id)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('historyPanel').classList.add('hidden')");
+    expect(CHAT_VIEW_STYLES).toContain('.ui-dialog>footer.many');
+  });
+
+  it('orders chat history by latest activity as soon as a new user turn starts', () => {
+    expect(providerSource).toContain('.sort((left, right) => right.updatedAt - left.updatedAt)');
+    expect(providerSource).toContain("this.transcript.push({ role: 'user'");
+    expect(providerSource).toContain('await this.saveSession(message.mode, message.model);');
   });
 
   it('collapses the host sidebar after a deliberate drag below its supported width', () => {

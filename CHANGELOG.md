@@ -1,5 +1,59 @@
 # Changelog
 
+- “Clear all” now offers Review, keep-all-and-delete, or undo-all-and-delete
+  whenever any file change is still pending. Review opens the newest affected
+  conversation, while legacy unbound changes remain visible for resolution.
+- Delete confirmations now close the history popover before opening, and an
+  active Agent run produces an explicit stop dialog instead of a hidden toast.
+  History titles are derived from the conversation goal, remove greetings and
+  filler, preserve common technical acronyms, and update existing entries.
+- Deleting a chat with pending file changes now offers Review, keep-and-delete,
+  or undo-and-delete paths instead of blocking without a next step. Opening an
+  older chat and sending a new message immediately moves it to the top of the
+  history list, which is always ordered by latest activity.
+- Removed leaked DSML tool-call control markers from Agent output, prevented
+  long prose wrapped in stray backticks from becoming oversized inline-code
+  highlights, enabled wrapping when Review opens a diff with wrapping disabled,
+  and instructed Agent writes to preserve paragraphs in prose files.
+- Model availability checks now use the same plain chat-completion probe as
+  9Router instead of inferring tool requirements from model-name prefixes.
+  Slow probes are shown as inconclusive rather than falsely unavailable, and
+  known provider errors follow the selected Vietnamese or English UI language.
+- Connection Center now opens consistently from both the connection action and
+  provider badge for every provider, not only 9Router.
+- Provider API keys are preserved in SecretStorage per profile and provider.
+  Switching provider or reloading keeps the saved key without exposing it back
+  into the password field.
+- Removed custom and stale-model injection from the picker, so the visible list
+  now contains only models returned by the active provider API. Model brand
+  marks are centered inside their icon frames.
+- Added a state-aware scroll-to-bottom control: it keeps the animated dots
+  while Agent is running, becomes a down arrow when the run is idle, and no
+  longer pulls readers away from the position they deliberately scrolled to.
+- Model checks now distinguish temporary rate limits from unavailable models,
+  show a yellow limited state with the actual reason, and use a smaller probe
+  burst to avoid producing false red failures on free providers.
+- Fixed the connection event crashing on an undeclared `language` variable.
+  Successful diagnostics now flow through to the provider badge and model
+  picker instead of leaving the primary UI stuck on "Checking".
+- Added host-driven webview initialization for Antigravity so provider status
+  and models no longer depend on the webview's first bridge message. Startup
+  logs now record the exact loaded version/path and any webview runtime error.
+- Fixed an Antigravity startup race where the webview could emit its one-shot
+  ready signal before RelayCode registered the message listener, leaving the
+  status on "Checking" and the model picker empty indefinitely. The startup
+  handshake now also retries until the host acknowledges it.
+- Fixed Chat startup waiting on a potentially large skill/plugin scan before
+  showing provider status and models. Provider synchronization now completes
+  first while skill discovery continues safely in the background.
+- Fixed connection-state ordering so a successful connection cannot be
+  overwritten by the configuration event. The compact provider badge now
+  reflects the active provider, and model loading retries once if the initial
+  webview sync is incomplete.
+- Anchored the running three-dot control directly above the composer, refined
+  approval cards, and made each completed Agent turn retain its changed-file
+  summary. Review now opens every change, including new files, in a native
+  before/after diff so additions and removals are highlighted by the IDE.
 - Completed turns now include the authoritative final response so Antigravity
   can recover text when incremental stream events are missed. Chat history also
   supports a confirmed “Clear all” action while protecting pending file reviews.

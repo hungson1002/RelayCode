@@ -130,14 +130,14 @@ export function runShellCommand(
     let stderr = '';
     let settled = false;
     let timeout: NodeJS.Timeout | undefined;
-    let stopFallback: NodeJS.Timeout | undefined;
+    let killEscalation: NodeJS.Timeout | undefined;
     let stoppingError: Error | undefined;
 
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
-      if (stopFallback) clearTimeout(stopFallback);
+      if (killEscalation) clearTimeout(killEscalation);
       signal?.removeEventListener('abort', abort);
       if (error) reject(error);
       else resolvePromise(`${stdout}\n${stderr}`.trim().slice(-MAX_CAPTURED_OUTPUT) || 'Command completed.');
@@ -145,8 +145,7 @@ export function runShellCommand(
     const stopTree = (error: Error) => {
       if (settled || stoppingError) return;
       stoppingError = error;
-      terminateProcessTree(child);
-      stopFallback = setTimeout(() => finish(error), 2_000);
+      killEscalation = terminateProcessTree(child);
     };
     const abort = () => stopTree(signal?.reason instanceof Error ? signal.reason : new Error('Command was stopped.'));
     const emit = (stream: 'stdout' | 'stderr', data: Buffer) => {
@@ -170,16 +169,29 @@ export function runShellCommand(
   });
 }
 
-function terminateProcessTree(child: ChildProcess): void {
-  if (!child.pid) return;
+function terminateProcessTree(child: ChildProcess): NodeJS.Timeout | undefined {
+  if (!child.pid) return undefined;
   if (process.platform === 'win32') {
     const killer = spawn('taskkill.exe', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
     killer.on('error', () => child.kill());
-    return;
+    killer.on('exit', (code) => {
+      if (code !== 0 && child.exitCode === null) child.kill();
+    });
+    return setTimeout(() => {
+      if (child.exitCode === null) child.kill('SIGKILL');
+    }, 2_000);
   }
   try {
     process.kill(-child.pid, 'SIGTERM');
   } catch {
     child.kill('SIGTERM');
   }
+  return setTimeout(() => {
+    if (child.exitCode !== null) return;
+    try {
+      process.kill(-child.pid!, 'SIGKILL');
+    } catch {
+      child.kill('SIGKILL');
+    }
+  }, 1_200);
 }

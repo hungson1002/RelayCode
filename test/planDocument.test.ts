@@ -38,6 +38,18 @@ describe('Implementation Plan document', () => {
     expect(html).not.toContain('<h2>Upgrade the application</h2>');
   });
 
+  it('escapes a closing script tag inside the plan data payload', () => {
+    const html = renderPlanDocumentHtml({ cspSource: 'vscode-webview://plan-test' }, {
+      title: 'Safe plan',
+      prompt: 'Check escaping',
+      plan: '</script><script>bad()</script>',
+      createdAt: Date.now(),
+      language: 'en'
+    });
+    expect(html).toContain('\\u003c/script>');
+    expect(html).not.toContain('const plan="</script>');
+  });
+
   it('uses the first plan heading as the editor title', () => {
     expect(planDocumentTitle('# Delivery plan\n\nDetails', 'Fallback prompt')).toBe('Delivery plan');
     expect(planDocumentTitle('No heading', 'Fallback prompt')).toBe('Fallback prompt');

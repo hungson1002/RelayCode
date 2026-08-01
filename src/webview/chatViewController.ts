@@ -3,6 +3,17 @@ import { UI_ICONS } from '../uiIcons';
 
 export const CHAT_VIEW_CONTROLLER = String.raw`
 const vscode = acquireVsCodeApi();
+window.addEventListener('error', (event) => {
+  vscode.postMessage({
+    type: 'webviewDiagnostic',
+    level: 'error',
+    message: String(event.message || 'Unknown webview error') + ' @ ' + String(event.lineno || 0) + ':' + String(event.colno || 0)
+  });
+});
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason instanceof Error ? event.reason.stack || event.reason.message : String(event.reason || 'Unknown rejected promise');
+  vscode.postMessage({ type: 'webviewDiagnostic', level: 'rejection', message: reason.slice(0, 4000) });
+});
 const $ = (id) => document.getElementById(id);
 let narrowCollapseTimer = 0;
 let narrowCollapseArmed = false;
@@ -97,13 +108,19 @@ $('historyToggleIcon').innerHTML = uiIcon('chatCircle');
 $('metricsToggleIcon').innerHTML = uiIcon('pulse');
 $('settingsIcon').innerHTML = uiIcon('gear');
 $('uiLanguage').value = document.body.dataset.language === 'en' ? 'en' : 'vi';
+let language = $('uiLanguage').value;
 $('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
 $('uiLanguage').addEventListener('change', () => {
+  language = $('uiLanguage').value;
   $('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
   vscode.postMessage({ type: 'setLanguage', language: $('uiLanguage').value });
 });
 let mode = 'agent';
 let running = false;
+let messagesPinnedToBottom = true;
+let startupReadyTimer = 0;
+let modelListRecoveryTimer = 0;
+let modelListRecoveryRequested = false;
 let assistantBody = null;
 let launchingRouter = false;
 let changeSummary = null;
@@ -119,7 +136,6 @@ let pendingTurnEnd = null;
 let currentProfileId = '';
 let profiles = [];
 let modelHealth = {};
-let providerChanged = false;
 let allSessions = [];
 let historyExpanded = false;
 let changesHidden = false;
@@ -242,6 +258,7 @@ function renderUiDialog(data) {
 
   const actions = $('uiDialogActions');
   actions.replaceChildren();
+  actions.classList.toggle('many', (data.actions || []).length > 2);
   for (const action of data.actions || []) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -259,7 +276,7 @@ function renderUiDialog(data) {
     });
     actions.append(button);
   }
-  backdrop.classList.remove('hidden');
+  openFloatingSurface('uiDialog');
   requestAnimationFrame(() => {
     if (data.input) {
       input.focus();
@@ -272,6 +289,9 @@ function renderUiDialog(data) {
 }
 
 function showUiToast(data) {
+  const duplicate = [...$('toastStack').querySelectorAll('.ui-toast p')]
+    .find((item) => item.textContent === String(data.message || ''));
+  if (duplicate) return;
   const toast = document.createElement('article');
   toast.className = 'ui-toast ' + (data.tone || 'neutral');
   toast.innerHTML = '<span aria-hidden="true">' + uiIcon(data.tone === 'danger' ? 'warning' : data.tone === 'success' ? 'checkCircle' : 'info') + '</span><p></p><button type="button" aria-label="Đóng">' + uiIcon('x') + '</button>';
@@ -326,26 +346,53 @@ function flushAssistantText() {
 
 function scrollMessagesToBottom() {
   const messageList = $('messages');
+  messagesPinnedToBottom = true;
   messageList.scrollTop = messageList.scrollHeight;
+  updateRunningScrollIndicator();
   // Webview layout can grow after Markdown, activity, and file icons settle.
   requestAnimationFrame(() => {
     messageList.scrollTop = messageList.scrollHeight;
+    updateRunningScrollIndicator();
   });
 }
+
+function messagesAreNearBottom() {
+  const messageList = $('messages');
+  return messageList.scrollHeight - messageList.scrollTop - messageList.clientHeight < 56;
+}
+
+function updateRunningScrollIndicator() {
+  const indicator = $('runningScrollIndicator');
+  if (!indicator) return;
+  const atBottom = messagesPinnedToBottom || messagesAreNearBottom();
+  indicator.classList.toggle('hidden', atBottom);
+  indicator.classList.toggle('is-running', running);
+  indicator.setAttribute('aria-label', running
+    ? 'Cuộn xuống tác vụ đang chạy'
+    : 'Cuộn xuống cuối cuộc trò chuyện');
+  indicator.title = running ? 'Xuống tác vụ đang chạy' : 'Xuống cuối';
+}
+
+$('messages').addEventListener('scroll', () => {
+  messagesPinnedToBottom = messagesAreNearBottom();
+  updateRunningScrollIndicator();
+}, { passive: true });
+$('runningScrollIndicator').addEventListener('click', scrollMessagesToBottom);
 
 function queueAssistantText(delta) {
   pendingAssistantText += delta;
   if (typingTimer) return;
   const tick = () => {
     if (!assistantBody) { pendingAssistantText = ''; typingTimer = 0; return; }
-    const size = Math.max(1, Math.min(10, Math.ceil(pendingAssistantText.length / 140)));
+    const size = pendingAssistantText.length > 600 ? 3 : pendingAssistantText.length > 180 ? 2 : 1;
     assistantRawText += pendingAssistantText.slice(0, size);
     pendingAssistantText = pendingAssistantText.slice(size);
     renderMarkdownInto(assistantBody, assistantRawText);
     const item = assistantBody.closest('.message');
     if (item) item.dataset.rawContent = assistantRawText;
-    scrollMessagesToBottom();
-    if (pendingAssistantText) typingTimer = setTimeout(tick, 24);
+    if (messagesPinnedToBottom) scrollMessagesToBottom();
+    else updateRunningScrollIndicator();
+    if (pendingAssistantText) typingTimer = setTimeout(tick, 12);
     else {
       typingTimer = 0;
       if (pendingTurnEnd) {
@@ -396,11 +443,44 @@ function setMode(next) {
   updateComposerPlaceholder();
 }
 
+function updateConnectionBadge(providerName, state = 'checking') {
+  const labels = language === 'en'
+    ? { ready: 'Ready', running: 'Running', setup: 'Needs setup', recovering: 'Needs recovery', offline: 'Offline', checking: 'Checking' }
+    : { ready: 'Sẵn sàng', running: 'Đang chạy', setup: 'Chưa cấu hình', recovering: 'Cần khôi phục', offline: 'Ngoại tuyến', checking: 'Đang kiểm tra' };
+  const status = labels[state] || labels.checking;
+  const badge = $('connectionBadge');
+  badge.dataset.state = state;
+  badge.title = providerName + ' · ' + status;
+  badge.setAttribute('aria-label', badge.title);
+  const meta = providerMeta[activeProvider] || providerMeta['9router'];
+  $('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label);
+  $('connectionLabel').textContent = providerName;
+  $('connectionDot').classList.toggle('online', state === 'ready' || state === 'running');
+}
+
+function scheduleModelListRecovery() {
+  if (modelListRecoveryTimer) clearTimeout(modelListRecoveryTimer);
+  modelListRecoveryTimer = setTimeout(() => {
+    modelListRecoveryTimer = 0;
+    if (modelListRecoveryRequested || $('model').options.length > 2) return;
+    modelListRecoveryRequested = true;
+    vscode.postMessage({ type: 'retryConnection' });
+  }, 900);
+}
+
+function requestBootstrap() {
+  vscode.postMessage({ type: 'ready' });
+  if (startupReadyTimer) clearTimeout(startupReadyTimer);
+  startupReadyTimer = setTimeout(requestBootstrap, 1500);
+}
+
 function setProvider(next, changeEndpoint = true) {
   const meta = providerMeta[next] || providerMeta['9router'];
   const previous = $('configProvider').value;
   $('configProvider').value = next;
   $('providerBrand').innerHTML = brandIcon(meta.brand, meta.label);
+  $('setupProviderMark').innerHTML = brandIcon(meta.brand, meta.label);
+  $('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label);
   $('providerLabel').textContent = meta.label;
   $('providerHint').textContent = meta.hint;
   $('apiKeyLabel').textContent = meta.keyLabel;
@@ -411,10 +491,14 @@ function setProvider(next, changeEndpoint = true) {
   $('apiKeyField').classList.toggle('local', meta.local);
   $('openCockpit').classList.toggle('hidden', next !== 'cockpit');
   if (previous !== next) {
-    providerChanged = true;
     keyInput.value = '';
     $('diagnosticsResult').textContent = '';
     $('diagnosticsResult').className = 'diagnostics-result hidden';
+    if (!meta.local) {
+      $('keyState').textContent = 'Đang kiểm tra API key đã lưu…';
+      $('keyState').classList.remove('saved');
+      vscode.postMessage({ type: 'getProviderKeyState', provider: next, profileId: currentProfileId || undefined });
+    }
   }
   if (meta.local) {
     $('keyState').textContent = 'Không cần API key · server local vẫn phải đang chạy';
@@ -479,7 +563,9 @@ function setPermissionMode(next) {
   $('permLabel').textContent = next === 'full' ? 'Full access' : next === 'edit' ? 'Sửa file' : 'Hỏi';
   btn.classList.toggle('full', next === 'full');
   document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
-    opt.classList.toggle('active', opt.dataset.perm === next);
+    const active = opt.dataset.perm === next;
+    opt.classList.toggle('active', active);
+    opt.setAttribute('aria-selected', String(active));
   });
 }
 
@@ -487,7 +573,7 @@ function renderModelMenu(query = '') {
   const list = $('modelOptions'); list.replaceChildren();
   const needle = query.trim().toLowerCase();
   const options = [...$('model').options]
-    .filter(option => option.value && option.value !== '__custom__' && (!needle || option.text.toLowerCase().includes(needle)))
+    .filter(option => option.value && (!needle || option.text.toLowerCase().includes(needle)))
     .sort((left, right) => {
       const leftRank = favoriteModels.includes(left.value) ? 0 : recentModels.includes(left.value) ? 1 : 2;
       const rightRank = favoriteModels.includes(right.value) ? 0 : recentModels.includes(right.value) ? 1 : 2;
@@ -497,14 +583,18 @@ function renderModelMenu(query = '') {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option';
     const healthStatus = modelHealth[option.value]?.status || '';
     const icon = document.createElement('span'); icon.className = 'model-brand'; icon.innerHTML = brandIcon(brandKey(option.value, activeProvider), option.text);
-    const health = document.createElement('span'); health.className = 'model-health ' + healthStatus; health.setAttribute('aria-label', healthStatus === 'ok' ? 'Model hoạt động' : healthStatus === 'error' ? 'Model không khả dụng' : healthStatus === 'checking' ? 'Đang kiểm tra model' : 'Chưa kiểm tra');
+    const health = document.createElement('span'); health.className = 'model-health ' + healthStatus; health.setAttribute('aria-label', healthStatus === 'ok' ? 'Model hoạt động' : healthStatus === 'limited' ? 'Model đang bị giới hạn tạm thời' : healthStatus === 'error' ? 'Model không khả dụng' : healthStatus === 'checking' ? 'Đang kiểm tra model' : 'Chưa kiểm tra');
     const label = document.createElement('span'); label.className = 'model-option-label'; label.textContent = option.text;
     const meta = document.createElement('small'); meta.className = 'model-option-meta';
     const healthMessage = modelHealth[option.value]?.message || '';
     const latency = healthMessage.match(/(\d+)\s*ms/i)?.[1];
-    meta.textContent = option.dataset.tools === 'false'
-      ? 'Chat only'
-      : (option.dataset.reasoning === 'true' ? 'Agent · reasoning' : 'Agent') + (latency ? ' · ' + latency + ' ms' : '');
+    meta.textContent = healthStatus === 'limited'
+      ? 'Tạm giới hạn · thử lại sau'
+      : healthStatus === 'error'
+        ? 'Kiểm tra không thành công'
+        : option.dataset.tools === 'false'
+          ? 'Chat only'
+          : (option.dataset.reasoning === 'true' ? 'Agent · reasoning' : 'Agent') + (latency ? ' · ' + latency + ' ms' : '');
     const copy = document.createElement('span'); copy.className = 'model-option-copy'; copy.append(label, meta);
     const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.textContent = '★'; favorite.title = favoriteModels.includes(option.value) ? 'Bỏ yêu thích' : 'Yêu thích'; favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
     favorite.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'toggleFavoriteModel', model: option.value }); });
@@ -577,6 +667,14 @@ function inlineMarkdown(source) {
     return token;
   };
   let text = escapeHtml(source);
+  text = text.replace(/\(\[([^\]]+)\]\((https?:\/\/[^)]+)\)\)/gi, (_, label, rawTarget) => {
+    const target = String(rawTarget).replace(/&amp;/g, '&');
+    return reserve('<span class="rich-link-group">(' + richLinkMarkup(target, label) + ')</span>');
+  });
+  text = text.replace(/\((https?:\/\/[^\s<)]+)\)/gi, (_, rawTarget) => {
+    const target = String(rawTarget).replace(/&amp;/g, '&');
+    return reserve('<span class="rich-link-group">(' + richLinkMarkup(target) + ')</span>');
+  });
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawTarget) => {
     const target = String(rawTarget).replace(/&amp;/g, '&');
     if (/^https?:\/\//i.test(target)) {
@@ -586,9 +684,11 @@ function inlineMarkdown(source) {
     const line = location && !/\bline\s+\d+/i.test(label) ? '<span class="file-line">(line ' + location[1] + ')</span>' : '';
     return reserve('<button type="button" class="file-link" title="' + escapeHtml(target) + '" data-file="' + encodeURIComponent(target) + '">' + fileTypeIcon(target) + '<span>' + label + '</span>' + line + '</button>');
   });
-  text = text.replace(/\x60([^\x60]+)\x60/g, (_, code) => {
+  text = text.replace(/\x60([^\x60\r\n]+)\x60/g, (_, code) => {
     const plain = String(code).replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
     const looksLikeFile = /^(?:[a-z]:[\\/]|\.{0,2}[\\/])?.+\.[a-z0-9]{1,10}(?::\d+(?::\d+)?)?$/i.test(plain);
+    const looksLikeProse = plain.length > 90 && plain.trim().split(/\s+/).length > 14 && !/[{};=]/.test(plain);
+    if (looksLikeProse) return code;
     return reserve(looksLikeFile
       ? '<button type="button" class="file-link" title="' + escapeHtml(plain) + '" data-file="' + encodeURIComponent(plain) + '">' + fileTypeIcon(plain) + '<span>' + code + '</span></button>'
       : '<code class="inline-code">' + code + '</code>');
@@ -635,6 +735,7 @@ function bindRichContent(container) {
 
 function renderMarkdownInto(container, source) {
   const cleanSource = String(source || '')
+    .replace(/(?:\x60{1,3}[ \t]*)?(?:<|＜)?[|｜][ \t]*DSML[ \t]*[|｜][ \t]*(?:function_calls?|tool_calls?)(?:>|＞)?(?:[ \t]*\x60{1,3})?/giu, '')
     .replace(/\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu, '')
     .replace(/[ \t]{2,}/g, ' ');
   const lines = cleanSource.replace(/\r\n/g, '\n').split('\n');
@@ -881,7 +982,7 @@ function appendAgentCommentary(content) {
 }
 
 function formatWorkingElapsed(seconds) {
-  if (currentLanguage === 'en') {
+  if (language === 'en') {
     if (seconds < 60) return seconds + 's';
     return Math.floor(seconds / 60) + 'm' + (seconds % 60 ? ' ' + (seconds % 60) + 's' : '');
   }
@@ -893,7 +994,7 @@ function updateWorkingLabel(state = 'working') {
   if (!workingLabel || !turnStartedAt) return;
   const seconds = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
   const elapsed = formatWorkingElapsed(seconds);
-  workingLabel.textContent = currentLanguage === 'en'
+  workingLabel.textContent = language === 'en'
     ? (state === 'cancelled' ? 'Stopped after ' : state === 'error' ? 'Stopped after ' : state === 'complete' ? 'Worked for ' : 'Working for ') + elapsed
     : (state === 'cancelled' ? 'Đã dừng sau ' : state === 'error' ? 'Dừng sau ' : state === 'complete' ? 'Đã làm trong ' : 'Đang làm trong ') + elapsed;
 }
@@ -1484,6 +1585,7 @@ function setRunning(value, text = '') {
   button.setAttribute('aria-label', value ? 'Dừng phản hồi' : 'Gửi');
   button.title = value ? 'Dừng' : 'Gửi';
   document.querySelector('.composer-shell')?.classList.toggle('is-running', value);
+  updateRunningScrollIndicator();
   updateChangeActionState();
   updateSendState();
 }
@@ -1497,7 +1599,9 @@ function updateChangeActionState() {
 }
 
 function finishTurn(data) {
-  const turnMessage = assistantBody?.closest('.message');
+  const turnMessage = assistantBody?.closest('.message')
+    || document.querySelector('.message.assistant.streaming')
+    || [...document.querySelectorAll('.message.assistant')].at(-1);
   finalizeLiveActivity();
   assistantBody?.closest('.message')?.classList.remove('show-trace');
   if (workingLabel?.classList.contains('working-live')) {
@@ -1553,17 +1657,6 @@ function finishTurn(data) {
   setTimeout(runNextQueuedFollowUp, 0);
 }
 
-function releaseCompletedTurnUi(data) {
-  const turnMessage = assistantBody?.closest('.message');
-  finalizeLiveActivity();
-  turnMessage?.querySelectorAll('.agent-activity').forEach((node) => node.remove());
-  turnMessage?.classList.remove('streaming', 'show-trace');
-  turnMessage?.classList.add('complete');
-  finishWorkingLabel(data.cancelled ? 'cancelled' : data.error ? 'error' : 'complete');
-  setRunning(false);
-  scrollMessagesToBottom();
-}
-
 function settleTurn(data) {
   try {
     flushAssistantText();
@@ -1589,7 +1682,8 @@ function settleTurn(data) {
     activeTerminal = null;
     activitySteps = new Map();
     setRunning(false);
-    scrollMessagesToBottom();
+    if (messagesPinnedToBottom) scrollMessagesToBottom();
+    else updateRunningScrollIndicator();
   }
 }
 
@@ -1966,9 +2060,9 @@ function send() {
   if (!prompt) return;
   const model = $('model').value;
   const standaloneCommand = Boolean(composerCommand) || (!composerGoalMode && !composerSkills.length && !composerContexts.length && !composerLinks.length && rawPrompt.startsWith('/'));
-  if ((!model || model === '__custom__') && !standaloneCommand) { appendMessage('assistant', 'Hãy chọn hoặc nhập một model trước khi gửi.', true); return; }
+  if (!model && !standaloneCommand) { showUiToast({ message: 'Hãy chọn một model trước khi gửi.', tone: 'danger' }); return; }
   const selected = $('model').selectedOptions[0];
-  if (mode === 'agent' && selected?.dataset.tools === 'false') { appendMessage('assistant', 'Model này không hỗ trợ tools nên không thể chạy Agent mode. Hãy chuyển sang Chat hoặc chọn model khác.', true); return; }
+  if (mode === 'agent' && selected?.dataset.tools === 'false') { showUiToast({ message: 'Model này không hỗ trợ tools nên không thể chạy Agent mode. Hãy chuyển sang Chat hoặc chọn model khác.', tone: 'danger' }); return; }
   if (running) {
     queueFollowUp(prompt, mode, model);
     return;
@@ -2086,12 +2180,9 @@ $('expandChanges').addEventListener('click', () => {
   if (lastChangeCount) $('changeTray').classList.remove('hidden');
 });
 $('model').addEventListener('change', () => {
-  const custom = $('model').value === '__custom__';
-  $('customModelRow').classList.toggle('hidden', !custom);
-  if (custom) $('customModelInput').focus();
-  const selectedLabel = custom ? 'Model tùy chỉnh' : ($('model').selectedOptions[0]?.textContent || 'Chọn model');
+  const selectedLabel = $('model').selectedOptions[0]?.textContent || 'Chọn model';
   $('modelLabel').textContent = selectedLabel;
-  $('modelBrand').innerHTML = custom || !$('model').value ? '' : brandIcon(brandKey($('model').value, activeProvider), selectedLabel);
+  $('modelBrand').innerHTML = $('model').value ? brandIcon(brandKey($('model').value, activeProvider), selectedLabel) : '';
   $('modelTrigger').title = selectedLabel;
   updateCodexTuning();
 });
@@ -2171,10 +2262,6 @@ document.querySelectorAll('#languageMenu [data-language]').forEach((option) => o
   $('languagePicker').classList.remove('open');
   $('languageTrigger').setAttribute('aria-expanded', 'false');
 }));
-$('addCustomModel').addEventListener('click', () => {
-  const model = $('customModelInput').value.trim();
-  if (model) vscode.postMessage({ type: 'addCustomModel', model });
-});
 $('retryConnection').addEventListener('click', () => {
   showError('');
   $('setupCheckResult').textContent = 'Đang kiểm tra provider…';
@@ -2198,17 +2285,19 @@ function runConnectionDiagnostics() {
   $('retryDiagnostics').disabled = true;
   vscode.postMessage({ type: 'diagnostics' });
 }
-$('topConnect').addEventListener('click', () => {
+function openConnectionCenter() {
   setupDismissed = false;
   setupOpenRequested = true;
-  if (activeProvider === '9router') {
-    closeFloatingSurfaces();
-    showSetup(true);
-    $('setup').scrollTop = 0;
-    return;
-  }
-  setupOpenRequested = false;
-  openFloatingSurface('configPanel');
+  closeFloatingSurfaces();
+  showSetup(true);
+  $('setup').scrollTop = 0;
+}
+$('topConnect').addEventListener('click', openConnectionCenter);
+$('connectionBadge').addEventListener('click', openConnectionCenter);
+$('connectionBadge').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  openConnectionCenter();
 });
 $('retryDiagnostics').addEventListener('click', runConnectionDiagnostics);
 $('closeConnectionDiagnostics').addEventListener('click', () => $('connectionDiagnostics').classList.add('hidden'));
@@ -2216,12 +2305,30 @@ $('connectionDiagnostics').addEventListener('click', (event) => { if (event.targ
 $('openConnectionSettings').addEventListener('click', () => {
   openFloatingSurface('configPanel');
 });
+function positionPermissionMenu() {
+  const menu = $('permMenu');
+  menu.style.setProperty('--perm-menu-shift', '0px');
+  const rect = menu.getBoundingClientRect();
+  const edge = 8;
+  const viewportWidth = document.documentElement.clientWidth;
+  const shift = rect.left < edge
+    ? edge - rect.left
+    : rect.right > viewportWidth - edge
+      ? viewportWidth - edge - rect.right
+      : 0;
+  menu.style.setProperty('--perm-menu-shift', Math.round(shift) + 'px');
+}
 $('permissionMode').addEventListener('click', (e) => {
   e.stopPropagation();
   const wrap = $('permDropdown');
   const isOpen = wrap.classList.contains('open');
   wrap.classList.toggle('open', !isOpen);
   $('permMenu').classList.toggle('hidden', isOpen);
+  $('permissionMode').setAttribute('aria-expanded', String(!isOpen));
+  if (!isOpen) requestAnimationFrame(positionPermissionMenu);
+});
+window.addEventListener('resize', () => {
+  if (!$('permMenu').classList.contains('hidden')) positionPermissionMenu();
 });
 document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
   opt.addEventListener('click', (e) => {
@@ -2230,6 +2337,7 @@ document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
     else vscode.postMessage({ type: 'setPermissionMode', mode: opt.dataset.perm });
     $('permDropdown').classList.remove('open');
     $('permMenu').classList.add('hidden');
+    $('permissionMode').setAttribute('aria-expanded', 'false');
   });
 });
 $('cancelFull').addEventListener('click', () => $('accessConfirm').classList.add('hidden'));
@@ -2249,9 +2357,12 @@ $('configPanel').addEventListener('click', (event) => {
   }
 });
 document.addEventListener('click', () => {
+  document.querySelectorAll('.permission-menu').forEach((menu) => menu.classList.add('hidden'));
+  document.querySelectorAll('.permission-menu-trigger').forEach((button) => button.setAttribute('aria-expanded', 'false'));
   closeAddMenu();
   $('permDropdown')?.classList.remove('open');
   $('permMenu')?.classList.add('hidden');
+  $('permissionMode')?.setAttribute('aria-expanded', 'false');
   $('modelMenu')?.classList.add('hidden');
   $('modelPicker')?.classList.remove('open');
   $('modelTrigger')?.setAttribute('aria-expanded', 'false');
@@ -2286,7 +2397,7 @@ $('saveConfig').addEventListener('click', () => {
   vscode.postMessage({
     type: 'connect',
     endpoint: $('configEndpoint').value,
-    apiKey: $('configApiKey').value || (providerChanged ? '' : undefined),
+    apiKey: $('configApiKey').value || undefined,
     provider: $('configProvider').value,
     profileId: currentProfileId || '__new__',
     profileName: $('profileName').value,
@@ -2294,13 +2405,19 @@ $('saveConfig').addEventListener('click', () => {
     outputPricePerMillion: $('outputPrice').value ? Number($('outputPrice').value) : undefined,
   });
   $('configPanel').classList.add('hidden');
-  providerChanged = false;
 });
 $('runDiagnostics').addEventListener('click', () => {
   $('diagnosticsResult').textContent = 'Đang kiểm tra…';
   $('diagnosticsResult').className = 'diagnostics-result checking';
   $('runDiagnostics').disabled = true;
-  vscode.postMessage({ type: 'diagnostics' });
+  vscode.postMessage({
+    type: 'diagnostics',
+    draft: true,
+    endpoint: $('configEndpoint').value,
+    apiKey: $('configApiKey').value || undefined,
+    provider: $('configProvider').value,
+    profileId: currentProfileId || undefined
+  });
 });
 $('localSetup').addEventListener('click', () => vscode.postMessage({ type: 'setupLocalProvider' }));
 $('openCockpit').addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://github.com/jlcodes99/cockpit-tools/releases' }));
@@ -2420,14 +2537,20 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'uiToast') {
     showUiToast(data);
   } else if (data.type === 'bootstrap') {
+    if (startupReadyTimer) clearTimeout(startupReadyTimer);
+    startupReadyTimer = 0;
     // Chat is the primary surface. Provider discovery runs in the background;
     // Connection Center is opened only when the user explicitly requests it.
     showSetup(false);
     $('endpoint').value = data.endpoint;
     $('configEndpoint').value = data.endpoint;
     renderGoal(data.goal);
-    setProvider(data.provider || '9router', false);
-    if (!providerMeta[data.provider || '9router']?.local) {
+    activeProvider = data.provider || '9router';
+    setProvider(activeProvider, false);
+    updateConnectionBadge(providerMeta[activeProvider]?.label || activeProvider, 'checking');
+    modelListRecoveryRequested = false;
+    scheduleModelListRecovery();
+    if (!providerMeta[activeProvider]?.local) {
       $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
       $('keyState').classList.toggle('saved', data.hasApiKey);
     }
@@ -2450,6 +2573,7 @@ window.addEventListener('message', ({ data }) => {
     renderHistory(data.sessions || []);
   } else if (data.type === 'restoreSession') {
     flushAssistantText();
+    $('historyPanel').classList.add('hidden');
     setMode(data.mode || 'agent');
     $('messages').replaceChildren();
     changeSummary = null;
@@ -2507,17 +2631,11 @@ window.addEventListener('message', ({ data }) => {
     const routerStale = isRouter && data.routerRuntimeState === 'stale';
     const routerExternal = routerReady && data.routerRuntimeOwner === 'external';
     const providerName = providerMeta[activeProvider]?.label || activeProvider;
-    $('connectionDot').classList.toggle('online', data.connected || routerReady);
     const needsConfiguration = !data.connected && /API key|cấu hình|endpoint/i.test(data.message || '');
-    $('connectionLabel').textContent = data.connected
-      ? providerName + ' sẵn sàng'
-      : routerReady
-        ? '9Router đang chạy'
-        : needsConfiguration
-          ? 'Chưa cấu hình'
-          : routerStale
-            ? '9Router cần khôi phục'
-            : providerName + ' ngoại tuyến';
+    updateConnectionBadge(
+      providerName,
+      data.connected ? 'ready' : routerReady ? 'running' : needsConfiguration ? 'setup' : routerStale ? 'recovering' : 'offline'
+    );
     if (data.connected) showError('');
     else if (!launchingRouter) showError(data.message || '');
     if (data.connected && !setupOpenRequested) showSetup(false);
@@ -2577,9 +2695,7 @@ window.addEventListener('message', ({ data }) => {
       option.dataset.reasoning = String(model.capabilities?.reasoning === true);
       select.add(option);
     }
-    select.add(new Option('＋ Nhập model khác…', '__custom__'));
     const preferred = previous;
-    if (preferred && ![...select.options].some((option) => option.value === preferred)) select.add(new Option(preferred + ' · tùy chỉnh', preferred));
     if ([...select.options].some((option) => option.value === preferred)) select.value = preferred;
     else if (select.options.length > 1) select.selectedIndex = 1;
     const selectedLabel = select.selectedOptions[0]?.textContent || 'Chọn model';
@@ -2588,6 +2704,11 @@ window.addEventListener('message', ({ data }) => {
     $('modelTrigger').title = selectedLabel;
     renderModelMenu();
     updateCodexTuning();
+    if (data.connected && select.options.length <= 2) scheduleModelListRecovery();
+    else if (select.options.length > 2 && modelListRecoveryTimer) {
+      clearTimeout(modelListRecoveryTimer);
+      modelListRecoveryTimer = 0;
+    }
   } else if (data.type === 'favoriteModels') {
     favoriteModels = data.models || [];
     renderModelMenu($('modelSearch').value);
@@ -2645,13 +2766,21 @@ window.addEventListener('message', ({ data }) => {
     $('modelSearch').focus();
   } else if (data.type === 'configSaved') {
     $('configEndpoint').value = data.endpoint;
-    setProvider(data.provider || '9router', false);
+    activeProvider = data.provider || '9router';
+    setProvider(activeProvider, false);
     $('configApiKey').value = '';
-    providerChanged = false;
     if (data.profile) applyProfileUi(data.profile);
-    if (!providerMeta[data.provider || '9router']?.local) {
+    if (!providerMeta[activeProvider]?.local) {
       $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
       $('keyState').classList.toggle('saved', data.hasApiKey);
+    }
+  } else if (data.type === 'providerKeyState') {
+    if (data.provider === $('configProvider').value && !providerMeta[data.provider]?.local) {
+      $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
+      $('keyState').classList.toggle('saved', Boolean(data.hasApiKey));
+      $('configApiKey').placeholder = data.hasApiKey
+        ? 'Đã lưu key · để trống để giữ nguyên'
+        : 'Nhập API key của provider';
     }
   } else if (data.type === 'diagnosticsResult') {
     $('diagnosticsResult').textContent = data.message;
@@ -2677,6 +2806,8 @@ window.addEventListener('message', ({ data }) => {
     renderProfiles();
   } else if (data.type === 'profileLoaded') {
     applyProfileUi(data.profile);
+    activeProvider = data.profile?.kind || '9router';
+    updateConnectionBadge(providerMeta[activeProvider]?.label || activeProvider, 'checking');
     $('configApiKey').value = '';
     $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
     $('keyState').classList.toggle('saved', data.hasApiKey);
@@ -2717,11 +2848,6 @@ window.addEventListener('message', ({ data }) => {
     appendMessage('assistant', 'Đã khôi phục workspace về Git checkpoint ' + data.hash + '.', false, Date.now());
   } else if (data.type === 'localRuntime') {
     if (data.message) { $('diagnosticsResult').textContent = data.message; $('diagnosticsResult').className = 'diagnostics-result ' + (data.serverRunning || data.models?.length ? 'success' : 'checking'); }
-  } else if (data.type === 'selectModel') {
-    $('model').value = data.model;
-    $('model').dispatchEvent(new Event('change'));
-    $('customModelInput').value = '';
-    $('customModelRow').classList.add('hidden');
   } else if (data.type === 'permissionMode') {
     setPermissionMode(data.mode);
   } else if (data.type === 'routerLaunch') {
@@ -2766,11 +2892,91 @@ window.addEventListener('message', ({ data }) => {
       chip.append(remove); list.append(chip);
     }
   } else if (data.type === 'approval') {
-    const item = document.createElement('article'); item.className = 'permission-card';
-    item.innerHTML = '<strong>Agent cần quyền</strong><span>' + data.message + '</span><div><button class="permission-allow">Cho phép</button><button class="permission-deny">Từ chối</button></div>';
-    item.querySelector('.permission-allow').addEventListener('click', () => { vscode.postMessage({ type: 'approval', id: data.id, allow: true }); item.remove(); });
-    item.querySelector('.permission-deny').addEventListener('click', () => { vscode.postMessage({ type: 'approval', id: data.id, allow: false }); item.remove(); });
-    $('messages').append(item); $('messages').scrollTop = $('messages').scrollHeight;
+    const item = document.createElement('article');
+    item.className = 'permission-card permission-card-v2';
+
+    const heading = document.createElement('header');
+    const icon = document.createElement('span');
+    icon.className = 'permission-icon';
+    icon.innerHTML = uiIcon(data.kind === 'command' ? 'terminalWindow' : 'shieldWarning');
+    const title = document.createElement('span');
+    title.className = 'permission-title';
+    title.textContent = data.title || (data.kind === 'command' ? 'Terminal' : 'RelayCode');
+    heading.append(icon, title);
+
+    const copy = document.createElement('p');
+    copy.className = 'permission-copy';
+    copy.textContent = data.message || 'RelayCode needs your permission.';
+    item.append(heading, copy);
+
+    if (data.command) {
+      const command = document.createElement('pre');
+      command.className = 'permission-command';
+      command.textContent = data.command;
+      item.append(command);
+    }
+
+    const actions = document.createElement('footer');
+    actions.className = 'permission-actions';
+    const deny = document.createElement('button');
+    deny.type = 'button';
+    deny.className = 'permission-deny';
+    deny.textContent = 'Deny';
+
+    const allowWrap = document.createElement('div');
+    allowWrap.className = 'permission-allow-wrap';
+    const allowOnce = document.createElement('button');
+    allowOnce.type = 'button';
+    allowOnce.className = 'permission-allow-once';
+    allowOnce.textContent = 'Allow once';
+    allowWrap.append(allowOnce);
+
+    const finishApproval = (decision) => {
+      vscode.postMessage({ type: 'approval', id: data.id, decision });
+      item.remove();
+      updateRunningScrollIndicator();
+    };
+
+    if (data.allowSimilar) {
+      const menuTrigger = document.createElement('button');
+      menuTrigger.type = 'button';
+      menuTrigger.className = 'permission-menu-trigger';
+      menuTrigger.setAttribute('aria-label', 'More permission options');
+      menuTrigger.setAttribute('aria-haspopup', 'menu');
+      menuTrigger.setAttribute('aria-expanded', 'false');
+      menuTrigger.innerHTML = uiIcon('caretDown');
+      const allowMenu = document.createElement('div');
+      allowMenu.className = 'permission-menu hidden';
+      allowMenu.setAttribute('role', 'menu');
+      const similar = document.createElement('button');
+      similar.type = 'button';
+      similar.className = 'permission-similar';
+      similar.setAttribute('role', 'menuitem');
+      const similarLabel = document.createElement('span');
+      similarLabel.textContent = 'Allow similar commands';
+      const similarInfo = document.createElement('span');
+      similarInfo.innerHTML = uiIcon('info');
+      similar.append(similarLabel, similarInfo);
+      similar.title = 'Allow commands with the same executable and subcommand for this chat session';
+      allowMenu.append(similar);
+      allowWrap.append(menuTrigger, allowMenu);
+      menuTrigger.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const opening = allowMenu.classList.contains('hidden');
+        allowMenu.classList.toggle('hidden', !opening);
+        menuTrigger.setAttribute('aria-expanded', String(opening));
+      });
+      similar.addEventListener('click', () => finishApproval('similar'));
+    }
+
+    actions.append(deny, allowWrap);
+    item.append(actions);
+    allowOnce.addEventListener('click', () => finishApproval('once'));
+    deny.addEventListener('click', () => finishApproval('deny'));
+    item.addEventListener('click', (event) => event.stopPropagation());
+    $('messages').append(item);
+    if (messagesPinnedToBottom) scrollMessagesToBottom();
+    else updateRunningScrollIndicator();
   } else if (data.type === 'toolFailure') {
     const item = document.createElement('article'); item.className = 'tool-failure-card';
     item.dataset.toolFailureId = data.id;
@@ -2944,12 +3150,12 @@ window.addEventListener('message', ({ data }) => {
     appendTerminalOutput(data);
   } else if (data.type === 'turnEnd') {
     // Never let the cosmetic typing animation own the lifecycle of a turn.
-    // Release Stop/caret immediately, but let a successful response finish at
-    // a readable pace instead of flashing the entire buffered answer at once.
+    // Keep the fast typewriter visible after the provider has completed, and
+    // do not start another turn until this message has drained into its own
+    // assistant card.
     if (!data.cancelled && !data.error) reconcileFinalAssistantText(data.content);
     if (!data.cancelled && !data.error && assistantBody && pendingAssistantText && typingTimer) {
       pendingTurnEnd = data;
-      releaseCompletedTurnUi(data);
     } else settleTurn(data);
   } else if (data.type === 'reset') {
     flushAssistantText();
@@ -2966,6 +3172,9 @@ window.addEventListener('message', ({ data }) => {
     assistantBody = null;
     pendingTurnEnd = null;
     pendingCompletedChangesState = null;
+    if (modelListRecoveryTimer) clearTimeout(modelListRecoveryTimer);
+    modelListRecoveryTimer = 0;
+    modelListRecoveryRequested = false;
     lastChangeCount = 0;
     lastPendingChangeCount = 0;
     knownChangeSnapshots = new Map();
@@ -2979,12 +3188,12 @@ window.addEventListener('message', ({ data }) => {
     setRouterLaunchState('idle', '9Router chưa chạy');
     $('launchDescription').textContent = 'Không cần mở terminal hoặc chuyển sang trình duyệt.';
     showError(data.message);
-    if (!$('console').classList.contains('hidden')) appendMessage('assistant', data.message, true);
+    showUiToast({ message: data.message, tone: 'danger' });
     setRunning(false);
   }
 });
 
 setPermissionMode('ask');
 resizePrompt();
-vscode.postMessage({ type: 'ready' });
+requestBootstrap();
 `;

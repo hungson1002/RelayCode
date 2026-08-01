@@ -5,7 +5,9 @@ import type { RequestMetrics } from './types';
 const PROFILES_STATE = 'nineRouter.providerProfiles';
 const ACTIVE_PROFILE_STATE = 'nineRouter.activeProfileId';
 const PROFILE_KEY_PREFIX = 'nineRouter.profileKey.';
+const EXPLICITLY_CLEARED_KEY = '__relaycode_key_explicitly_cleared__';
 const TELEMETRY_STATE = 'nineRouter.telemetry';
+const PROVIDER_KINDS: ProviderKind[] = ['9router', 'cockpit', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio'];
 
 export interface ProviderProfile {
   id: string;
@@ -60,13 +62,25 @@ export class ProviderProfileStore {
     };
     const profiles = this.list();
     const index = profiles.findIndex((item) => item.id === normalized.id);
+    const existing = index >= 0 ? profiles[index] : undefined;
+    if (existing && existing.kind !== normalized.kind) {
+      // Migrate a pre-1.0.16 profile key to the provider it belonged to before
+      // changing the profile kind. This prevents an OpenAI key, for example,
+      // from being reused as an Anthropic key.
+      const legacyProfileKey = await this.context.secrets.get(`${PROFILE_KEY_PREFIX}${normalized.id}`);
+      const previousScopedKey = this.scopedKey(normalized.id, existing.kind);
+      if (legacyProfileKey !== undefined && await this.context.secrets.get(previousScopedKey) === undefined) {
+        await this.context.secrets.store(previousScopedKey, legacyProfileKey);
+      }
+      if (legacyProfileKey !== undefined) await this.context.secrets.delete(`${PROFILE_KEY_PREFIX}${normalized.id}`);
+    }
     if (index >= 0) profiles[index] = normalized;
     else profiles.push(normalized);
     await this.context.globalState.update(PROFILES_STATE, profiles);
     await this.context.globalState.update(ACTIVE_PROFILE_STATE, normalized.id);
     if (apiKey !== undefined) {
-      if (apiKey.trim()) await this.context.secrets.store(`${PROFILE_KEY_PREFIX}${normalized.id}`, apiKey.trim());
-      else await this.context.secrets.delete(`${PROFILE_KEY_PREFIX}${normalized.id}`);
+      if (apiKey.trim()) await this.context.secrets.store(this.scopedKey(normalized.id, normalized.kind), apiKey.trim());
+      else await this.context.secrets.store(this.scopedKey(normalized.id, normalized.kind), EXPLICITLY_CLEARED_KEY);
     }
     return normalized;
   }
@@ -84,16 +98,33 @@ export class ProviderProfileStore {
     if (!remaining.length) throw new Error('Cần giữ lại ít nhất một provider profile.');
     await this.context.globalState.update(PROFILES_STATE, remaining);
     await this.context.secrets.delete(`${PROFILE_KEY_PREFIX}${id}`);
+    await Promise.all(PROVIDER_KINDS.map((kind) => this.context.secrets.delete(this.scopedKey(id, kind))));
     const next = remaining[0]!;
     if (wasActive) await this.context.globalState.update(ACTIVE_PROFILE_STATE, next.id);
     return this.active() ?? next;
   }
 
   public async apiKey(profile: ProviderProfile): Promise<string> {
-    const own = await this.context.secrets.get(`${PROFILE_KEY_PREFIX}${profile.id}`);
-    if (own !== undefined) return own;
-    const legacy = profile.kind === '9router' ? 'nineRouter.apiKey' : `nineRouter.apiKey.${profile.kind}`;
-    return (await this.context.secrets.get(legacy)) ?? '';
+    return this.apiKeyFor(profile.id, profile.kind);
+  }
+
+  public async apiKeyFor(profileId: string, kind: ProviderKind): Promise<string> {
+    const scoped = await this.context.secrets.get(this.scopedKey(profileId, kind));
+    if (scoped !== undefined) return scoped === EXPLICITLY_CLEARED_KEY ? '' : scoped;
+    const oldProfileKey = profileId ? await this.context.secrets.get(`${PROFILE_KEY_PREFIX}${profileId}`) : undefined;
+    if (oldProfileKey !== undefined) {
+      await this.context.secrets.store(this.scopedKey(profileId, kind), oldProfileKey);
+      await this.context.secrets.delete(`${PROFILE_KEY_PREFIX}${profileId}`);
+      return oldProfileKey === EXPLICITLY_CLEARED_KEY ? '' : oldProfileKey;
+    }
+    const legacy = kind === '9router' ? 'nineRouter.apiKey' : `nineRouter.apiKey.${kind}`;
+    const value = (await this.context.secrets.get(legacy)) ?? '';
+    if (profileId && value) await this.context.secrets.store(this.scopedKey(profileId, kind), value);
+    return value;
+  }
+
+  private scopedKey(profileId: string, kind: ProviderKind): string {
+    return `${PROFILE_KEY_PREFIX}${profileId}.${kind}`;
   }
 }
 

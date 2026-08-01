@@ -14,6 +14,9 @@ describe('Agent safety policy', () => {
     expect(validateCommandPolicy('rm -fr ./work', { allow: [], deny: [] })).toContain('phá hủy');
     expect(validateCommandPolicy('cmd /c rd C:\\work /s', { allow: [], deny: [] })).toContain('phá hủy');
     expect(validateCommandPolicy('powershell -EncodedCommand ZABhAG4AZwBlAHIA', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('Remove-Item C:\\work -r -Force', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('ri C:\\work -r', { allow: [], deny: [] })).toContain('phá hủy');
+    expect(validateCommandPolicy('git -C . reset --hard HEAD', { allow: [], deny: [] })).toContain('phá hủy');
   });
 
   it('enforces allow and deny lists', () => {
@@ -22,6 +25,9 @@ describe('Agent safety policy', () => {
     expect(validateCommandPolicy('npm-malicious test', { allow: ['npm'], deny: [] })).toContain('allow list');
     expect(validateCommandPolicy("npm test; Invoke-WebRequest 'https://example.com'", { allow: ['npm'], deny: [] })).toContain('allow list');
     expect(validateCommandPolicy("npm test\nInvoke-WebRequest 'https://example.com'", { allow: ['npm'], deny: [] })).toContain('allow list');
+    expect(validateCommandPolicy('npm test & curl example.com', { allow: ['npm'], deny: [] })).toContain('allow list');
+    expect(validateCommandPolicy('npm test $(curl example.com)', { allow: ['npm'], deny: [] })).toContain('shell expansion');
+    expect(validateCommandPolicy('npm test `curl example.com`', { allow: ['npm'], deny: [] })).toContain('shell expansion');
     expect(validateCommandPolicy('npm publish', { allow: [], deny: ['npm publish'] })).toContain('deny list');
   });
 });
@@ -58,5 +64,13 @@ describe('Diff hunks', () => {
     const original = encode('one\r\ntwo\r\n');
     const updated = encode('one\r\nTWO\r\n');
     expect(decode(applyForward(original, createDiffHunks(original, updated)[0]!))).toBe('one\r\nTWO\r\n');
+  });
+
+  it('applies and reverses a trailing newline-only change', () => {
+    const original = encode('one');
+    const updated = encode('one\n');
+    const hunk = createDiffHunks(original, updated)[0]!;
+    expect(decode(applyForward(original, hunk))).toBe('one\n');
+    expect(decode(applyReverse(updated, hunk))).toBe('one');
   });
 });

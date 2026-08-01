@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
 import * as vscode from 'vscode';
 import type { ProviderClient, ToolCompletionProgress } from './provider';
 import type { ExternalAgentTool } from './mcpManager';
@@ -9,6 +10,7 @@ import { validateCommandPolicy } from './safetyPolicy';
 import { countLineChanges } from './diffHunks';
 import { requiresWorkspaceMutation } from './agentIntent';
 import { runShellCommand, shellRuntimeInstruction } from './commandRuntime';
+import { sanitizeModelText } from './modelText';
 
 const execFileAsync = promisify(execFile);
 
@@ -32,7 +34,7 @@ const tools: Array<Record<string, unknown>> = [
     model: stringField('Model tạo ảnh. Nếu bỏ trống sẽ dùng model Agent hiện tại'),
     size: stringField('Kích thước, ví dụ 1024x1024, 1536x1024 hoặc 1024x1536')
   }, ['prompt', 'path']),
-  tool('write_file', 'Ghi toàn bộ nội dung file trong workspace.', { path: stringField('Đường dẫn tương đối'), content: stringField('Nội dung mới') }, ['path', 'content']),
+  tool('write_file', 'Ghi toàn bộ nội dung file trong workspace. File văn bản phải có đoạn và xuống dòng hợp lý, không dồn cả tài liệu vào một dòng.', { path: stringField('Đường dẫn tương đối'), content: stringField('Nội dung mới, giữ đầy đủ ký tự xuống dòng cần thiết') }, ['path', 'content']),
   tool('apply_patch', 'Thay thế một đoạn chính xác trong file, giữ nguyên các phần khác.', { path: stringField('Đường dẫn tương đối'), oldText: stringField('Đoạn cũ chính xác'), newText: stringField('Đoạn mới') }, ['path', 'oldText', 'newText']),
   tool('create_directory', 'Tạo thư mục trong workspace. Ưu tiên tool này thay vì lệnh shell.', { path: stringField('Đường dẫn thư mục tương đối') }, ['path']),
   tool('delete_file', 'Xóa một file trong workspace theo cách có thể review và undo. Không xóa thư mục.', { path: stringField('Đường dẫn file tương đối') }, ['path']),
@@ -72,11 +74,11 @@ function clipNaturalText(text: string, limit: number, fromEnd = false): string {
 }
 
 export function compactProgressCommentary(content: string): string {
-  return clipNaturalText(content.replace(/\s+/g, ' ').trim(), 620);
+  return clipNaturalText(sanitizeModelText(content).replace(/\s+/g, ' ').trim(), 620);
 }
 
 export function compactAgentFinalResponse(content: string): string {
-  let text = content.trim().replace(/\n{3,}/g, '\n\n');
+  let text = sanitizeModelText(content).trim().replace(/\n{3,}/g, '\n\n');
   text = text
     .replace(/\n*\s*(?:Mọi thứ đã được tối ưu hóa[^.!?]*[.!?]\s*)?Tôi sẵn sàng hỗ trợ thêm[^.!?]*[.!?]?\s*$/i, '')
     .replace(/\n*\s*(?:Everything is now fully optimized[^.!?]*[.!?]\s*)?I(?:'m| am) ready to help with anything else[^.!?]*[.!?]?\s*$/i, '')
@@ -344,7 +346,7 @@ export class AgentRuntime {
       ? 'Bạn là coding planner trong IDE. Đọc workspace và lập kế hoạch thực hiện cụ thể, nhưng không được sửa file hoặc chạy lệnh trong Plan mode. Kế hoạch phải là Markdown có tiêu đề rõ ràng, tóm tắt mục tiêu, phần cần người dùng xác nhận hoặc giả định quan trọng, các thay đổi đề xuất theo file/module, trình tự thực hiện, cách kiểm thử và rủi ro cần lưu ý. Nêu đường dẫn thật sau khi đã kiểm tra workspace; không bịa file. Khi cần trình bày cấu trúc thư mục, dùng đúng một fenced code block ```text, mỗi file hoặc thư mục nằm trên một dòng liên tiếp theo ký hiệu ├── và └──, thư mục luôn kết thúc bằng /, chú thích ngắn đặt sau " # ", tuyệt đối không chèn dòng trống giữa các node. Mỗi node chỉ ghi tên tương đối với thư mục cha; không lặp lại đường dẫn đầy đủ ở từng dòng. Nếu người dùng gửi URL, dùng read_webpage trước khi lập kế hoạch. Không tuyên bố đã thực hiện kế hoạch.'
       : 'Bạn là coding agent trong IDE. Dùng tools để kiểm tra workspace trước khi kết luận. Nếu người dùng gửi URL hoặc yêu cầu đọc một trang web, bắt buộc dùng read_webpage trước khi trả lời thay vì đoán nội dung. Chỉ thao tác trong workspace. Nếu người dùng yêu cầu tạo, sửa, thêm hoặc xóa file, bạn bắt buộc phải gọi write_file, apply_patch hoặc generate_image và kiểm tra kết quả; không được chỉ tuyên bố đã hoàn tất. Khi người dùng yêu cầu tạo ảnh, hãy dùng list_models để tìm model image phù hợp rồi gọi generate_image; không tạo ảnh giả bằng SVG/CSS trừ khi người dùng yêu cầu rõ. Nếu API ảnh không được hỗ trợ, hãy tìm pipeline Python tạo ảnh đã có trong workspace và chỉ dùng run_command khi pipeline đó thực sự tồn tại; không tự cài model nặng hoặc tuyên bố đã tạo ảnh khi chưa có file. Sau khi sửa, chạy kiểm tra phù hợp. Phản hồi cuối phải ngắn gọn, tối đa 120 từ: nói chính xác kết quả trước, dùng tối đa 2-4 bullet cho thay đổi chính và kiểm tra đã chạy. Không liệt kê lại toàn bộ file vì Review card đã hiển thị chúng. Dùng chữ đậm cho ý chính, bọc tên hàm/lệnh trong backtick, và chỉ viết liên kết Markdown [tên file](đường/dẫn/file:line) khi một file cụ thể thực sự cần được nhấn mạnh. Không dùng emoji hoặc icon trang trí trong câu trả lời. Nếu chưa thực hiện được, nói rõ chưa hoàn thành và nguyên nhân. Không thuật lại từng bước suy luận, không tự khen kết quả, không mời người dùng yêu cầu thêm và không lặp lại log công cụ.';
     const continuityInstruction = 'Treat follow-up requests as continuation of the same workspace task. Inspect the current workspace state before changing files, reuse existing files and directories, and never recreate the project in a new directory unless the user explicitly asks.';
-    const presentationInstruction = 'Present file references like Codex: when mentioning two or more files, put each file on its own Markdown bullet line. Use clickable Markdown links such as [App.jsx](src/App.jsx:1), not a sentence containing several inline-code file names. Keep the explanation after each link short and plain.';
+    const presentationInstruction = 'Present file references like Codex: when mentioning two or more files, put each file on its own Markdown bullet line. Use clickable Markdown links such as [App.jsx](src/App.jsx:1), not a sentence containing several inline-code file names. Keep the explanation after each link short and plain. Never emit provider control tokens such as DSML or function_calls as visible text. When writing prose-oriented files such as .txt or .md, use meaningful paragraphs and physical line breaks instead of putting the whole document on one line.';
     const commentaryInstruction = 'Match the communication rhythm of Codex. At the start of a nontrivial task, write one natural paragraph in the user language that confirms your understanding and states the overall direction; then continue through routine reads, edits, commands, and tests without narrating each tool. Do not introduce individual tool calls with headings, colons, file lists, or phrases such as "I will run", "Starting", or "Check this file". Send another substantive progress paragraph only at a meaningful phase boundary, after a concrete result or error, when the direction changes, or after about 25-30 seconds of substantial work. Keep each progress paragraph under 90 words and combine what was completed, the concrete result or problem, and what you will do next; it must never map one message to one tool call. Leave response.content empty for routine intermediate tool calls. Never expose internal reasoning, proposed tool arguments, repeated plans, or self-review. Do not announce completion while issuing more tools. After all tool work is complete, return one separate concise final answer; do not repeat every changed file because the Review card already shows them.';
     const systemContent = [baseInstruction, continuityInstruction, presentationInstruction, commentaryInstruction, shellRuntimeInstruction(this.workspaceRoot), this.runtimeInstructions].filter(Boolean).join('\n\n');
     const messages: Array<Record<string, unknown>> = resume?.messages?.length ? resume.messages : [
@@ -740,7 +742,7 @@ export class AgentRuntime {
       };
       try {
         touch();
-        return await this.client.completeWithTools(
+        const response = await this.client.completeWithTools(
           model,
           messages,
           definitions,
@@ -748,6 +750,7 @@ export class AgentRuntime {
           onProgress,
           supportsCodexTuning(model) ? this.requestTuning : undefined
         );
+        return { ...response, content: sanitizeModelText(response.content) };
       } catch (error) {
         lastError = controller.signal.reason instanceof Error && !signal?.aborted ? controller.signal.reason : error;
         if (signal?.aborted || attempt === 1 || !this.retryableAgentError(lastError)) throw lastError;
@@ -1104,15 +1107,37 @@ export class AgentRuntime {
   private workspaceUri(input: string): vscode.Uri {
     const target = resolve(this.workspaceRoot, input);
     const root = resolve(this.workspaceRoot);
-    if (target !== root && !target.startsWith(`${root}${sep}`)) throw new Error('Đường dẫn nằm ngoài workspace.');
+    if (!pathIsInside(root, target) || !this.realPathIsInsideWorkspace(target)) {
+      throw new Error('Đường dẫn nằm ngoài workspace hoặc đi qua symlink/junction không an toàn.');
+    }
     return vscode.Uri.file(target);
   }
 
   private isWorkspacePath(input: string): boolean {
     const target = resolve(input);
     const root = resolve(this.workspaceRoot);
-    return target === root || target.startsWith(`${root}${sep}`);
+    return pathIsInside(root, target) && this.realPathIsInsideWorkspace(target);
   }
+
+  private realPathIsInsideWorkspace(target: string): boolean {
+    const root = resolve(this.workspaceRoot);
+    if (!existsSync(root)) return pathIsInside(root, target);
+    const realRoot = realpathSync.native(root);
+    let existing = target;
+    while (!existsSync(existing)) {
+      const parent = dirname(existing);
+      if (parent === existing) return false;
+      existing = parent;
+    }
+    const realExisting = realpathSync.native(existing);
+    return pathIsInside(realRoot, realExisting);
+  }
+}
+
+function pathIsInside(root: string, target: string): boolean {
+  const normalizedRoot = process.platform === 'win32' ? root.toLowerCase() : root;
+  const normalizedTarget = process.platform === 'win32' ? target.toLowerCase() : target;
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`);
 }
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {

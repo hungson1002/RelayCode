@@ -1,5 +1,6 @@
 import type { ChatMessage, ConnectionConfig, RequestMetrics, RequestTuning, RouterModel } from './types';
 import type { ToolCompletionProgress } from './provider';
+import { sanitizeModelText } from './modelText';
 
 export function normalizeEndpoint(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, '');
@@ -19,6 +20,21 @@ export function parseSseData(block: string): string[] {
     .split(/\r?\n/)
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.slice(5).trim());
+}
+
+export function compatibleTextContent(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value.map((part) => {
+    if (typeof part === 'string') return part;
+    if (!part || typeof part !== 'object') return '';
+    const record = part as { text?: unknown; content?: unknown };
+    return typeof record.text === 'string'
+      ? record.text
+      : typeof record.content === 'string'
+        ? record.content
+        : '';
+  }).join('');
 }
 
 export function estimateTokens(value: unknown): number {
@@ -139,13 +155,33 @@ export class RouterClient {
       throw new Error('9Router không trả về luồng dữ liệu.');
     }
 
+    if (/application\/json/i.test(response.headers.get('content-type') || '')) {
+      try {
+        const body = await response.clone().json() as {
+          choices?: Array<{ message?: { content?: unknown }; text?: unknown }>;
+          output_text?: unknown;
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+        };
+        const content = compatibleTextContent(body.choices?.[0]?.message?.content)
+          || compatibleTextContent(body.choices?.[0]?.text)
+          || compatibleTextContent(body.output_text);
+        if (!content.trim()) throw new Error('Provider trả về phản hồi JSON nhưng không có nội dung.');
+        onDelta(content);
+        return requestMetrics(startedAt, response.headers, body.usage?.prompt_tokens ?? estimateTokens(messages), body.usage?.completion_tokens ?? estimateTokens(content), !body.usage);
+      } catch (error) {
+        if (error instanceof Error && /không có nội dung/.test(error.message)) throw error;
+        // A few compatible gateways report the wrong content type. Continue
+        // with the SSE reader when the cloned body is not actually JSON.
+      }
+    }
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let output = '';
     let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
 
-    while (true) {
+    stream: while (true) {
       const { done, value } = await reader.read();
       buffer += decoder.decode(value, { stream: !done });
       const blocks = buffer.split(/\r?\n\r?\n/);
@@ -159,18 +195,30 @@ export class RouterClient {
       for (const block of blocks) {
         for (const data of parseSseData(block)) {
           if (data === '[DONE]') {
+            void reader.cancel().catch(() => undefined);
+            if (!output.trim()) throw new Error('Provider đã kết thúc luồng nhưng không trả về nội dung.');
             return requestMetrics(startedAt, response.headers, usage?.prompt_tokens ?? estimateTokens(messages), usage?.completion_tokens ?? estimateTokens(output), !usage);
           }
           try {
             const event = JSON.parse(data) as {
-              choices?: Array<{ delta?: { content?: string } }>;
+              choices?: Array<{ delta?: { content?: unknown }; message?: { content?: unknown }; text?: unknown; finish_reason?: string | null }>;
+              output_text?: unknown;
               usage?: { prompt_tokens?: number; completion_tokens?: number };
             };
             if (event.usage) usage = event.usage;
-            const delta = event.choices?.[0]?.delta?.content;
+            const choice = event.choices?.[0];
+            const incremental = compatibleTextContent(choice?.delta?.content);
+            const complete = compatibleTextContent(choice?.message?.content)
+              || compatibleTextContent(choice?.text)
+              || compatibleTextContent(event.output_text);
+            const delta = incremental || (complete.startsWith(output) ? complete.slice(output.length) : complete);
             if (delta) {
               output += delta;
               onDelta(delta);
+            }
+            if (event.choices?.some((choice) => choice.finish_reason != null)) {
+              void reader.cancel().catch(() => undefined);
+              break stream;
             }
           } catch {
             // Ignore non-JSON keepalive messages from compatible providers.
@@ -181,36 +229,16 @@ export class RouterClient {
         break;
       }
     }
+    if (!output.trim()) throw new Error('Provider đã kết thúc luồng nhưng không trả về nội dung.');
     return requestMetrics(startedAt, response.headers, usage?.prompt_tokens ?? estimateTokens(messages), usage?.completion_tokens ?? estimateTokens(output), !usage);
   }
 
   public async checkModel(model: string, signal?: AbortSignal): Promise<RequestMetrics> {
     const startedAt = Date.now();
-    const agentic = /(^ag\/|[-/]agentic(?:$|[-/]))/i.test(model);
-    const messages = agentic
-      ? [
-          { role: 'system', content: 'Call the read_file tool exactly once.' },
-          { role: 'user', content: 'Read package.json.' }
-        ]
-      : [{ role: 'user', content: 'Reply OK.' }];
-    const completionLimit = agentic
-      ? {}
-      : /^(gpt-5|o[1-4])/.test(model) && this.config.endpoint.includes('api.openai.com')
-        ? { max_completion_tokens: 1 }
-        : { max_tokens: 1 };
-    const healthTool = {
-      type: 'function',
-      function: {
-        name: 'read_file',
-        description: 'Read a workspace file.',
-        parameters: {
-          type: 'object',
-          properties: { path: { type: 'string' } },
-          required: ['path'],
-          additionalProperties: false
-        }
-      }
-    };
+    const messages = [{ role: 'user', content: 'hi' }];
+    const completionLimit = /^(gpt-5|o[1-4])/.test(model) && this.config.endpoint.includes('api.openai.com')
+      ? { max_completion_tokens: 16 }
+      : { max_tokens: 16 };
     const response = await fetch(`${normalizeEndpoint(this.config.endpoint)}/chat/completions`, {
       method: 'POST',
       headers: this.headers(),
@@ -218,13 +246,33 @@ export class RouterClient {
         model,
         messages,
         ...completionLimit,
-        ...(agentic ? { tools: [healthTool], tool_choice: 'auto' } : {}),
         stream: false
       }),
       signal
     });
     if (!response.ok) throw new Error(await this.describeError(response));
-    const body = (await response.json()) as { usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    const body = (await response.json()) as {
+      choices?: unknown[];
+      status?: unknown;
+      msg?: unknown;
+      message?: unknown;
+      error?: { message?: unknown } | unknown;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    const providerStatus = body.status;
+    const providerMessage = body.msg ?? body.message;
+    if (providerStatus != null && String(providerStatus) !== '200' && String(providerStatus) !== '0' && providerMessage) {
+      throw new Error(`Provider status ${String(providerStatus)}: ${String(providerMessage).slice(0, 240)}`);
+    }
+    if (body.error) {
+      const detail = typeof body.error === 'object' && body.error !== null && 'message' in body.error
+        ? (body.error as { message?: unknown }).message
+        : body.error;
+      throw new Error(String(detail || 'Provider returned an error').slice(0, 240));
+    }
+    if (!Array.isArray(body.choices) || body.choices.length === 0) {
+      throw new Error('Provider returned no completion choices for this model.');
+    }
     return requestMetrics(startedAt, response.headers, body.usage?.prompt_tokens ?? estimateTokens(messages), body.usage?.completion_tokens ?? 1, !body.usage);
   }
 
@@ -260,7 +308,7 @@ export class RouterClient {
       );
       for (const call of toolCalls) onProgress?.({ type: 'tool', name: call.name, arguments: call.arguments });
       return {
-        content: message?.content ?? '',
+        content: sanitizeModelText(message?.content ?? ''),
         toolCalls,
         metrics: requestMetrics(startedAt, response.headers, body.usage?.prompt_tokens ?? estimateTokens(messages), body.usage?.completion_tokens ?? estimateTokens(message), !body.usage)
       };
@@ -333,7 +381,7 @@ export class RouterClient {
       .filter((call) => call.id && call.name)
       .map((call) => ({ ...call, arguments: call.arguments || '{}' }));
     return {
-      content,
+      content: sanitizeModelText(content),
       toolCalls,
       metrics: requestMetrics(startedAt, response.headers, usage?.prompt_tokens ?? estimateTokens(messages), usage?.completion_tokens ?? estimateTokens(content + JSON.stringify(toolCalls)), !usage)
     };

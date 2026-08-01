@@ -7,17 +7,20 @@ export interface ChatViewHtmlOptions {
 }
 
 export function renderChatViewHtml({ language, nonce, cspSource, styles, controller }: ChatViewHtmlOptions): string {
+  const safeLanguage = language === 'en' ? 'en' : 'vi';
+  const safeNonce = escapeAttribute(nonce);
+  const safeCspSource = escapeAttribute(cspSource);
   return `<!DOCTYPE html>
-<html lang="${language}">
+<html lang="${safeLanguage}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: ${cspSource}; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-  <style nonce="${nonce}">${styles}</style>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: ${safeCspSource}; style-src ${safeCspSource} 'nonce-${safeNonce}'; script-src 'nonce-${safeNonce}';">
+  <style nonce="${safeNonce}">${styles}</style>
 </head>
-<body data-language="${language}">
+<body data-language="${safeLanguage}">
   <header class="route-header">
-    <div class="route-meta" title="Trạng thái provider hiện tại"><span id="connectionDot" class="dot"></span><span class="connection-copy"><strong id="connectionLabel">Đang kiểm tra</strong><small>Provider hiện tại</small></span></div>
+    <div id="connectionBadge" class="route-meta" title="Trạng thái provider hiện tại" role="button" tabindex="0" aria-label="Mở trung tâm kết nối" aria-live="polite"><span id="connectionBrand" class="connection-brand" aria-hidden="true"></span><span id="connectionDot" class="dot"></span><span class="connection-copy"><strong id="connectionLabel">Đang kiểm tra</strong></span></div>
     <nav class="header-actions" aria-label="Điều hướng RelayCode">
       <button id="topConnect" class="header-action connect-action" aria-label="Kết nối provider" data-tooltip="Kết nối provider"><span id="topConnectIcon" aria-hidden="true"></span><span id="topConnectLabel" class="header-action-label">Kết nối</span></button>
       <button id="historyToggle" class="header-action" aria-label="Lịch sử chat" data-tooltip="Lịch sử chat"><span id="historyToggleIcon" aria-hidden="true"></span><span class="header-action-label">Lịch sử</span></button>
@@ -100,7 +103,6 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
 
   <main id="console" class="console hidden">
     <div class="controls hidden"><button id="connectionToggle" class="status-action hidden">Ngắt</button></div>
-    <div id="customModelRow" class="custom-model-row hidden"><input id="customModelInput" placeholder="Nhập model ID từ 9Router"><button id="addCustomModel" class="secondary">Dùng model này</button></div>
     <div id="messages" class="messages" aria-live="polite">
       <div class="empty">
         <h2>Nói điều bạn muốn xây.</h2>
@@ -110,6 +112,10 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
     <section id="collapsedChanges" class="collapsed-changes hidden"><span id="collapsedChangeCount">0 files changed</span><button id="expandChanges" type="button">Xem</button></section>
     <section id="changeTray" class="change-tray hidden"><div id="changeList"></div><div class="change-tray-footer"><span id="changeCount">0 files changed</span><button id="hideChanges" class="tray-button">Ẩn</button><button id="undoAllChanges" class="tray-button">Undo all</button><button id="acceptAllChanges" class="tray-accept">Accept all</button></div></section>
     <footer class="composer-shell">
+      <button id="runningScrollIndicator" class="running-scroll-indicator hidden" type="button" aria-label="Cuộn xuống cuối cuộc trò chuyện">
+        <span class="running-scroll-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <svg class="running-scroll-arrow" aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M12 5v14m0 0 6-6m-6 6-6-6"/></svg>
+      </button>
       <section id="goalRail" class="goal-rail hidden" aria-live="polite">
         <span id="goalState" class="goal-state" aria-hidden="true"></span>
         <div class="goal-copy"><strong id="goalTitle">Tác vụ dài</strong><span id="goalStatus">Sẵn sàng</span></div>
@@ -130,7 +136,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
         <button id="quotaReset" class="quota-reset hidden" type="button" title="Mở bảng số liệu"><span>Reset</span><strong id="quotaResetLabel"></strong></button>
       </div>
       <div id="contextMeter" class="context-meter" title="Context budget"><i></i></div>
-      <div class="composer-actions"><button id="attach" class="tool-button plus-button" type="button" aria-label="Mở menu thêm" aria-haspopup="menu" aria-expanded="false"><span id="attachIcon" aria-hidden="true"></span></button><span id="attachmentProgress" class="attachment-progress hidden"><i></i>Đang tải</span><div class="mode-picker" id="modePicker"><button id="modeTrigger" class="mode-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="modeLabel">Agent</span></button><div id="modeMenu" class="mode-menu hidden" role="listbox"><button data-mode="agent" class="active"><strong>Agent</strong><small>Đọc, sửa file và chạy lệnh</small></button><button data-mode="chat"><strong>Chat</strong><small>Trò chuyện trực tiếp với model</small></button><button data-mode="plan"><strong>Plan</strong><small>Lập kế hoạch trước khi hành động</small></button></div></div><div class="perm-wrap" id="permDropdown"><button class="perm-trigger" id="permissionMode" type="button" data-mode="ask"><span id="permLabel">Hỏi</span></button><div class="perm-menu hidden" id="permMenu"><button class="perm-opt active" data-perm="ask"><span class="perm-check">✓</span>Hỏi mọi thao tác</button><button class="perm-opt" data-perm="edit"><span class="perm-check">✓</span>Cho phép sửa file</button><button class="perm-opt" data-perm="full"><span class="perm-check">✓</span>Full access</button></div></div><div class="model-picker" id="modelPicker"><button id="modelTrigger" class="model-trigger" type="button"><span id="modelBrand" class="model-trigger-brand"></span><span id="modelLabel">Chọn model</span></button><div id="modelMenu" class="model-menu hidden"><input id="modelSearch" placeholder="Tìm model…"><button id="checkModels" class="model-check-all" type="button">Kiểm tra model</button><div id="modelOptions" class="model-options"></div></div></div><select id="model" class="hidden" aria-label="Chọn model"><option value="">Chọn model</option></select><button id="send" class="send" aria-label="Gửi" disabled><span id="sendIcon" class="send-icon" aria-hidden="true"></span></button></div>
+      <div class="composer-actions"><button id="attach" class="tool-button plus-button" type="button" aria-label="Mở menu thêm" aria-haspopup="menu" aria-expanded="false"><span id="attachIcon" aria-hidden="true"></span></button><span id="attachmentProgress" class="attachment-progress hidden"><i></i>Đang tải</span><div class="mode-picker" id="modePicker"><button id="modeTrigger" class="mode-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="modeLabel">Agent</span></button><div id="modeMenu" class="mode-menu hidden" role="listbox"><button data-mode="agent" class="active"><strong>Agent</strong><small>Đọc, sửa file và chạy lệnh</small></button><button data-mode="chat"><strong>Chat</strong><small>Trò chuyện trực tiếp với model</small></button><button data-mode="plan"><strong>Plan</strong><small>Lập kế hoạch trước khi hành động</small></button></div></div><div class="perm-wrap" id="permDropdown"><button class="perm-trigger" id="permissionMode" type="button" data-mode="ask" aria-haspopup="listbox" aria-expanded="false"><span class="perm-trigger-icon" aria-hidden="true"><svg class="perm-icon-ask" viewBox="0 0 24 24"><path d="M8 11V7a2 2 0 1 1 4 0v3m0-2V5a2 2 0 1 1 4 0v5m0-2V6a2 2 0 1 1 4 0v8a6 6 0 0 1-6 6h-2a6 6 0 0 1-4.24-1.76L4 14.49a2 2 0 0 1 2.83-2.83L8 13V11Z"/></svg><svg class="perm-icon-edit" viewBox="0 0 24 24"><path d="m4 16.5-.7 4.2 4.2-.7L19.2 8.3a2.1 2.1 0 0 0-3-3L4.5 16.5Z"/><path d="m14.9 6.6 3 3"/></svg><svg class="perm-icon-full" viewBox="0 0 24 24"><path d="M12 3 19 6v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg></span><span id="permLabel">Hỏi</span><span class="perm-arrow" aria-hidden="true"></span></button><div class="perm-menu hidden" id="permMenu" role="listbox" aria-label="Quyền thao tác"><button class="perm-opt active" data-perm="ask" role="option"><span class="perm-choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 11V7a2 2 0 1 1 4 0v3m0-2V5a2 2 0 1 1 4 0v5m0-2V6a2 2 0 1 1 4 0v8a6 6 0 0 1-6 6h-2a6 6 0 0 1-4.24-1.76L4 14.49a2 2 0 0 1 2.83-2.83L8 13V11Z"/></svg></span><span class="perm-choice-copy"><strong>Hỏi mọi thao tác</strong><small>Luôn hỏi trước khi thực hiện</small></span><span class="perm-check" aria-hidden="true">✓</span></button><button class="perm-opt" data-perm="edit" role="option"><span class="perm-choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m4 16.5-.7 4.2 4.2-.7L19.2 8.3a2.1 2.1 0 0 0-3-3L4.5 16.5Z"/><path d="m14.9 6.6 3 3"/></svg></span><span class="perm-choice-copy"><strong>Cho phép sửa file</strong><small>Chỉ hỏi khi chạy lệnh</small></span><span class="perm-check" aria-hidden="true">✓</span></button><button class="perm-opt perm-opt-full" data-perm="full" role="option"><span class="perm-choice-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 19 6v5c0 4.6-2.9 8.2-7 10-4.1-1.8-7-5.4-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg></span><span class="perm-choice-copy"><strong>Full access</strong><small>Không hỏi lại khi Agent hoạt động</small></span><span class="perm-check" aria-hidden="true">✓</span></button></div></div><div class="model-picker" id="modelPicker"><button id="modelTrigger" class="model-trigger" type="button"><span id="modelBrand" class="model-trigger-brand"></span><span id="modelLabel">Chọn model</span></button><div id="modelMenu" class="model-menu hidden"><input id="modelSearch" placeholder="Tìm model…"><button id="checkModels" class="model-check-all" type="button">Kiểm tra model</button><div id="modelOptions" class="model-options"></div></div></div><select id="model" class="hidden" aria-label="Chọn model"><option value="">Chọn model</option></select><button id="send" class="send" aria-label="Gửi" disabled><span id="sendIcon" class="send-icon" aria-hidden="true"></span></button></div>
     </footer>
   </main>
   <div id="accessConfirm" class="modal-backdrop hidden"><section class="access-dialog"><strong>Bật Full access?</strong><p>Agent có thể sửa file và chạy lệnh mà không hỏi lại. Chỉ bật khi bạn tin tưởng model và workspace này.</p><div><button id="cancelFull" class="secondary">Hủy</button><button id="confirmFull" class="danger-confirm">Bật Full access</button></div></section></div>
@@ -145,7 +151,17 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
   </div>
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
   <div id="imageLightbox" class="image-lightbox hidden" role="dialog" aria-modal="true" aria-label="Xem ảnh"><button id="closeImage" aria-label="Đóng ảnh">×</button><img id="lightboxImage" alt="Ảnh đính kèm"></div>
-  <script nonce="${nonce}">${controller}</script>
+  <script nonce="${safeNonce}">${controller}</script>
 </body>
 </html>`;
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[character] ?? character);
 }

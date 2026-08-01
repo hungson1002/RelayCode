@@ -172,6 +172,16 @@ export class McpManager implements vscode.Disposable {
     if (normalized.url) new URL(normalized.url);
     const servers = this.servers();
     const index = servers.findIndex((item) => item.id === normalized.id);
+    const previous = index >= 0 ? servers[index] : undefined;
+    const oauthIdentityChanged = Boolean(previous && (
+      previous.url !== normalized.url
+      || previous.transport !== normalized.transport
+      || previous.authMode !== normalized.authMode
+    ));
+    if (oauthIdentityChanged) {
+      await this.cancelPendingOAuth(normalized.id);
+      await clearMcpOAuth(this.context, normalized.id);
+    }
     if (index >= 0) servers[index] = normalized;
     else servers.push(normalized);
     await this.context.globalState.update(MCP_SERVERS_STATE, servers);
@@ -190,6 +200,7 @@ export class McpManager implements vscode.Disposable {
   }
 
   public async removeServer(id: string): Promise<void> {
+    await this.cancelPendingOAuth(id);
     await this.disconnect(id);
     await this.context.globalState.update(MCP_SERVERS_STATE, this.servers().filter((item) => item.id !== id));
     await this.context.secrets.delete(`${MCP_TOKEN_PREFIX}${id}`);
@@ -394,6 +405,9 @@ export class McpManager implements vscode.Disposable {
     const client = this.createClient();
     try {
       if (server.transport === 'stdio') {
+        if (!vscode.workspace.isTrusted) {
+          throw new Error('Workspace chưa được tin cậy. Hãy Trust workspace trước khi chạy MCP stdio.');
+        }
         let extraEnv: Record<string, string> = {};
         try { extraEnv = JSON.parse((await this.context.secrets.get(`${MCP_ENV_PREFIX}${server.id}`)) || '{}') as Record<string, string>; } catch { /* Ignore malformed optional env. */ }
         const inherited = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
@@ -645,6 +659,14 @@ export class McpManager implements vscode.Disposable {
     const connection = this.connections.get(id);
     this.connections.delete(id);
     if (connection) await connection.client.close().catch(() => undefined);
+  }
+
+  private async cancelPendingOAuth(id: string): Promise<void> {
+    const pending = this.pendingOAuth.get(id);
+    this.pendingOAuth.delete(id);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    await pending.client.close().catch(() => undefined);
   }
 
   public dispose(): void {

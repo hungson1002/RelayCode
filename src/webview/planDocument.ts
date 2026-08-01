@@ -214,7 +214,7 @@ export function renderPlanDocumentHtml(webview: Pick<vscode.Webview, 'cspSource'
 <aside class="review-note"><span class="symbol">${icon('info')}</span><div><strong>${reviewTitle}</strong><span>${reviewBody}</span></div></aside>
 <section class="document">${renderPlanMarkdown(documentBody)}</section></article>
 <button class="primary mobile-proceed proceed" type="button"><span class="symbol">${icon('checkCircle')}</span>${proceed}</button>
-</main><script nonce="${nonce}">const vscode=acquireVsCodeApi();const plan=${JSON.stringify(data.plan)};
+</main><script nonce="${nonce}">const vscode=acquireVsCodeApi();const plan=${safeScriptJson(data.plan)};
 document.getElementById('copy').addEventListener('click',async()=>{await navigator.clipboard.writeText(plan);document.getElementById('copy').lastChild.textContent=${JSON.stringify(en ? 'Copied' : 'Đã sao chép')};});
 document.getElementById('save').addEventListener('click',()=>vscode.postMessage({type:'save'}));
 document.getElementById('revise').addEventListener('click',()=>vscode.postMessage({type:'revise'}));
@@ -223,4 +223,11 @@ document.querySelectorAll('.proceed').forEach(button=>button.addEventListener('c
 window.addEventListener('message',({data})=>{if(data.type==='proceedReady')document.querySelectorAll('.proceed').forEach(item=>{item.disabled=false;item.lastChild.textContent=${JSON.stringify(proceed)};});});
 document.querySelectorAll('[data-external]').forEach(link=>link.addEventListener('click',event=>{event.preventDefault();vscode.postMessage({type:'openExternal',url:link.dataset.external});}));
 </script></body></html>`;
+}
+
+function safeScriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }

@@ -106,7 +106,7 @@ describe('provider factory', () => {
     expect(cancelled).toHaveBeenCalledOnce();
   });
 
-  it('checks agentic models with a tool request instead of a one-token chat ping', async () => {
+  it('checks prefixed models with the same plain chat probe as 9Router', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { tool_calls: [{ id: 'call-1', function: { name: 'read_file', arguments: '{"path":"package.json"}' } }] } }],
       usage: { prompt_tokens: 8, completion_tokens: 4 }
@@ -117,9 +117,10 @@ describe('provider factory', () => {
     await client.checkModel('ag/claude-sonnet-4-6');
 
     const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
-    expect(body.max_tokens).toBeUndefined();
-    expect(body.tools[0].function.name).toBe('read_file');
-    expect(body.tool_choice).toBe('auto');
+    expect(body.max_tokens).toBe(16);
+    expect(body.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(body.tools).toBeUndefined();
+    expect(body.tool_choice).toBeUndefined();
   });
 });
 
