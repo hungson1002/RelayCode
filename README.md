@@ -240,13 +240,13 @@ RelayCode keeps local chat history, thread titles, provider profiles, pending re
 
 ### Automated releases
 
-Create a GitHub repository secret named `VSCE_PAT` with Marketplace publish permission once. Then run:
+Then run:
 
 ```bash
 npm run release:patch
 ```
 
-This bumps the patch version, commits and pushes the Git tag. GitHub Actions then runs the tests, publishes the VSIX to the Visual Studio Marketplace, and creates the GitHub Release. Use `npm version minor` or `npm version major` for larger releases.
+This bumps the patch version, commits and pushes the Git tag. GitHub Actions then runs the tests, packages the VSIX, and creates a GitHub Release with the VSIX attached. Upload that VSIX to the Visual Studio Marketplace manually when you want to publish it there. Use `npm version minor` or `npm version major` for larger releases.
 
 ### Build from source
 

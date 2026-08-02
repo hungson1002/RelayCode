@@ -1,4 +1,4 @@
-name: Release extension
+name: Create extension release
 
 on:
   push:
@@ -11,9 +11,6 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      OVSX_PAT: ${{ secrets.OVSX_PAT }}
 
     steps:
       - name: Check out tagged source
@@ -45,21 +42,6 @@ jobs:
 
       - name: Package and test extension
         run: npm run package
-
-      - name: Require Visual Studio Marketplace token
-        shell: bash
-        run: |
-          if [ -z "$VSCE_PAT" ]; then
-            echo "::error::Add a VSCE_PAT repository secret before publishing."
-            exit 1
-          fi
-
-      - name: Publish to Visual Studio Marketplace
-        run: npx --no-install vsce publish --packagePath "${{ steps.metadata.outputs.vsix }}" --pat "$VSCE_PAT" --no-dependencies
-
-      - name: Publish to Open VSX (optional)
-        if: ${{ env.OVSX_PAT != '' }}
-        run: npx --no-install ovsx publish "${{ steps.metadata.outputs.vsix }}" --no-dependencies
 
       - name: Create GitHub Release
         env:
