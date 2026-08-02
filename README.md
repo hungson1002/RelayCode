@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="media/icon-128.png" alt="RelayCode icon" width="72">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/media/icon-128.png" alt="RelayCode icon" width="72">
   <h1>RelayCode</h1>
   <p><strong>An AI coding workspace for VS Code and Antigravity.</strong></p>
   <p>Ask questions, plan changes, edit your workspace, run validation, and review every change before it is accepted.</p>
@@ -9,7 +9,7 @@
     <a href="README.vi.md">Tiếng Việt</a>
   </p>
   <br>
-  <img src="docs/assets/relaycode-ui-agent.png" alt="Real RelayCode Agent interface running inside the IDE" width="560">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/relaycode-ui-agent.png" alt="Real RelayCode Agent interface running inside the IDE" width="560">
   <p><sub>Agent workflow — follow activity, edits, and review in the IDE.</sub></p>
 </div>
 
@@ -31,8 +31,8 @@ These are screenshots of the actual RelayCode extension, not generated product m
     <td width="50%" align="center"><strong>Changed-file review</strong><br><sub>Inspect files and line counts before accepting the result.</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/assets/relaycode-ui-permissions.png" alt="RelayCode permission request UI"></td>
-    <td><img src="docs/assets/relaycode-ui-review.png" alt="RelayCode changed-file review UI"></td>
+    <td><img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/relaycode-ui-permissions.png" alt="RelayCode permission request UI"></td>
+    <td><img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/relaycode-ui-review.png" alt="RelayCode changed-file review UI"></td>
   </tr>
 </table>
 
@@ -41,7 +41,7 @@ These are screenshots of the actual RelayCode extension, not generated product m
 The provider card makes the active 9Router endpoint and API health state visible at a glance.
 
 <p align="center">
-  <img src="docs/assets/relaycode-ui-connection.png" alt="RelayCode Connection Center showing an active 9Router provider" width="650">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/relaycode-ui-connection.png" alt="RelayCode Connection Center showing an active 9Router provider" width="650">
 </p>
 
 ## How the workflow fits together
@@ -49,7 +49,7 @@ The provider card makes the active 9Router endpoint and API health state visible
 The diagram below summarizes the product flow; the screenshots above show the real extension UI.
 
 <p align="center">
-  <img src="docs/assets/workflow.png" alt="RelayCode workflow: ask, work, review, accept or undo" width="100%">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/workflow.png" alt="RelayCode workflow: ask, work, review, accept or undo" width="100%">
 </p>
 
 ## Why RelayCode?

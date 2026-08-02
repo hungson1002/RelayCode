@@ -1,6 +1,6 @@
 <div align="center">
-  <img src="media/icon-128.png" alt="Biểu tượng RelayCode" width="72">
-  <img src="docs/assets/hero.png" alt="RelayCode — AI Coding Agent" width="100%">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/media/icon-128.png" alt="Biểu tượng RelayCode" width="72">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/hero.png" alt="RelayCode — AI Coding Agent" width="100%">
   <br><br>
   <strong>Không gian lập trình AI cho VS Code và Antigravity — dùng model của bạn, công cụ của bạn và luôn giữ quyền kiểm soát.</strong>
   <br><br>
@@ -18,7 +18,7 @@ RelayCode của **Huxon** đưa ba chế độ **Agent**, **Chat** và **Plan** 
 RelayCode dành cho người muốn sử dụng coding agent đa model nhưng vẫn nhìn thấy và kiểm soát mọi thay đổi.
 
 <p align="center">
-  <img src="docs/assets/workflow.png" alt="Ask, work, review, accept or undo workflow" width="100%">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/workflow.png" alt="Ask, work, review, accept or undo workflow" width="100%">
 </p>
 
 ## Chức năng nổi bật
