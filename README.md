@@ -1,6 +1,4 @@
 <div align="center">
-  <img src="docs/assets/hero.png" alt="RelayCode AI coding workspace" width="100%">
-  <br><br>
   <h1>RelayCode</h1>
   <p><strong>An AI coding workspace for VS Code and Antigravity.</strong></p>
   <p>Ask questions, plan changes, edit your workspace, run validation, and review every change before it is accepted.</p>
@@ -9,6 +7,9 @@
     <a href="https://github.com/hungson1002/RelayCode/issues">Issues</a> ·
     <a href="README.vi.md">Tiếng Việt</a>
   </p>
+  <br>
+  <img src="docs/assets/relaycode-ui-agent.png" alt="Real RelayCode Agent interface running inside the IDE" width="560">
+  <p><sub>Agent workflow — follow activity, edits, and review in the IDE.</sub></p>
 </div>
 
 ---
@@ -18,6 +19,33 @@
 **RelayCode is a model-agnostic AI coding agent that lives inside your IDE.** It can answer questions about a project, make approved changes, run the right checks, connect to MCP tools, and show you a reviewable diff before you keep or undo the result.
 
 **It is for developers, technical teams, and curious builders who want AI help without handing over a hidden, uncontrolled terminal session.** You choose the provider, model, tools, permission level, and final changes.
+
+## Real interface
+
+These are screenshots of the actual RelayCode extension, not generated product mockups.
+
+<table>
+  <tr>
+    <td width="50%" align="center"><strong>Permission request</strong><br><sub>Choose how much autonomy Agent has before it acts.</sub></td>
+    <td width="50%" align="center"><strong>Changed-file review</strong><br><sub>Inspect files and line counts before accepting the result.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/assets/relaycode-ui-permissions.png" alt="RelayCode permission request UI"></td>
+    <td><img src="docs/assets/relaycode-ui-review.png" alt="RelayCode changed-file review UI"></td>
+  </tr>
+</table>
+
+### Connection Center
+
+The provider card makes the active 9Router endpoint and API health state visible at a glance.
+
+<p align="center">
+  <img src="docs/assets/relaycode-ui-connection.png" alt="RelayCode Connection Center showing an active 9Router provider" width="650">
+</p>
+
+## How the workflow fits together
+
+The diagram below summarizes the product flow; the screenshots above show the real extension UI.
 
 <p align="center">
   <img src="docs/assets/workflow.png" alt="RelayCode workflow: ask, work, review, accept or undo" width="100%">
@@ -100,7 +128,7 @@ RelayCode separates the coding workflow from the model source. Supported provide
 
 | Provider | Authentication | Default endpoint |
 | --- | --- | --- |
-| **9Router** | API key | `http://localhost:20128/v1` |
+| **9Router** | API key | `http://127.0.0.1:20128/v1` |
 | **Cockpit Tools** | Client key | `http://127.0.0.1:1455/v1` |
 | **OpenAI** | API key | Official OpenAI API |
 | **Anthropic Claude** | API key | Anthropic Messages API |

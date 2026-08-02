@@ -253,7 +253,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       message: 'Nhập endpoint tương thích OpenAI.',
       label: 'Endpoint',
       value: current,
-      placeholder: 'http://localhost:20128/v1',
+      placeholder: 'http://127.0.0.1:20128/v1',
       required: true,
       confirmLabel: 'Tiếp tục',
       icon: 'link'
@@ -298,7 +298,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private get endpoint(): string {
     return vscode.workspace.getConfiguration('nineRouter').get(
       'endpoint',
-      'http://localhost:20128/v1'
+      'http://127.0.0.1:20128/v1'
     );
   }
 
@@ -996,7 +996,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.lastConnectionCheckAt = Date.now();
         await this.post({ type: 'connection', connected: true, endpoint, models: this.models, canStop: routerRuntime?.canStop ?? this.routerProcess.canStop(), provider, routerRuntimeState: routerRuntime?.state, routerRuntimeOwner: routerRuntime?.owner });
       }
-      await this.post({ type: 'diagnosticsResult', ok: true, draft, provider, endpoint, latency: Date.now() - started, modelCount: models.length, message: `Kết nối tốt · ${models.length} model · ${Date.now() - started} ms` });
+      const latency = Date.now() - started;
+      const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+      const message = language === 'en'
+        ? `Connected · ${models.length} models · ${latency} ms`
+        : `Kết nối tốt · ${models.length} model · ${latency} ms`;
+      await this.post({ type: 'diagnosticsResult', ok: true, draft, provider, endpoint, latency, modelCount: models.length, message });
     } catch (error) {
       if (!draft) {
         this.connectionOnline = false;
@@ -3204,6 +3209,27 @@ function escapeDocument(value: unknown): string {
 function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
   if (language !== 'en') return document;
   const translations: Record<string, string> = {
+    'Kết nối provider': 'Connect provider',
+    'Đã kết nối provider ': 'Connected provider ',
+    'Kết nối tốt': 'Connected',
+    'Kết nối': 'Connect',
+    'Số liệu sử dụng': 'Usage metrics',
+    'Mở trung tâm kết nối': 'Open connection center',
+    'Quyền thao tác': 'Action permissions',
+    'Đọc, sửa file và chạy lệnh': 'Read, edit files and run commands',
+    'Trò chuyện trực tiếp với model': 'Chat directly with the model',
+    'Lập kế hoạch trước khi hành động': 'Plan before taking action',
+    'Hỏi': 'Ask',
+    'Luôn hỏi trước khi thực hiện': 'Always ask before acting',
+    'Sửa file': 'Edit files',
+    'Chỉ hỏi khi chạy lệnh': 'Ask only before running commands',
+    'Không hỏi lại khi Agent hoạt động': 'Do not ask again while Agent is working',
+    'Endpoint và API key': 'Endpoint and API key',
+    'Mở trang quản lý': 'Open dashboard',
+    'Chưa kiểm tra sức khỏe API trong phiên này.': 'API health has not been checked in this session.',
+    '9Router đang chạy sẵn': '9Router is already running',
+    'Khởi động 9Router': 'Start 9Router',
+    'Đang kiểm tra provider…': 'Checking provider…',
     'Agent có thể sửa file và chạy lệnh mà không hỏi lại. Chỉ bật khi bạn tin tưởng model và workspace này.': 'Agent can edit files and run commands without asking again. Enable this only when you trust the model and this workspace.',
     'Extension tự chạy dịch vụ nền rồi mở trang quản lý bằng trình duyệt mặc định.': 'RelayCode starts the background service and opens its management page in your default browser.',
     'Token, chi phí ước tính, tốc độ và rate limit': 'Tokens, estimated cost, latency and rate limits',
@@ -3246,6 +3272,8 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Gateway và API đang sẵn sàng nhận yêu cầu từ Chat hoặc Agent.': 'The gateway and API are ready for Chat or Agent requests.',
     'Đang cài 9Router': 'Installing 9Router',
     'Kết nối lại': 'Reconnect',
+    'Cấu hình': 'Configure',
+    'Quay lại chat': 'Back to chat',
     'Xóa MCP': 'Remove MCP',
     'Bỏ yêu thích': 'Remove favorite',
     'Yêu thích': 'Favorite',
@@ -3296,6 +3324,11 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Tùy chọn': 'Optional',
     'Dùng model này': 'Use this model',
     'Nói điều bạn muốn xây.': 'Describe what you want to build.',
+    'Bắt đầu nhanh': 'Quick start',
+    'Mở menu thêm': 'Open add menu',
+    'Nhanh và cân bằng': 'Fast and balanced',
+    'Suy luận kỹ hơn': 'Deeper reasoning',
+    'Tối đa, nếu model hỗ trợ': 'Maximum, if supported by the model',
     'Nhập yêu cầu sửa, chạy hoặc kiểm tra code…': 'Ask RelayCode to edit, run or review code…',
     'Nhập yêu cầu, dùng /, $ hoặc @…': 'Ask anything, use /, $ or @…',
     'Sandbox bắt buộc': 'Sandbox required',

@@ -109,6 +109,7 @@ $('metricsToggleIcon').innerHTML = uiIcon('pulse');
 $('settingsIcon').innerHTML = uiIcon('gear');
 $('uiLanguage').value = document.body.dataset.language === 'en' ? 'en' : 'vi';
 let language = $('uiLanguage').value;
+const uiCopy = (vi, en) => language === 'en' ? en : vi;
 $('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
 $('uiLanguage').addEventListener('change', () => {
   language = $('uiLanguage').value;
@@ -167,7 +168,7 @@ let reasoningEffort = 'medium';
 let serviceTier = 'default';
 let latestTelemetryRecords = [];
 const providerMeta = {
-  '9router': { brand: '9router', label: '9Router', hint: 'Gateway local, nhiều model', endpoint: 'http://localhost:20128/v1', keyLabel: '9Router API key', local: false },
+  '9router': { brand: '9router', label: '9Router', hint: 'Gateway local, nhiều model', endpoint: 'http://127.0.0.1:20128/v1', keyLabel: '9Router API key', local: false },
   cockpit: { brand: 'cockpit', label: 'Cockpit Tools', hint: 'Gateway local · nhiều tài khoản', endpoint: 'http://127.0.0.1:1455/v1', keyLabel: 'Cockpit Client Key', local: false },
   openai: { brand: 'openai', label: 'OpenAI', hint: 'API chính thức · cần API key', endpoint: 'https://api.openai.com/v1', keyLabel: 'OpenAI API key', local: false },
   anthropic: { brand: 'claude', label: 'Anthropic Claude', hint: 'Messages API · cần API key', endpoint: 'https://api.anthropic.com/v1', keyLabel: 'Anthropic API key', local: false },
@@ -489,7 +490,7 @@ function setProvider(next, changeEndpoint = true) {
   document.querySelectorAll('#providerMenu .provider-option').forEach(option => option.classList.toggle('active', option.dataset.provider === next));
   const keyInput = $('configApiKey');
   keyInput.disabled = meta.local;
-  keyInput.placeholder = meta.local ? 'Provider local không dùng API key' : 'Nhập key mới hoặc để trống để giữ key đã lưu';
+   keyInput.placeholder = meta.local ? uiCopy('Provider local không dùng API key', 'Local providers do not use an API key') : uiCopy('Nhập key mới hoặc để trống để giữ key đã lưu', 'Enter a new key or leave blank to keep the saved key');
   $('apiKeyField').classList.toggle('local', meta.local);
   $('openCockpit').classList.toggle('hidden', next !== 'cockpit');
   if (previous !== next) {
@@ -497,17 +498,17 @@ function setProvider(next, changeEndpoint = true) {
     $('diagnosticsResult').textContent = '';
     $('diagnosticsResult').className = 'diagnostics-result hidden';
     if (!meta.local) {
-      $('keyState').textContent = 'Đang kiểm tra API key đã lưu…';
+       $('keyState').textContent = uiCopy('Đang kiểm tra API key đã lưu…', 'Checking saved API key…');
       $('keyState').classList.remove('saved');
       vscode.postMessage({ type: 'getProviderKeyState', provider: next, profileId: currentProfileId || undefined });
     }
   }
   if (meta.local) {
-    $('keyState').textContent = 'Không cần API key · server local vẫn phải đang chạy';
+     $('keyState').textContent = uiCopy('Không cần API key · server local vẫn phải đang chạy', 'No API key required · the local server must still be running');
     $('keyState').classList.add('local');
     $('keyState').classList.remove('saved');
   } else {
-    $('keyState').textContent = 'API key được lưu riêng và an toàn cho provider này';
+     $('keyState').textContent = uiCopy('API key được lưu riêng và an toàn cho provider này', 'The API key is stored securely and separately for this provider');
     $('keyState').classList.remove('local');
   }
   if (changeEndpoint) {
@@ -562,7 +563,7 @@ function updateCodexTuning() {
 function setPermissionMode(next) {
   const btn = $('permissionMode');
   btn.dataset.mode = next;
-  $('permLabel').textContent = next === 'full' ? 'Full access' : next === 'edit' ? 'Sửa file' : 'Hỏi';
+  $('permLabel').textContent = next === 'full' ? 'Full access' : next === 'edit' ? uiCopy('Sửa file', 'Edit files') : uiCopy('Hỏi', 'Ask');
   btn.classList.toggle('full', next === 'full');
   document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
     const active = opt.dataset.perm === next;
@@ -2168,7 +2169,7 @@ $('expandChanges').addEventListener('click', () => {
   if (lastChangeCount) $('changeTray').classList.remove('hidden');
 });
 $('model').addEventListener('change', () => {
-  const selectedLabel = $('model').selectedOptions[0]?.textContent || 'Chọn model';
+   const selectedLabel = $('model').selectedOptions[0]?.textContent || uiCopy('Chọn model', 'Select model');
   $('modelLabel').textContent = selectedLabel;
   $('modelBrand').innerHTML = $('model').value ? brandIcon(brandKey($('model').value, activeProvider), selectedLabel) : '';
   $('modelTrigger').title = selectedLabel;
@@ -2252,7 +2253,7 @@ document.querySelectorAll('#languageMenu [data-language]').forEach((option) => o
 }));
 $('retryConnection').addEventListener('click', () => {
   showError('');
-  $('setupCheckResult').textContent = 'Đang kiểm tra provider…';
+  $('setupCheckResult').textContent = uiCopy('Đang kiểm tra provider…', 'Checking provider…');
   $('setupCheckResult').className = 'setup-check-result checking';
   $('retryConnection').disabled = true;
   vscode.postMessage({ type: 'diagnostics' });
@@ -2628,15 +2629,15 @@ window.addEventListener('message', ({ data }) => {
     else if (!launchingRouter) showError(data.message || '');
     if (data.connected && !setupOpenRequested) showSetup(false);
     $('connectionToggle').classList.toggle('hidden', !data.connected);
-    $('connectionToggle').textContent = 'Kiểm tra';
-    $('topConnectLabel').textContent = data.connected
-      ? 'Kết nối'
-      : routerStale
-        ? 'Khôi phục'
-        : routerReady
-          ? 'Cấu hình'
-          : 'Kết nối';
-    $('topConnect').dataset.tooltip = $('topConnectLabel').textContent + ' provider';
+     $('connectionToggle').textContent = uiCopy('Kiểm tra', 'Check');
+     $('topConnectLabel').textContent = data.connected
+       ? uiCopy('Kết nối', 'Connect')
+       : routerStale
+         ? uiCopy('Khôi phục', 'Recover')
+         : routerReady
+           ? uiCopy('Cấu hình', 'Configure')
+           : uiCopy('Kết nối', 'Connect');
+     $('topConnect').dataset.tooltip = uiCopy($('topConnectLabel').textContent + ' provider', $('topConnectLabel').textContent + ' provider');
     $('topConnect').classList.remove('hidden');
     $('topConnect').classList.toggle('online', Boolean(data.connected));
     $('topConnect').classList.toggle('attention', !data.connected && !routerReady);
@@ -2644,24 +2645,24 @@ window.addEventListener('message', ({ data }) => {
     $('setupProviderBadge').textContent = providerName;
     $('setupProviderMark').innerHTML = brandIcon(providerMeta[activeProvider]?.brand || brandKey(providerName, activeProvider), providerName);
     $('setupEndpointLabel').textContent = data.endpoint || $('configEndpoint').value.trim() || 'Chưa có endpoint';
-    $('setupTitle').textContent = isRouter ? 'Kết nối 9Router.' : 'Kết nối ' + providerName + '.';
-    $('setupCopy').textContent = isRouter
-      ? 'Khởi động gateway, kiểm tra API và mở bảng điều khiển mà không cần tự chạy lệnh.'
-      : activeProvider === 'ollama' || activeProvider === 'lm-studio'
-        ? 'Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.'
-        : 'Mở Cài đặt để kiểm tra endpoint và API key của provider này.';
+     $('setupTitle').textContent = isRouter ? uiCopy('Kết nối 9Router.', 'Connect 9Router.') : uiCopy('Kết nối ' + providerName + '.', 'Connect ' + providerName + '.');
+     $('setupCopy').textContent = isRouter
+       ? uiCopy('Khởi động gateway, kiểm tra API và mở bảng điều khiển mà không cần tự chạy lệnh.', 'Start the gateway, check the API and open the dashboard without running commands manually.')
+       : activeProvider === 'ollama' || activeProvider === 'lm-studio'
+         ? uiCopy('Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.', 'A local provider needs no API key, but its app, model and API server must be running.')
+         : uiCopy('Mở Cài đặt để kiểm tra endpoint và API key của provider này.', 'Open Settings to check this provider endpoint and API key.');
     if (data.connected || routerReady) {
       setRouterLaunchState(
         'ready',
         isRouter
-          ? (routerExternal ? '9Router đang chạy sẵn' : '9Router đang hoạt động')
-          : providerName + ' đã kết nối'
+           ? (routerExternal ? uiCopy('9Router đang chạy sẵn', '9Router is already running') : uiCopy('9Router đang hoạt động', '9Router is running'))
+           : uiCopy(providerName + ' đã kết nối', providerName + ' connected')
       );
       $('launchDescription').textContent = !isRouter
-        ? 'Đang dùng provider ' + activeProvider + '.'
-        : routerExternal
-          ? 'RelayCode đã phát hiện 9Router từ terminal và sẽ dùng lại tiến trình này, không khởi động thêm.'
-          : 'Gateway và API đang sẵn sàng nhận yêu cầu từ Chat hoặc Agent.';
+         ? uiCopy('Đang dùng provider ' + activeProvider + '.', 'Using provider ' + activeProvider + '.')
+         : routerExternal
+           ? uiCopy('RelayCode đã phát hiện 9Router từ terminal và sẽ dùng lại tiến trình này, không khởi động thêm.', 'RelayCode detected 9Router in the terminal and will reuse that process without starting another one.')
+           : uiCopy('Gateway và API đang sẵn sàng nhận yêu cầu từ Chat hoặc Agent.', 'The gateway and API are ready for Chat or Agent requests.');
       $('startRouter').classList.add('hidden');
       $('openDashboard').classList.toggle('hidden', !isRouter);
       $('retryConnection').classList.remove('hidden');
@@ -2670,12 +2671,12 @@ window.addEventListener('message', ({ data }) => {
       $('startRouter').classList.toggle('hidden', !isRouter);
       $('openDashboard').classList.add('hidden');
       $('retryConnection').classList.remove('hidden');
-      if (!launchingRouter) setRouterLaunchState('idle', isRouter ? '9Router chưa chạy' : providerName + ' chưa kết nối');
+       if (!launchingRouter) setRouterLaunchState('idle', isRouter ? uiCopy('9Router chưa chạy', '9Router is not running') : uiCopy(providerName + ' chưa kết nối', providerName + ' is not connected'));
     }
     const select = $('model');
     const previous = select.value;
     modelHealth = {};
-    select.replaceChildren(new Option('Chọn model', ''));
+     select.replaceChildren(new Option(uiCopy('Chọn model', 'Select model'), ''));
     for (const model of data.models || []) {
       const option = new Option(model.name, model.id);
       option.dataset.tools = String(model.capabilities?.tools !== false);
@@ -2783,12 +2784,12 @@ window.addEventListener('message', ({ data }) => {
     const diagnosticsMeta = providerMeta[data.provider] || providerMeta['9router'];
     $('connectionProviderMark').innerHTML = brandIcon(diagnosticsMeta.brand, diagnosticsMeta.label);
     $('connectionEndpoint').textContent = data.endpoint || 'Chưa có endpoint';
-    $('connectionDialogSubtitle').textContent = data.ok ? 'Provider đã sẵn sàng' : 'Provider chưa thể sử dụng';
-    $('connectionHealthBadge').textContent = data.ok ? 'Sẵn sàng' : 'Có lỗi';
+     $('connectionDialogSubtitle').textContent = data.ok ? uiCopy('Provider đã sẵn sàng', 'Provider is ready') : uiCopy('Provider chưa thể sử dụng', 'Provider is unavailable');
+     $('connectionHealthBadge').textContent = data.ok ? uiCopy('Sẵn sàng', 'Ready') : uiCopy('Có lỗi', 'Error');
     $('connectionHealthBadge').className = data.ok ? 'ready' : 'failed';
     $('connectionLatency').textContent = typeof data.latency === 'number' ? data.latency + ' ms' : '—';
     $('connectionModels').textContent = typeof data.modelCount === 'number' ? String(data.modelCount) : '—';
-    $('connectionMessage').textContent = data.message || (data.ok ? 'Kết nối hoạt động bình thường.' : 'Không thể kết nối provider.');
+     $('connectionMessage').textContent = data.message || (data.ok ? uiCopy('Kết nối hoạt động bình thường.', 'Connection is working normally.') : uiCopy('Không thể kết nối provider.', 'Unable to connect to the provider.'));
   } else if (data.type === 'profiles') {
     profiles = data.profiles || [];
     currentProfileId = data.activeProfileId || currentProfileId;
@@ -2803,7 +2804,7 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'modelCheckStart') {
     checkingModels = true;
     modelHealth = {};
-    $('checkModels').textContent = 'Đang kiểm tra 0/' + data.total + ' · Bấm để hủy';
+     $('checkModels').textContent = uiCopy('Đang kiểm tra 0/' + data.total + ' · Bấm để hủy', 'Checking 0/' + data.total + ' · Click to cancel');
     $('checkModels').classList.add('checking');
     renderModelMenu($('modelSearch').value);
     keepModelMenuOpen();
@@ -2812,10 +2813,10 @@ window.addEventListener('message', ({ data }) => {
     renderModelMenu($('modelSearch').value);
     keepModelMenuOpen();
   } else if (data.type === 'modelCheckProgress') {
-    $('checkModels').textContent = 'Đang kiểm tra ' + data.completed + '/' + data.total + ' · Bấm để hủy';
+     $('checkModels').textContent = uiCopy('Đang kiểm tra ' + data.completed + '/' + data.total + ' · Bấm để hủy', 'Checking ' + data.completed + '/' + data.total + ' · Click to cancel');
   } else if (data.type === 'modelCheckEnd') {
     checkingModels = false;
-    $('checkModels').textContent = data.cancelled ? 'Đã hủy · Kiểm tra lại' : 'Kiểm tra model';
+     $('checkModels').textContent = data.cancelled ? uiCopy('Đã hủy · Kiểm tra lại', 'Canceled · Check again') : uiCopy('Kiểm tra model', 'Check models');
     $('checkModels').classList.remove('checking');
     renderModelMenu($('modelSearch').value);
     keepModelMenuOpen();
@@ -2841,11 +2842,11 @@ window.addEventListener('message', ({ data }) => {
     setPermissionMode(data.mode);
   } else if (data.type === 'routerLaunch') {
     setRouterLaunchState(data.progress, data.message);
-    $('launchDescription').textContent = data.progress === 'checking'
-      ? 'Đang kiểm tra dịch vụ cục bộ.'
-      : data.progress === 'waiting'
-        ? 'Quá trình chạy nền, bạn có thể tiếp tục dùng IDE.'
-        : 'Không cần mở terminal. Một nút là đủ để bắt đầu.';
+     $('launchDescription').textContent = data.progress === 'checking'
+       ? uiCopy('Đang kiểm tra dịch vụ cục bộ.', 'Checking the local service.')
+       : data.progress === 'waiting'
+         ? uiCopy('Quá trình chạy nền, bạn có thể tiếp tục dùng IDE.', 'This runs in the background; you can keep using the IDE.')
+         : uiCopy('Không cần mở terminal. Một nút là đủ để bắt đầu.', 'No terminal required. One click is enough to start.');
     if (data.progress === 'stopped') {
       $('startRouter').classList.remove('hidden');
       $('openDashboard').classList.add('hidden');
@@ -2854,8 +2855,8 @@ window.addEventListener('message', ({ data }) => {
       $('topConnect').classList.add('attention');
     }
   } else if (data.type === 'browserOpened') {
-    setRouterLaunchState('ready', 'Đã mở trình quản lý');
-    $('launchDescription').textContent = '9Router đang chạy nền. Trình duyệt đã mở trang quản lý.';
+     setRouterLaunchState('ready', uiCopy('Đã mở trình quản lý', 'Management page opened'));
+     $('launchDescription').textContent = uiCopy('9Router đang chạy nền. Trình duyệt đã mở trang quản lý.', '9Router is running in the background. The dashboard is open in your browser.');
     showError('');
   } else if (data.type === 'attachmentLoading') {
     $('attachmentProgress').classList.toggle('hidden', !data.active);
@@ -3200,8 +3201,8 @@ window.addEventListener('message', ({ data }) => {
     if (workingTimer) clearInterval(workingTimer);
     workingTimer = null;
     workingLabel = null;
-    setRouterLaunchState('idle', '9Router chưa chạy');
-    $('launchDescription').textContent = 'Không cần mở terminal hoặc chuyển sang trình duyệt.';
+     setRouterLaunchState('idle', uiCopy('9Router chưa chạy', '9Router is not running'));
+     $('launchDescription').textContent = uiCopy('Không cần mở terminal hoặc chuyển sang trình duyệt.', 'No terminal or browser switching is required.');
     showError(data.message);
     showUiToast({ message: data.message, tone: 'danger' });
     setRunning(false);

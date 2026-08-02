@@ -61,7 +61,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
     <div class="profile-bar"><div><span>Hồ sơ đang dùng</span><div id="profileList" class="profile-list"></div></div><div class="profile-actions"><button id="deleteProfile" class="profile-delete" disabled>Xóa hồ sơ</button><button id="newProfile" class="secondary profile-new">+ Hồ sơ mới</button></div></div>
     <label>Tên hồ sơ<input id="profileName" spellcheck="false" placeholder="Ví dụ: OpenAI cá nhân"></label>
     <div class="provider-field"><span>Provider</span><div class="provider-picker" id="providerPicker"><button id="providerTrigger" class="provider-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="providerBrand" class="provider-brand-slot"></span><span><strong id="providerLabel">9Router</strong><small id="providerHint">Gateway local, nhiều model</small></span></button><div id="providerMenu" class="provider-menu hidden" role="listbox"><button type="button" class="provider-option" data-provider="9router"><span><strong>9Router</strong><small>Gateway local, nhiều model</small></span></button><button type="button" class="provider-option" data-provider="cockpit"><span><strong>Cockpit Tools</strong><small>Gateway local · nhiều tài khoản</small></span></button><button type="button" class="provider-option" data-provider="openai"><span><strong>OpenAI</strong><small>API chính thức · cần API key</small></span></button><button type="button" class="provider-option" data-provider="anthropic"><span><strong>Anthropic Claude</strong><small>Messages API · cần API key</small></span></button><button type="button" class="provider-option" data-provider="openai-compatible"><span><strong>OpenAI-compatible</strong><small>Endpoint tùy chỉnh</small></span></button><button type="button" class="provider-option" data-provider="ollama"><span><strong>Ollama</strong><small>Local · không cần API key</small></span></button><button type="button" class="provider-option" data-provider="lm-studio"><span><strong>LM Studio</strong><small>Local · không cần API key</small></span></button></div></div><select id="configProvider" class="hidden" aria-hidden="true" tabindex="-1"><option value="9router">9Router</option><option value="cockpit">Cockpit Tools</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openai-compatible">OpenAI-compatible</option><option value="ollama">Ollama local</option><option value="lm-studio">LM Studio local</option></select></div>
-    <label>Endpoint<input id="configEndpoint" spellcheck="false" placeholder="http://localhost:20128/v1"></label>
+    <label>Endpoint<input id="configEndpoint" spellcheck="false" placeholder="http://127.0.0.1:20128/v1"></label>
     <label id="apiKeyField"><span id="apiKeyLabel">API key</span><input id="configApiKey" type="password" autocomplete="off" placeholder="Nhập API key của provider"></label>
     <div class="price-row"><label>Input $ / 1M<input id="inputPrice" type="number" min="0" step="0.01" placeholder="Tùy chọn"></label><label>Output $ / 1M<input id="outputPrice" type="number" min="0" step="0.01" placeholder="Tùy chọn"></label></div>
     <p id="keyState" class="key-state">Chưa lưu API key</p>
@@ -79,7 +79,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
     <div class="launch-panel">
       <div class="provider-overview">
         <span id="setupProviderMark" class="provider-mark">9R</span>
-        <div class="provider-identity"><strong id="setupProviderBadge">9Router</strong><span id="setupEndpointLabel">http://localhost:20128/v1</span></div>
+        <div class="provider-identity"><strong id="setupProviderBadge">9Router</strong><span id="setupEndpointLabel">http://127.0.0.1:20128/v1</span></div>
         <span id="signalMap" class="connection-orbit" aria-hidden="true"><i></i></span>
       </div>
       <div class="launch-state">
@@ -93,7 +93,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
     <details id="manualSetup" class="manual-setup">
       <summary><span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.8v3M10 14.2v3M2.8 10h3M14.2 10h3M4.9 4.9 7 7M13 13l2.1 2.1M15.1 4.9 13 7M7 13l-2.1 2.1"/><circle cx="10" cy="10" r="3.2"/></svg>Kết nối thủ công</span><small>Endpoint và API key</small></summary>
       <div class="manual-fields">
-        <label>Endpoint<input id="endpoint" value="http://localhost:20128/v1" spellcheck="false"></label>
+        <label>Endpoint<input id="endpoint" value="http://127.0.0.1:20128/v1" spellcheck="false"></label>
         <label>API key<input id="apiKey" type="password" autocomplete="off" placeholder="Lưu trong Secret Storage"></label>
         <button id="connect" class="secondary full">Lưu và kết nối</button>
       </div>
