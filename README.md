@@ -231,7 +231,7 @@ RelayCode keeps local chat history, thread titles, provider profiles, pending re
 
 ### Manual VSIX installation
 
-1. Download the latest `relaycode-<version>.vsix` from the [RelayCode Releases](https://github.com/hungson1002/RelayCode/releases) page.
+1. Download the latest `relaycode-huxon-<version>.vsix` from the [RelayCode Releases](https://github.com/hungson1002/RelayCode/releases) page.
 2. Open VS Code or Antigravity.
 3. Open the Command Palette.
 4. Run **Extensions: Install from VSIX...**.

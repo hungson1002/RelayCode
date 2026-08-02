@@ -59,7 +59,7 @@ Tạo ảnh chỉ hoạt động trong chế độ **Agent** khi provider hiện
 
 ### Cài từ bản phát hành
 
-1. Tải bản `relaycode-<version>.vsix` mới nhất tại [trang phát hành của RelayCode](https://github.com/hungson1002/RelayCode/releases).
+1. Tải bản `relaycode-huxon-<version>.vsix` mới nhất tại [trang phát hành của RelayCode](https://github.com/hungson1002/RelayCode/releases).
 2. Mở VS Code hoặc Antigravity.
 3. Chạy **Extensions: Install from VSIX…** trong Command Palette.
 4. Chọn file vừa tải và reload IDE.
