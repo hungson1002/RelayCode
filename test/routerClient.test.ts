@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { compatibleTextContent, normalizeEndpoint, parseSseData, RouterClient, tuningBody } from '../src/routerClient';
+import { compatibleTextContent, normalizeEndpoint, parseSseData, requestMetrics, RouterClient, tuningBody } from '../src/routerClient';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -26,6 +26,24 @@ describe('parseSseData', () => {
   });
 });
 
+describe('requestMetrics', () => {
+  it('reads standard and common compatible-provider rate-limit headers', () => {
+    const metrics = requestMetrics(Date.now(), new Headers({
+      'ratelimit-limit': '100',
+      'ratelimit-remaining': '73',
+      'x-ratelimit-reset-tokens': '45s'
+    }), 10, 5, false);
+
+    expect(metrics.rateLimit).toEqual({
+      requestsLimit: '100',
+      requestsRemaining: '73',
+      tokensLimit: undefined,
+      tokensRemaining: undefined,
+      reset: '45s'
+    });
+  });
+});
+
 describe('compatibleTextContent', () => {
   it('reads string and array content used by OpenAI-compatible providers', () => {
     expect(compatibleTextContent('Xin chào')).toBe('Xin chào');
@@ -46,7 +64,8 @@ describe('RouterClient compatible chat responses', () => {
     const chunks: string[] = [];
     await new RouterClient({ endpoint: 'http://localhost:20128/v1', apiKey: 'key' })
       .streamChat('model', [{ role: 'user', content: 'test' }], (delta) => chunks.push(delta));
-    expect(chunks).toEqual(['Nội dung đầy đủ']);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join('')).toBe('Nội dung đầy đủ');
   });
 
   it('reads array content in SSE and rejects a successful but empty stream', async () => {

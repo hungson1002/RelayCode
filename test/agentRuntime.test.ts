@@ -206,6 +206,21 @@ describe('AgentRuntime completion verification', () => {
     expect(onDelta).toHaveBeenCalledWith('The inspection is complete.');
   });
 
+  it('forwards streamed Agent content before the tool step completes', async () => {
+    const completeWithTools = vi.fn().mockImplementation(async (_model, _messages, _tools, _signal, onProgress) => {
+      onProgress?.({ type: 'content', content: 'Đoạn đầu ' });
+      onProgress?.({ type: 'content', content: 'đoạn sau.' });
+      return { content: 'Đoạn đầu đoạn sau.', toolCalls: [], metrics };
+    });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const deltas: string[] = [];
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Trả lời ngay trong chat', 'test-model', { onDelta: (delta) => deltas.push(delta), onStatus: vi.fn() });
+
+    expect(deltas).toEqual(['Đoạn đầu ', 'đoạn sau.']);
+  });
+
   it('bounds verbose model narration and keeps the final outcome', () => {
     const verbose = `${'First analysis and repeated internal planning. '.repeat(90)}
 

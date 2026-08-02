@@ -131,7 +131,7 @@ RelayCode separates the coding workflow from the model source. Supported provide
 | --- | --- | --- |
 | **9Router** | API key | `http://127.0.0.1:20128/v1` |
 | **Cockpit Tools** | Client key | `http://127.0.0.1:1455/v1` |
-| **OpenCode** | API key | `https://console.opencode.ai/inference/openai/v1` |
+| **OpenCode** | API key | `https://opencode.ai/zen/v1` |
 | **OpenAI** | API key | Official OpenAI API |
 | **Anthropic Claude** | API key | Anthropic Messages API |
 | **OpenAI-compatible** | Provider-specific | Any compatible endpoint you configure |

@@ -403,7 +403,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           ? this.profileStore.list().find((item) => item.id === message.profileId)
           : this.profileStore.active();
         const hasApiKey = Boolean(await this.profileStore.apiKeyFor(profile?.id ?? '', message.provider));
-        await this.post({ type: 'providerKeyState', provider: message.provider, hasApiKey });
+        await this.post({ type: 'providerKeyState', provider: message.provider, hasApiKey, requestId: message.requestId });
       } else if (message.type === 'approval') {
         const approval = this.approvals.get(message.id);
         if (message.decision === 'always') {

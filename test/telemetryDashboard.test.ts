@@ -138,7 +138,25 @@ describe('telemetry dashboard', () => {
     expect(html).not.toContain('style="width:64%');
     expect(html).toContain('class="metric-icon"');
     expect(html).not.toContain('Gemini 3.5 Flash (High)');
+    expect(html).not.toContain('kr/claude-sonnet-4.5');
     expect(html).not.toContain('/providers/');
+  });
+
+  it('shows locally recorded token usage when a provider sends no quota headers', () => {
+    const profile: ProviderProfile = {
+      id: 'opencode-main',
+      name: 'OpenCode',
+      kind: 'opencode',
+      endpoint: 'https://opencode.ai/zen/v1'
+    };
+    const first: TelemetryRecord = { ...record(), profileId: profile.id, profileName: profile.name, provider: profile.kind, model: 'nemotron-3-super-free', totalTokens: 120 };
+    const second: TelemetryRecord = { ...first, id: 'metric-2', timestamp: first.timestamp + 1, totalTokens: 80 };
+
+    const html = renderTelemetryDashboard(webview, [first, second], quota(), 'nonce', profile);
+
+    expect(html).toContain('OpenCode');
+    expect(html).toContain('200 token đã ghi nhận');
+    expect(html).toContain('Đã ghi nhận sử dụng');
   });
 
   it('renders the entire dashboard chrome in English when English is selected', () => {

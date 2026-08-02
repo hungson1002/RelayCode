@@ -10,7 +10,7 @@ describe('provider factory', () => {
     expect(createProvider({ kind: 'anthropic', endpoint: 'https://api.anthropic.com/v1', apiKey: 'test' })).toBeInstanceOf(AnthropicClient);
     expect(createProvider({ kind: 'openai', endpoint: 'https://api.openai.com/v1', apiKey: 'test' })).toBeInstanceOf(RouterClient);
     expect(createProvider({ kind: 'cockpit', endpoint: 'http://127.0.0.1:1455/v1', apiKey: 'client-key' })).toBeInstanceOf(RouterClient);
-    expect(createProvider({ kind: 'opencode', endpoint: 'https://console.opencode.ai/inference/openai/v1', apiKey: 'test' })).toBeInstanceOf(RouterClient);
+    expect(createProvider({ kind: 'opencode', endpoint: 'https://opencode.ai/zen/v1', apiKey: 'test' })).toBeInstanceOf(RouterClient);
   });
 
   it('turns a Cockpit 403 response into an actionable credential message', async () => {

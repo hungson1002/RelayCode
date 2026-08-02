@@ -18,6 +18,7 @@ export interface ModelCapabilities {
 
 export interface ToolCompletionProgress {
   type: 'content' | 'tool';
+  content?: string;
   name?: string;
   arguments?: string;
 }

@@ -28,7 +28,7 @@ export function renderTelemetryDashboard(
     : quota;
   const accountCount = displayedQuota.accounts.length;
   const quotaCount = displayedQuota.accounts.reduce((sum, account) => sum + account.quotas.length, 0);
-  const availableCount = displayedQuota.accounts.reduce((sum, account) => sum + account.quotas.filter((item) => item.remainingPercentage === undefined || item.remainingPercentage > 15).length, 0);
+  const availableCount = displayedQuota.accounts.reduce((sum, account) => sum + account.quotas.filter((item) => item.unlimited || (item.remainingPercentage !== undefined && item.remainingPercentage > 15)).length, 0);
   const lowCount = displayedQuota.accounts.reduce((sum, account) => sum + account.quotas.filter((item) => item.remainingPercentage !== undefined && item.remainingPercentage <= 15).length, 0);
   const providers = [...new Set(displayedQuota.accounts.map((account) => account.provider))].sort();
   const models = [...new Map(displayedQuota.accounts.flatMap((account) => account.quotas).map((item) => [item.id, item.name])).entries()]
@@ -285,11 +285,11 @@ function quotaRow(item: QuotaItem, provider: string): string {
     ? 'Không giới hạn'
     : item.total !== undefined
       ? `${compact(item.used ?? Math.max(0, item.total - (item.remaining ?? 0)))} / ${compact(item.total)}`
-      : item.remaining !== undefined ? `${compact(item.remaining)} còn lại` : 'Provider chưa gửi hạn mức';
+      : item.remaining !== undefined ? `${compact(item.remaining)} còn lại` : item.used !== undefined ? `${compact(item.used)} token đã ghi nhận` : 'Provider chưa gửi hạn mức';
   const modelKey = brandKeyFor(`${item.id} ${item.name}`, provider);
   const level = !known ? 'unknown' : percent <= 15 ? 'critical' : percent <= 40 ? 'low' : 'healthy';
   const gaugeValue = item.unlimited ? 100 : known ? percent : 0;
-  return `<div class="quota-row" data-model="${safe(item.id)}"><div class="model">${brandMarkup(modelKey, item.name, 'model-brand')}<div class="model-copy"><strong title="${safe(item.name)}">${safe(item.name)}</strong><span>${safe(providerName(provider))}</span></div></div><div class="quota-meter"><div class="quota-numbers"><span>${safe(detail)}</span><b>${item.unlimited ? 'Không giới hạn' : known ? `${percent}% còn lại` : 'Chưa có dữ liệu'}</b></div><progress class="quota-gauge ${level}" max="100" value="${gaugeValue}" aria-label="${known ? `${percent}% hạn mức còn lại` : 'Chưa có dữ liệu hạn mức'}">${gaugeValue}%</progress></div><div class="reset"><span>Reset</span><strong>${item.resetAt ? safe(relativeTime(Date.parse(item.resetAt))) : 'Không có lịch'}</strong></div></div>`;
+  return `<div class="quota-row" data-model="${safe(item.id)}"><div class="model">${brandMarkup(modelKey, item.name, 'model-brand')}<div class="model-copy"><strong title="${safe(item.name)}">${safe(item.name)}</strong><span>${safe(providerName(provider))}</span></div></div><div class="quota-meter"><div class="quota-numbers"><span>${safe(detail)}</span><b>${item.unlimited ? 'Không giới hạn' : known ? `${percent}% còn lại` : item.used !== undefined ? 'Đã ghi nhận sử dụng' : 'Chưa có dữ liệu'}</b></div><progress class="quota-gauge ${level}" max="100" value="${gaugeValue}" aria-label="${known ? `${percent}% hạn mức còn lại` : 'Chưa có dữ liệu hạn mức'}">${gaugeValue}%</progress></div><div class="reset"><span>Reset</span><strong>${item.resetAt ? safe(relativeTime(Date.parse(item.resetAt))) : 'Không có lịch'}</strong></div></div>`;
 }
 
 function stateNotice(quota: QuotaSnapshot, provider: string): string {
@@ -308,9 +308,11 @@ function emptyState(quota: QuotaSnapshot): string {
 
 function quotaFromTelemetry(profile: ProviderProfile, records: TelemetryRecord[]): QuotaSnapshot {
   const latestByModel = new Map<string, TelemetryRecord>();
+  const tokensByModel = new Map<string, number>();
   for (const record of records) {
     const current = latestByModel.get(record.model);
     if (!current || record.timestamp > current.timestamp) latestByModel.set(record.model, record);
+    tokensByModel.set(record.model, (tokensByModel.get(record.model) ?? 0) + record.totalTokens);
   }
   const quotas: QuotaItem[] = [...latestByModel.values()].map((record) => {
     const rate = record.rateLimit;
@@ -321,7 +323,7 @@ function quotaFromTelemetry(profile: ProviderProfile, records: TelemetryRecord[]
       name: record.model,
       total,
       remaining,
-      used: total !== undefined && remaining !== undefined ? Math.max(0, total - remaining) : undefined,
+      used: total !== undefined && remaining !== undefined ? Math.max(0, total - remaining) : tokensByModel.get(record.model),
       remainingPercentage: total !== undefined && total > 0 && remaining !== undefined ? Math.max(0, Math.min(100, (remaining / total) * 100)) : undefined,
       resetAt: parseReset(rate?.reset),
       unlimited: false
@@ -399,10 +401,24 @@ function numeric(value: string | undefined): number | undefined {
 
 function parseReset(value: string | undefined): string | undefined {
   if (!value) return undefined;
+  const trimmed = value.trim().toLowerCase();
+  const numericValue = Number(trimmed);
+  if (Number.isFinite(numericValue)) {
+    const timestamp = numericValue >= 1_000_000_000_000
+      ? numericValue
+      : numericValue >= 1_000_000_000
+        ? numericValue * 1_000
+        : Date.now() + numericValue * 1_000;
+    return new Date(timestamp).toISOString();
+  }
+  const units: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+  const parts = [...trimmed.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h|d)/g)];
+  if (parts.length && parts.map((part) => part[0]).join('') === trimmed.replace(/\s+/g, '')) {
+    const duration = parts.reduce((total, part) => total + Number(part[1]) * (units[part[2]!] ?? 0), 0);
+    return new Date(Date.now() + duration).toISOString();
+  }
   const timestamp = Date.parse(value);
-  if (Number.isFinite(timestamp)) return new Date(timestamp).toISOString();
-  const seconds = Number(value);
-  return Number.isFinite(seconds) ? new Date(Date.now() + seconds * 1_000).toISOString() : undefined;
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
 }
 
 function compact(value: number): string {

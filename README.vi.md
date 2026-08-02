@@ -44,7 +44,7 @@ RelayCode dành cho người muốn sử dụng coding agent đa model nhưng v�
 | --- | --- | --- |
 | 9Router | API key | `http://127.0.0.1:20128/v1` |
 | Cockpit Tools | Client Key | `http://127.0.0.1:1455/v1` |
-| OpenCode | API key | `https://console.opencode.ai/inference/openai/v1` |
+| OpenCode | API key | `https://opencode.ai/zen/v1` |
 | OpenAI | API key | API chính thức của OpenAI |
 | Anthropic Claude | API key | Anthropic Messages API |
 | OpenAI-compatible | Tùy provider | Endpoint do bạn nhập |

@@ -58,4 +58,31 @@ describe('ProviderProfileStore API keys', () => {
     const afterReload = new ProviderProfileStore(fixture.context as never);
     expect(await afterReload.apiKey(profile)).toBe('sk-saved');
   });
+
+  it('migrates saved OpenCode Console profiles to OpenCode Zen', async () => {
+    const profile: ProviderProfile = {
+      id: 'opencode-profile',
+      name: 'OpenCode',
+      kind: 'opencode',
+      endpoint: 'https://console.opencode.ai/inference/openai/v1'
+    };
+    const fixture = contextFixture([profile]);
+    const store = new ProviderProfileStore(fixture.context as never);
+
+    const active = await store.ensure('opencode', profile.endpoint);
+
+    expect(active.endpoint).toBe('https://opencode.ai/zen/v1');
+    expect(store.list()[0]?.endpoint).toBe('https://opencode.ai/zen/v1');
+  });
+
+  it('keeps the last saved key available if SecretStorage briefly returns no value', async () => {
+    const profile: ProviderProfile = { id: 'profile-cache', name: 'Cached', kind: 'openai', endpoint: 'https://api.openai.com/v1' };
+    const fixture = contextFixture([profile]);
+    const store = new ProviderProfileStore(fixture.context as never);
+
+    await store.save(profile, 'sk-stable');
+    fixture.secrets.delete('nineRouter.profileKey.profile-cache.openai');
+
+    expect(await store.apiKey(profile)).toBe('sk-stable');
+  });
 });

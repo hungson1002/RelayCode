@@ -43,12 +43,14 @@ export function estimateTokens(value: unknown): number {
 
 function rateLimit(headers: Headers): RequestMetrics['rateLimit'] {
   const read = (...names: string[]): string | undefined => names.map((name) => headers.get(name)).find((value): value is string => Boolean(value)) ?? undefined;
+  const requestReset = read('x-ratelimit-reset-requests', 'anthropic-ratelimit-requests-reset');
+  const tokenReset = read('x-ratelimit-reset-tokens', 'anthropic-ratelimit-tokens-reset');
   const result = {
-    requestsLimit: read('x-ratelimit-limit-requests', 'anthropic-ratelimit-requests-limit'),
-    requestsRemaining: read('x-ratelimit-remaining-requests', 'anthropic-ratelimit-requests-remaining'),
+    requestsLimit: read('x-ratelimit-limit-requests', 'anthropic-ratelimit-requests-limit', 'ratelimit-limit', 'x-ratelimit-limit', 'x-rate-limit-limit'),
+    requestsRemaining: read('x-ratelimit-remaining-requests', 'anthropic-ratelimit-requests-remaining', 'ratelimit-remaining', 'x-ratelimit-remaining', 'x-rate-limit-remaining'),
     tokensLimit: read('x-ratelimit-limit-tokens', 'anthropic-ratelimit-tokens-limit'),
     tokensRemaining: read('x-ratelimit-remaining-tokens', 'anthropic-ratelimit-tokens-remaining'),
-    reset: read('x-ratelimit-reset-requests', 'anthropic-ratelimit-requests-reset', 'retry-after')
+    reset: requestReset ?? tokenReset ?? read('ratelimit-reset', 'x-ratelimit-reset', 'x-rate-limit-reset', 'retry-after')
   };
   return Object.values(result).some(Boolean) ? result : undefined;
 }
@@ -62,6 +64,21 @@ export function tuningBody(tuning?: RequestTuning): Record<string, string> {
     ...(tuning?.reasoningEffort ? { reasoning_effort: tuning.reasoningEffort } : {}),
     ...(tuning?.serviceTier === 'fast' ? { service_tier: 'priority' } : {})
   };
+}
+
+async function emitCompleteResponseProgressively(
+  content: string,
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const chunkSize = Math.max(8, Math.min(56, Math.ceil(content.length / 36)));
+  for (let offset = 0; offset < content.length; offset += chunkSize) {
+    if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Request bị dừng.');
+    onDelta(content.slice(offset, offset + chunkSize));
+    if (offset + chunkSize < content.length) {
+      await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 12));
+    }
+  }
 }
 
 export class RouterClient {
@@ -144,7 +161,7 @@ export class RouterClient {
     const startedAt = Date.now();
     const response = await fetch(`${normalizeEndpoint(this.config.endpoint)}/chat/completions`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: { ...this.headers(), Accept: 'text/event-stream' },
       body: JSON.stringify({ model, messages, stream: true, ...tuningBody(tuning) }),
       signal
     });
@@ -166,7 +183,7 @@ export class RouterClient {
           || compatibleTextContent(body.choices?.[0]?.text)
           || compatibleTextContent(body.output_text);
         if (!content.trim()) throw new Error('Provider trả về phản hồi JSON nhưng không có nội dung.');
-        onDelta(content);
+        await emitCompleteResponseProgressively(content, onDelta, signal);
         return requestMetrics(startedAt, response.headers, body.usage?.prompt_tokens ?? estimateTokens(messages), body.usage?.completion_tokens ?? estimateTokens(content), !body.usage);
       } catch (error) {
         if (error instanceof Error && /không có nội dung/.test(error.message)) throw error;
@@ -306,6 +323,11 @@ export class RouterClient {
           ? [{ id: call.id, name: call.function.name, arguments: call.function.arguments ?? '{}' }]
           : []
       );
+      await emitCompleteResponseProgressively(
+        sanitizeModelText(message?.content ?? ''),
+        (content) => onProgress?.({ type: 'content', content }),
+        signal
+      );
       for (const call of toolCalls) onProgress?.({ type: 'tool', name: call.name, arguments: call.arguments });
       return {
         content: sanitizeModelText(message?.content ?? ''),
@@ -353,7 +375,7 @@ export class RouterClient {
             const delta = event.choices?.[0]?.delta;
             if (delta?.content) {
               content += delta.content;
-              onProgress?.({ type: 'content' });
+              onProgress?.({ type: 'content', content: delta.content });
             }
             for (const raw of delta?.tool_calls ?? []) {
               const index = raw.index ?? 0;

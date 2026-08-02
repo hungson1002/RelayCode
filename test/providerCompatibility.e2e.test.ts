@@ -52,6 +52,7 @@ describe('OpenAI-compatible provider over a real HTTP server', () => {
 
     const jsonChunks: string[] = [];
     await client.streamChat('json-model', [{ role: 'user', content: 'test' }], (chunk) => jsonChunks.push(chunk));
+    expect(jsonChunks.length).toBeGreaterThan(1);
     expect(jsonChunks.join('')).toBe('JSON trả lời được');
 
     const sseChunks: string[] = [];

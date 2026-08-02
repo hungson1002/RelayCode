@@ -148,7 +148,9 @@ let resolvedChangeSnapshots = new Map();
 let changeOperationBusy = false;
 let checkingModels = false;
 let favoriteModels = [];
+let favoriteModelsAtMenuOpen = [];
 let recentModels = [];
+let keyStateRequestId = 0;
 let pendingToolFailureId = '';
 let activeTerminal = null;
 let skills = [];
@@ -171,7 +173,7 @@ let latestTelemetryRecords = [];
 const providerMeta = {
   '9router': { brand: '9router', label: '9Router', hint: 'Gateway local, nhiều model', endpoint: 'http://127.0.0.1:20128/v1', keyLabel: '9Router API key', local: false },
   cockpit: { brand: 'cockpit', label: 'Cockpit Tools', hint: 'Gateway local · nhiều tài khoản', endpoint: 'http://127.0.0.1:1455/v1', keyLabel: 'Cockpit Client Key', local: false },
-  opencode: { brand: 'opencode', label: 'OpenCode', hint: 'OpenCode Console · OpenAI-compatible', endpoint: 'https://console.opencode.ai/inference/openai/v1', keyLabel: 'OpenCode API key', local: false },
+  opencode: { brand: 'opencode', label: 'OpenCode', hint: 'OpenCode Zen · OpenAI-compatible', endpoint: 'https://opencode.ai/zen/v1', keyLabel: 'OpenCode API key', local: false },
   openai: { brand: 'openai', label: 'OpenAI', hint: 'API chính thức · cần API key', endpoint: 'https://api.openai.com/v1', keyLabel: 'OpenAI API key', local: false },
   anthropic: { brand: 'claude', label: 'Anthropic Claude', hint: 'Messages API · cần API key', endpoint: 'https://api.anthropic.com/v1', keyLabel: 'Anthropic API key', local: false },
   'openai-compatible': { brand: 'openrouter', label: 'OpenAI-compatible', hint: 'Endpoint tùy chỉnh', endpoint: '', keyLabel: 'API key', local: false },
@@ -217,6 +219,7 @@ function closeFloatingSurfaces(except = '') {
 
 function openFloatingSurface(id) {
   closeDropdowns();
+  if (id !== 'configPanel') closeConfigPanel();
   closeFloatingSurfaces(id);
   $(id)?.classList.remove('hidden');
 }
@@ -429,31 +432,20 @@ $('messages').addEventListener('scroll', () => {
 $('runningScrollIndicator').addEventListener('click', scrollMessagesToBottom);
 
 function queueAssistantText(delta) {
-  pendingAssistantText += delta;
-  if (typingTimer) return;
-  const tick = () => {
-    if (!assistantBody) { pendingAssistantText = ''; typingTimer = 0; return; }
-    // Keep a short, visible typewriter motion without making the provider wait
-    // for a character-by-character queue. Larger buffered chunks drain faster.
-    const size = Math.max(6, Math.min(18, Math.ceil(pendingAssistantText.length / 4)));
-    assistantRawText += pendingAssistantText.slice(0, size);
-    pendingAssistantText = pendingAssistantText.slice(size);
-    renderMarkdownInto(assistantBody, assistantRawText);
-    const item = assistantBody.closest('.message');
-    if (item) item.dataset.rawContent = assistantRawText;
-    if (messagesPinnedToBottom) scrollMessagesToBottom();
-    else updateRunningScrollIndicator();
-    if (pendingAssistantText) typingTimer = setTimeout(tick, 16);
-    else {
-      typingTimer = 0;
-      if (pendingTurnEnd) {
-        const data = pendingTurnEnd;
-        pendingTurnEnd = null;
-        settleTurn(data);
-      }
-    }
-  };
-  typingTimer = setTimeout(tick, 16);
+  if (!assistantBody || !delta) return;
+  if (typingTimer) { clearTimeout(typingTimer); typingTimer = 0; }
+  pendingAssistantText = '';
+  assistantRawText += delta;
+  renderMarkdownInto(assistantBody, assistantRawText);
+  const item = assistantBody.closest('.message');
+  if (item) item.dataset.rawContent = assistantRawText;
+  if (messagesPinnedToBottom) scrollMessagesToBottom();
+  else updateRunningScrollIndicator();
+  if (pendingTurnEnd) {
+    const data = pendingTurnEnd;
+    pendingTurnEnd = null;
+    settleTurn(data);
+  }
 }
 
 function reconcileFinalAssistantText(content) {
@@ -560,7 +552,7 @@ function setProvider(next, changeEndpoint = true, updateBadge = true) {
     if (!meta.local) {
        $('keyState').textContent = uiCopy('Đang kiểm tra API key đã lưu…', 'Checking saved API key…');
       $('keyState').classList.remove('saved');
-      vscode.postMessage({ type: 'getProviderKeyState', provider: next, profileId: currentProfileId || undefined });
+      vscode.postMessage({ type: 'getProviderKeyState', provider: next, profileId: currentProfileId || undefined, requestId: ++keyStateRequestId });
     }
   }
   if (meta.local) {
@@ -640,11 +632,12 @@ function setPermissionMode(next) {
 function renderModelMenu(query = '') {
   const list = $('modelOptions'); list.replaceChildren();
   const needle = query.trim().toLowerCase();
+  const rankingFavorites = $('modelMenu').classList.contains('hidden') ? favoriteModels : favoriteModelsAtMenuOpen;
   const options = [...$('model').options]
     .filter(option => option.value && (!needle || option.text.toLowerCase().includes(needle)))
     .sort((left, right) => {
-      const leftRank = favoriteModels.includes(left.value) ? 0 : recentModels.includes(left.value) ? 1 : 2;
-      const rightRank = favoriteModels.includes(right.value) ? 0 : recentModels.includes(right.value) ? 1 : 2;
+      const leftRank = rankingFavorites.includes(left.value) ? 0 : recentModels.includes(left.value) ? 1 : 2;
+      const rightRank = rankingFavorites.includes(right.value) ? 0 : recentModels.includes(right.value) ? 1 : 2;
       return leftRank - rightRank || left.text.localeCompare(right.text);
     });
   for (const option of options) {
@@ -664,8 +657,9 @@ function renderModelMenu(query = '') {
           ? 'Chat only'
           : (option.dataset.reasoning === 'true' ? 'Agent · reasoning' : 'Agent') + (latency ? ' · ' + latency + ' ms' : '');
     const copy = document.createElement('span'); copy.className = 'model-option-copy'; copy.append(label, meta);
-    const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.textContent = '★'; favorite.title = favoriteModels.includes(option.value) ? 'Bỏ yêu thích' : 'Yêu thích'; favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
+    const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 4.75A1.75 1.75 0 0 1 8.5 3h7a1.75 1.75 0 0 1 1.75 1.75v16L12 17.5l-5.25 3.25v-16Z"/></svg>'; favorite.title = favoriteModels.includes(option.value) ? 'Bỏ dấu model' : 'Đánh dấu model'; favorite.setAttribute('aria-label', favorite.title); favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
     favorite.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'toggleFavoriteModel', model: option.value }); });
+    favorite.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); favorite.click(); } });
     button.append(icon, copy, health, favorite); button.title = healthMessage;
     button.classList.toggle('active', option.value === $('model').value);
     button.addEventListener('click', () => {
@@ -817,6 +811,59 @@ function bindRichContent(container) {
   }));
 }
 
+function splitMarkdownTableRow(source) {
+  const text = String(source || '').trim();
+  if (!text.includes('|')) return null;
+  const cells = [];
+  let cell = '';
+  let escaped = false;
+  let inCode = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (escaped) {
+      cell += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\' && (text[index + 1] === '|' || text[index + 1] === '\\')) {
+      escaped = true;
+      continue;
+    }
+    if (char === '\x60') {
+      inCode = !inCode;
+      cell += char;
+      continue;
+    }
+    if (char === '|' && !inCode) {
+      cells.push(cell.trim());
+      cell = '';
+      continue;
+    }
+    cell += char;
+  }
+  cells.push(cell.trim());
+  if (text.startsWith('|')) cells.shift();
+  if (text.endsWith('|')) cells.pop();
+  return cells.length >= 2 ? cells : null;
+}
+
+function markdownTableAlignment(cell) {
+  const marker = String(cell || '').replace(/\s+/g, '');
+  if (!/^:?-{3,}:?$/.test(marker)) return null;
+  if (marker.startsWith(':') && marker.endsWith(':')) return 'center';
+  if (marker.endsWith(':')) return 'right';
+  return 'left';
+}
+
+function renderMarkdownTable(headers, alignments, rows) {
+  const renderCell = (tag, value, index) => '<' + tag + ' class="align-' + (alignments[index] || 'left') + '">' + inlineMarkdown(value || '') + '</' + tag + '>';
+  const head = '<thead><tr>' + headers.map((cell, index) => renderCell('th', cell, index)).join('') + '</tr></thead>';
+  const body = rows.length
+    ? '<tbody>' + rows.map(row => '<tr>' + headers.map((_, index) => renderCell('td', row[index] || '', index)).join('') + '</tr>').join('') + '</tbody>'
+    : '';
+  return '<div class="markdown-table-wrap"><table class="markdown-table">' + head + body + '</table></div>';
+}
+
 function renderMarkdownInto(container, source) {
   const cleanSource = String(source || '')
     .replace(/(?:\x60{1,3}[ \t]*)?(?:<|＜)?[|｜][ \t]*DSML[ \t]*[|｜][ \t]*(?:function_calls?|tool_calls?)(?:>|＞)?(?:[ \t]*\x60{1,3})?/giu, '')
@@ -838,7 +885,8 @@ function renderMarkdownInto(container, source) {
     html += '</' + list + '>';
     list = '';
   };
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
     if (/^\s*\x60{3}/.test(line)) {
       flushParagraph(); closeList();
       if (inCode) {
@@ -849,6 +897,25 @@ function renderMarkdownInto(container, source) {
       continue;
     }
     if (inCode) { code.push(line); continue; }
+    const tableHeaders = splitMarkdownTableRow(line);
+    const tableSeparators = tableHeaders && lineIndex + 1 < lines.length
+      ? splitMarkdownTableRow(lines[lineIndex + 1])
+      : null;
+    const tableAlignments = tableSeparators?.map(markdownTableAlignment) || [];
+    if (tableHeaders && tableSeparators && tableHeaders.length === tableSeparators.length && tableAlignments.every(Boolean)) {
+      flushParagraph(); closeList();
+      const rows = [];
+      lineIndex += 2;
+      while (lineIndex < lines.length) {
+        const row = splitMarkdownTableRow(lines[lineIndex]);
+        if (!row) break;
+        rows.push(row);
+        lineIndex++;
+      }
+      lineIndex--;
+      html += renderMarkdownTable(tableHeaders, tableAlignments, rows);
+      continue;
+    }
     const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
     const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (bullet || numbered) {
@@ -2283,7 +2350,7 @@ $('metricsToggle').addEventListener('click', (event) => { event.stopPropagation(
 $('closeTelemetry').addEventListener('click', () => $('telemetryPanel').classList.add('hidden'));
 $('telemetryPanel').addEventListener('click', (event) => event.stopPropagation());
 $('clearTelemetry').addEventListener('click', () => vscode.postMessage({ type: 'clearTelemetry' }));
-$('openMcp').addEventListener('click', (event) => { event.stopPropagation(); openFloatingSurface('mcpPanel'); vscode.postMessage({ type: 'getMcpServers' }); });
+$('openMcp').addEventListener('click', (event) => { event.stopPropagation(); closeConfigPanel(); openFloatingSurface('mcpPanel'); vscode.postMessage({ type: 'getMcpServers' }); });
 $('closeMcp').addEventListener('click', () => $('mcpPanel').classList.add('hidden'));
 $('mcpPanel').addEventListener('click', (event) => event.stopPropagation());
 function updateMcpForm() {
@@ -2346,6 +2413,7 @@ $('modelTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('modelMenu').classList.contains('hidden');
   if (open) closeDropdowns($('modelMenu'));
+  if (open) favoriteModelsAtMenuOpen = [...favoriteModels];
   $('modelMenu').classList.toggle('hidden', !open);
   $('modelPicker').classList.toggle('open', open);
   $('modelTrigger').setAttribute('aria-expanded', String(open));
@@ -2357,15 +2425,8 @@ $('modelMenu').addEventListener('click', (event) => event.stopPropagation());
 $('modelSearch').addEventListener('input', () => renderModelMenu($('modelSearch').value));
 $('checkModels').addEventListener('click', (event) => {
   event.stopPropagation();
-  keepModelMenuOpen();
   vscode.postMessage({ type: checkingModels ? 'cancelModelCheck' : 'checkModels' });
 });
-
-function keepModelMenuOpen() {
-  $('modelMenu').classList.remove('hidden');
-  $('modelPicker').classList.add('open');
-  $('modelTrigger').setAttribute('aria-expanded', 'true');
-}
 $('providerTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('providerMenu').classList.contains('hidden');
@@ -2688,6 +2749,7 @@ window.addEventListener('message', ({ data }) => {
     showUiToast(data);
   } else if (data.type === 'bootstrap') {
     if (startupReadyTimer) clearTimeout(startupReadyTimer);
+    keyStateRequestId++;
     startupReadyTimer = 0;
     // Chat is the primary surface. Provider discovery runs in the background;
     // Connection Center is opened only when the user explicitly requests it.
@@ -2917,6 +2979,7 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'openMcpPanel') {
     openFloatingSurface('mcpPanel');
   } else if (data.type === 'openModelPicker') {
+    favoriteModelsAtMenuOpen = [...favoriteModels];
     $('modelMenu').classList.remove('hidden');
     $('modelPicker').classList.add('open');
     $('modelTrigger').setAttribute('aria-expanded', 'true');
@@ -2932,7 +2995,7 @@ window.addEventListener('message', ({ data }) => {
       $('keyState').classList.toggle('saved', data.hasApiKey);
     }
   } else if (data.type === 'providerKeyState') {
-    if (data.provider === $('configProvider').value && !providerMeta[data.provider]?.local) {
+    if ((!data.requestId || data.requestId === keyStateRequestId) && data.provider === $('configProvider').value && !providerMeta[data.provider]?.local) {
       $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
       $('keyState').classList.toggle('saved', Boolean(data.hasApiKey));
       $('configApiKey').placeholder = data.hasApiKey
@@ -2962,6 +3025,7 @@ window.addEventListener('message', ({ data }) => {
     currentProfileId = data.activeProfileId || currentProfileId;
     renderProfiles();
   } else if (data.type === 'profileLoaded') {
+    keyStateRequestId++;
     applyProfileUi(data.profile);
     activeProvider = data.profile?.kind || '9router';
     updateConnectionBadge(providerMeta[activeProvider]?.label || activeProvider, 'checking');
@@ -2974,11 +3038,9 @@ window.addEventListener('message', ({ data }) => {
      $('checkModels').textContent = uiCopy('Đang kiểm tra 0/' + data.total + ' · Bấm để hủy', 'Checking 0/' + data.total + ' · Click to cancel');
     $('checkModels').classList.add('checking');
     renderModelMenu($('modelSearch').value);
-    keepModelMenuOpen();
   } else if (data.type === 'modelCheck') {
     modelHealth[data.model] = { status: data.status, message: data.message || (data.latencyMs ? 'OK · ' + data.latencyMs + ' ms' : '') };
     renderModelMenu($('modelSearch').value);
-    keepModelMenuOpen();
   } else if (data.type === 'modelCheckProgress') {
      $('checkModels').textContent = uiCopy('Đang kiểm tra ' + data.completed + '/' + data.total + ' · Bấm để hủy', 'Checking ' + data.completed + '/' + data.total + ' · Click to cancel');
   } else if (data.type === 'modelCheckEnd') {
@@ -2986,7 +3048,6 @@ window.addEventListener('message', ({ data }) => {
      $('checkModels').textContent = data.cancelled ? uiCopy('Đã hủy · Kiểm tra lại', 'Canceled · Check again') : uiCopy('Kiểm tra model', 'Check models');
     $('checkModels').classList.remove('checking');
     renderModelMenu($('modelSearch').value);
-    keepModelMenuOpen();
   } else if (data.type === 'telemetry') {
     latestTelemetryRecords = data.records || [];
     renderTelemetry(latestTelemetryRecords);
@@ -3175,6 +3236,7 @@ window.addEventListener('message', ({ data }) => {
     item.querySelector('.tool-retry').addEventListener('click', () => finish('retry'));
     item.querySelector('.tool-change-model').addEventListener('click', () => {
       pendingToolFailureId = data.id;
+      favoriteModelsAtMenuOpen = [...favoriteModels];
       $('modelMenu').classList.remove('hidden');
       $('modelPicker').classList.add('open');
       $('modelTrigger').setAttribute('aria-expanded', 'true');
@@ -3335,10 +3397,8 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'toolOutput') {
     appendTerminalOutput(data);
   } else if (data.type === 'turnEnd') {
-    // Never let the cosmetic typing animation own the lifecycle of a turn.
-    // Keep the fast typewriter visible after the provider has completed, and
-    // do not start another turn until this message has drained into its own
-    // assistant card.
+    // Provider deltas are rendered immediately; only wait if a final
+    // reconciliation still has text queued from an older session.
     if (!data.cancelled && !data.error) reconcileFinalAssistantText(data.content);
     if (!data.cancelled && !data.error && assistantBody && pendingAssistantText && typingTimer) {
       pendingTurnEnd = data;

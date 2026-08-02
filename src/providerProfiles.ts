@@ -7,6 +7,10 @@ const ACTIVE_PROFILE_STATE = 'nineRouter.activeProfileId';
 const PROFILE_KEY_PREFIX = 'nineRouter.profileKey.';
 const EXPLICITLY_CLEARED_KEY = '__relaycode_key_explicitly_cleared__';
 const TELEMETRY_STATE = 'nineRouter.telemetry';
+const OPENCODE_ZEN_ENDPOINT = 'https://opencode.ai/zen/v1';
+const LEGACY_OPENCODE_ENDPOINTS = new Set([
+  'https://console.opencode.ai/inference/openai/v1'
+]);
 const PROVIDER_KINDS: ProviderKind[] = ['9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio'];
 
 export interface ProviderProfile {
@@ -29,14 +33,27 @@ export interface TelemetryRecord extends RequestMetrics {
 }
 
 export class ProviderProfileStore {
+  private readonly keyCache = new Map<string, string>();
+
   public constructor(private readonly context: vscode.ExtensionContext) {}
 
   public async ensure(legacyKind: ProviderKind, legacyEndpoint: string): Promise<ProviderProfile> {
     let profiles = this.list();
     if (!profiles.length) {
-      profiles = [{ id: `profile-${Date.now()}`, name: providerLabel(legacyKind), kind: legacyKind, endpoint: legacyEndpoint }];
+      const endpoint = legacyKind === 'opencode' && LEGACY_OPENCODE_ENDPOINTS.has(legacyEndpoint.replace(/\/+$/, ''))
+        ? OPENCODE_ZEN_ENDPOINT
+        : legacyEndpoint;
+      profiles = [{ id: `profile-${Date.now()}`, name: providerLabel(legacyKind), kind: legacyKind, endpoint }];
       await this.context.globalState.update(PROFILES_STATE, profiles);
       await this.context.globalState.update(ACTIVE_PROFILE_STATE, profiles[0]!.id);
+    } else {
+      const migrated = profiles.map((profile) => profile.kind === 'opencode' && LEGACY_OPENCODE_ENDPOINTS.has(profile.endpoint.replace(/\/+$/, ''))
+        ? { ...profile, endpoint: OPENCODE_ZEN_ENDPOINT }
+        : profile);
+      if (migrated.some((profile, index) => profile !== profiles[index])) {
+        profiles = migrated;
+        await this.context.globalState.update(PROFILES_STATE, profiles);
+      }
     }
     return this.active() ?? profiles[0]!;
   }
@@ -79,8 +96,15 @@ export class ProviderProfileStore {
     await this.context.globalState.update(PROFILES_STATE, profiles);
     await this.context.globalState.update(ACTIVE_PROFILE_STATE, normalized.id);
     if (apiKey !== undefined) {
-      if (apiKey.trim()) await this.context.secrets.store(this.scopedKey(normalized.id, normalized.kind), apiKey.trim());
-      else await this.context.secrets.store(this.scopedKey(normalized.id, normalized.kind), EXPLICITLY_CLEARED_KEY);
+      const key = this.scopedKey(normalized.id, normalized.kind);
+      if (apiKey.trim()) {
+        const value = apiKey.trim();
+        await this.context.secrets.store(key, value);
+        this.keyCache.set(key, value);
+      } else {
+        await this.context.secrets.store(key, EXPLICITLY_CLEARED_KEY);
+        this.keyCache.delete(key);
+      }
     }
     return normalized;
   }
@@ -99,6 +123,7 @@ export class ProviderProfileStore {
     await this.context.globalState.update(PROFILES_STATE, remaining);
     await this.context.secrets.delete(`${PROFILE_KEY_PREFIX}${id}`);
     await Promise.all(PROVIDER_KINDS.map((kind) => this.context.secrets.delete(this.scopedKey(id, kind))));
+    PROVIDER_KINDS.forEach((kind) => this.keyCache.delete(this.scopedKey(id, kind)));
     const next = remaining[0]!;
     if (wasActive) await this.context.globalState.update(ACTIVE_PROFILE_STATE, next.id);
     return this.active() ?? next;
@@ -109,17 +134,31 @@ export class ProviderProfileStore {
   }
 
   public async apiKeyFor(profileId: string, kind: ProviderKind): Promise<string> {
-    const scoped = await this.context.secrets.get(this.scopedKey(profileId, kind));
-    if (scoped !== undefined) return scoped === EXPLICITLY_CLEARED_KEY ? '' : scoped;
+    const scopedKey = this.scopedKey(profileId, kind);
+    const scoped = await this.context.secrets.get(scopedKey);
+    if (scoped !== undefined) {
+      if (scoped === EXPLICITLY_CLEARED_KEY) {
+        this.keyCache.delete(scopedKey);
+        return '';
+      }
+      this.keyCache.set(scopedKey, scoped);
+      return scoped;
+    }
+    const cached = this.keyCache.get(scopedKey);
+    if (cached !== undefined) return cached;
     const oldProfileKey = profileId ? await this.context.secrets.get(`${PROFILE_KEY_PREFIX}${profileId}`) : undefined;
     if (oldProfileKey !== undefined) {
       await this.context.secrets.store(this.scopedKey(profileId, kind), oldProfileKey);
       await this.context.secrets.delete(`${PROFILE_KEY_PREFIX}${profileId}`);
+      if (oldProfileKey !== EXPLICITLY_CLEARED_KEY) this.keyCache.set(scopedKey, oldProfileKey);
       return oldProfileKey === EXPLICITLY_CLEARED_KEY ? '' : oldProfileKey;
     }
     const legacy = kind === '9router' ? 'nineRouter.apiKey' : `nineRouter.apiKey.${kind}`;
     const value = (await this.context.secrets.get(legacy)) ?? '';
-    if (profileId && value) await this.context.secrets.store(this.scopedKey(profileId, kind), value);
+    if (profileId && value) {
+      await this.context.secrets.store(scopedKey, value);
+      this.keyCache.set(scopedKey, value);
+    }
     return value;
   }
 

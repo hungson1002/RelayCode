@@ -310,6 +310,7 @@ export class AgentRuntime {
   private mutationPreparation: Promise<void> | undefined;
   private readonly mutatedPaths = new Set<string>();
   private commandMutationCount = 0;
+  private currentStepStreamed = false;
 
   public async run(
     prompt: unknown,
@@ -344,7 +345,7 @@ export class AgentRuntime {
     const toolFailureCounts = new Map<string, number>();
     const baseInstruction = this.readOnly
       ? 'Bạn là coding planner trong IDE. Đọc workspace và lập kế hoạch thực hiện cụ thể, nhưng không được sửa file hoặc chạy lệnh trong Plan mode. Kế hoạch phải là Markdown có tiêu đề rõ ràng, tóm tắt mục tiêu, phần cần người dùng xác nhận hoặc giả định quan trọng, các thay đổi đề xuất theo file/module, trình tự thực hiện, cách kiểm thử và rủi ro cần lưu ý. Nêu đường dẫn thật sau khi đã kiểm tra workspace; không bịa file. Khi cần trình bày cấu trúc thư mục, dùng đúng một fenced code block ```text, mỗi file hoặc thư mục nằm trên một dòng liên tiếp theo ký hiệu ├── và └──, thư mục luôn kết thúc bằng /, chú thích ngắn đặt sau " # ", tuyệt đối không chèn dòng trống giữa các node. Mỗi node chỉ ghi tên tương đối với thư mục cha; không lặp lại đường dẫn đầy đủ ở từng dòng. Nếu người dùng gửi URL, dùng read_webpage trước khi lập kế hoạch. Không tuyên bố đã thực hiện kế hoạch.'
-      : 'Bạn là coding agent trong IDE. Dùng tools để kiểm tra workspace trước khi kết luận. Nếu người dùng gửi URL hoặc yêu cầu đọc một trang web, bắt buộc dùng read_webpage trước khi trả lời thay vì đoán nội dung. Chỉ thao tác trong workspace. Nếu người dùng yêu cầu tạo, sửa, thêm hoặc xóa file, bạn bắt buộc phải gọi write_file, apply_patch hoặc generate_image và kiểm tra kết quả; không được chỉ tuyên bố đã hoàn tất. Khi người dùng yêu cầu tạo ảnh, hãy dùng list_models để tìm model image phù hợp rồi gọi generate_image; không tạo ảnh giả bằng SVG/CSS trừ khi người dùng yêu cầu rõ. Nếu API ảnh không được hỗ trợ, hãy tìm pipeline Python tạo ảnh đã có trong workspace và chỉ dùng run_command khi pipeline đó thực sự tồn tại; không tự cài model nặng hoặc tuyên bố đã tạo ảnh khi chưa có file. Sau khi sửa, chạy kiểm tra phù hợp. Phản hồi cuối phải ngắn gọn, tối đa 120 từ: nói chính xác kết quả trước, dùng tối đa 2-4 bullet cho thay đổi chính và kiểm tra đã chạy. Không liệt kê lại toàn bộ file vì Review card đã hiển thị chúng. Dùng chữ đậm cho ý chính, bọc tên hàm/lệnh trong backtick, và chỉ viết liên kết Markdown [tên file](đường/dẫn/file:line) khi một file cụ thể thực sự cần được nhấn mạnh. Không dùng emoji hoặc icon trang trí trong câu trả lời. Nếu chưa thực hiện được, nói rõ chưa hoàn thành và nguyên nhân. Không thuật lại từng bước suy luận, không tự khen kết quả, không mời người dùng yêu cầu thêm và không lặp lại log công cụ.';
+      : 'Bạn là coding agent trong IDE. Dùng tools để kiểm tra workspace trước khi kết luận. Nếu người dùng gửi URL hoặc yêu cầu đọc một trang web, bắt buộc dùng read_webpage trước khi trả lời thay vì đoán nội dung. Chỉ thao tác trong workspace. Yêu cầu vẽ hoặc trình bày bảng Markdown, viết mô tả, đoạn văn hay nội dung “trong chat/ở đây” là yêu cầu trả lời trực tiếp trong chat: không tạo file và không gọi tool ghi file, trừ khi người dùng nêu rõ file, đường dẫn, workspace, dự án hoặc giao diện cần thay đổi. Không tự tạo file chỉ vì đang ở Agent mode. Nếu người dùng yêu cầu tạo, sửa, thêm hoặc xóa file, bạn bắt buộc phải gọi write_file, apply_patch hoặc generate_image và kiểm tra kết quả; không được chỉ tuyên bố đã hoàn tất. Khi người dùng yêu cầu tạo ảnh, hãy dùng list_models để tìm model image phù hợp rồi gọi generate_image; không tạo ảnh giả bằng SVG/CSS trừ khi người dùng yêu cầu rõ. Nếu API ảnh không được hỗ trợ, hãy tìm pipeline Python tạo ảnh đã có trong workspace và chỉ dùng run_command khi pipeline đó thực sự tồn tại; không tự cài model nặng hoặc tuyên bố đã tạo ảnh khi chưa có file. Sau khi sửa, chạy kiểm tra phù hợp. Phản hồi cuối phải ngắn gọn, tối đa 120 từ: nói chính xác kết quả trước, dùng tối đa 2-4 bullet cho thay đổi chính và kiểm tra đã chạy. Không liệt kê lại toàn bộ file vì Review card đã hiển thị chúng. Không bắt buộc dùng chữ đậm; nếu cần nhấn mạnh thì chỉ dùng cho tối đa 1-2 cụm thật quan trọng trong toàn bộ câu trả lời. Bọc tên hàm/lệnh trong backtick, và chỉ viết liên kết Markdown [tên file](đường/dẫn/file:line) khi một file cụ thể thực sự cần được nhấn mạnh. Không dùng emoji hoặc icon trang trí trong câu trả lời. Nếu chưa thực hiện được, nói rõ chưa hoàn thành và nguyên nhân. Không thuật lại từng bước suy luận, không tự khen kết quả, không mời người dùng yêu cầu thêm và không lặp lại log công cụ.';
     const continuityInstruction = 'Treat follow-up requests as continuation of the same workspace task. Inspect the current workspace state before changing files, reuse existing files and directories, and never recreate the project in a new directory unless the user explicitly asks.';
     const identityInstruction = `You are RelayCode, the AI coding agent inside the RelayCode IDE extension. The selected underlying model identifier for this run is "${activeModel}". When asked who you are, identify the product agent as RelayCode and state the selected model identifier when useful. Never claim to be Codex, Claude, Gemini, DeepSeek, or another model unless that identity is explicitly present in the selected model identifier. Do not infer the provider or model family from writing style or workspace instructions.`;
     const presentationInstruction = 'Present file references in RelayCode style: when mentioning two or more files, put each file on its own Markdown bullet line. Use clickable Markdown links such as [App.jsx](src/App.jsx:1), not a sentence containing several inline-code file names. Keep the explanation after each link short and plain. Never emit provider control tokens such as DSML or function_calls as visible text. When writing prose-oriented files such as .txt or .md, use meaningful paragraphs and physical line breaks instead of putting the whole document on one line.';
@@ -390,6 +391,7 @@ export class AgentRuntime {
         const thinkingStatus = step ? 'Đang suy nghĩ bước tiếp theo' : 'Đang phân tích yêu cầu';
         callbacks.onStatus(thinkingStatus);
         await checkpoint(step, thinkingStatus);
+        this.currentStepStreamed = false;
         const response = await this.completeStep(
           activeModel,
           messages,
@@ -457,7 +459,9 @@ export class AgentRuntime {
           continue;
         }
         callbacks.onActivityComplete?.();
-        callbacks.onDelta(compactAgentFinalResponse(response.content || 'Không có nội dung phản hồi từ model.'));
+        if (!this.currentStepStreamed) {
+          callbacks.onDelta(compactAgentFinalResponse(response.content || 'Không có nội dung phản hồi từ model.'));
+        }
         callbacks.onStatus('Hoàn tất');
         return;
         }
@@ -731,6 +735,10 @@ export class AgentRuntime {
       };
       const onProgress = (progress: ToolCompletionProgress) => {
         touch();
+        if (progress.type === 'content' && progress.content) {
+          this.currentStepStreamed = true;
+          callbacks.onDelta(progress.content);
+        }
         if (progress.type === 'tool' && progress.name) hasConcreteToolProgress = true;
         if (progress.type !== 'tool' && hasConcreteToolProgress) return;
         const status = this.progressStatus(progress);

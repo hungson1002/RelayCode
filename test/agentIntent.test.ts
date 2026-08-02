@@ -30,4 +30,15 @@ describe('requiresWorkspaceMutation', () => {
     expect(requiresWorkspaceMutation('Làm cho tôi giao diện gọn hơn')).toBe(true);
     expect(requiresWorkspaceMutation('Hãy làm UI giống Codex')).toBe(true);
   });
+
+  it('keeps table and prose presentation requests inside chat', () => {
+    expect(requiresWorkspaceMutation('Thử vẽ bảng phân tích lọ 3 lần 1 tuần với 3 lần 1 ngày')).toBe(false);
+    expect(requiresWorkspaceMutation('Viết thử mô tả trong chat cho tôi')).toBe(false);
+    expect(requiresWorkspaceMutation('Render a Markdown table here')).toBe(false);
+  });
+
+  it('still mutates when a presentation request names a workspace target', () => {
+    expect(requiresWorkspaceMutation('Vẽ bảng trong giao diện hiện tại')).toBe(true);
+    expect(requiresWorkspaceMutation('Viết mô tả vào file README')).toBe(true);
+  });
 });

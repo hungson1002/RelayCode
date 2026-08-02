@@ -28,7 +28,7 @@ export type WebviewMessage =
   | { type: 'exportDiagnostics' }
   | { type: 'showLogs' }
   | { type: 'connect'; endpoint: string; apiKey?: string; model?: string; provider?: ProviderKind; profileId?: string; profileName?: string; inputPricePerMillion?: number; outputPricePerMillion?: number }
-  | { type: 'getProviderKeyState'; provider: ProviderKind; profileId?: string }
+  | { type: 'getProviderKeyState'; provider: ProviderKind; profileId?: string; requestId?: number }
   | { type: 'activateProfile'; id: string }
   | { type: 'deleteProfile'; id: string }
   | { type: 'collapseSidebar'; width: number }
@@ -103,7 +103,7 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
     case 'toggleFavoriteModel':
       return isString(value.model, 300);
     case 'getProviderKeyState':
-      return isProviderKind(value.provider) && optionalString(value.profileId, 300);
+      return isProviderKind(value.provider) && optionalString(value.profileId, 300) && optionalFiniteNumber(value.requestId);
     case 'approval':
       return isString(value.id, 200) && isOneOf(value.decision, ['deny', 'once', 'similar', 'always']);
     case 'resolveToolFailure':
