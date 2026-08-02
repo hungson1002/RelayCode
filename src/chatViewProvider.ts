@@ -825,6 +825,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async disconnectProvider(): Promise<void> {
     this.abortController?.abort();
+    this.connectionGeneration++;
+    this.connectionOnline = false;
+    this.lastConnectionCheckAt = 0;
+    this.connectionFailureCount = 0;
+    this.models = [];
     await this.context.globalState.update(DISCONNECTED_STATE, true);
     await this.post({ type: 'connection', connected: false, endpoint: this.endpoint, models: [], canStop: false, provider: this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router'), message: 'Đã ngắt provider.' });
   }
@@ -925,6 +930,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private async probeConnection(): Promise<void> {
+    if (this.context.globalState.get(DISCONNECTED_STATE, false)) return;
     if (this.connectionProbeRunning || this.abortController || this.modelCheckController) return;
     this.connectionProbeRunning = true;
     const provider = this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');

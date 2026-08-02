@@ -23,6 +23,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function comparableEndpoint(value)');
     expect(CHAT_VIEW_CONTROLLER).toContain("hostname.toLowerCase() === 'localhost' ? '127.0.0.1'");
     expect(CHAT_VIEW_CONTROLLER).toContain('isKnownProviderEndpoint(current)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function setProvider(next, changeEndpoint = true, updateBadge = true)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('setProvider(option.dataset.provider, true, false)');
     expect(html).toContain('id="startRouter" class="primary">Kết nối provider</button>');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('setupProviderBadge').textContent = meta.label");
     expect(CHAT_VIEW_CONTROLLER).toContain("'Kết nối ' + providerName");
@@ -170,8 +172,16 @@ describe('Chat webview assets', () => {
   it('exposes Cockpit Tools as a native provider with its local API Service defaults', () => {
     expect(html).toContain('data-provider="cockpit"');
     expect(html).toContain('<option value="cockpit">Cockpit Tools</option>');
+    expect(html).toContain('id="openCockpitCenter"');
     expect(CHAT_VIEW_CONTROLLER).toContain("endpoint: 'http://127.0.0.1:1455/v1'");
     expect(CHAT_VIEW_CONTROLLER).toContain("keyLabel: 'Cockpit Client Key'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('openCockpitCenter').addEventListener");
+  });
+
+  it('keeps connection controls available for every saved provider', () => {
+    expect(html).toContain('id="disconnectConnection"');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('disconnectConnection').classList.toggle('hidden', !data.connected)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("type: 'disconnectProvider'");
   });
 
   it('exposes OpenCode Console as a native OpenAI-compatible provider', () => {

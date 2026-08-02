@@ -214,6 +214,7 @@ function closeFloatingSurfaces(except = '') {
 }
 
 function openFloatingSurface(id) {
+  closeDropdowns();
   closeFloatingSurfaces(id);
   $(id)?.classList.remove('hidden');
 }
@@ -522,13 +523,17 @@ function requestBootstrap() {
   startupReadyTimer = setTimeout(requestBootstrap, 1500);
 }
 
-function setProvider(next, changeEndpoint = true) {
+function setProvider(next, changeEndpoint = true, updateBadge = true) {
   const meta = providerMeta[next] || providerMeta['9router'];
   const previous = $('configProvider').value;
   $('configProvider').value = next;
+  // The provider picker is a draft form: always show the selected provider
+  // there, while the header/connection badge changes only after Save.
   $('providerBrand').innerHTML = brandIcon(meta.brand, meta.label);
   $('setupProviderMark').innerHTML = brandIcon(meta.brand, meta.label);
-  $('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label);
+  if (updateBadge) {
+    $('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label);
+  }
   $('providerLabel').textContent = meta.label;
   $('providerHint').textContent = meta.hint;
   $('setupProviderBadge').textContent = meta.label;
@@ -2232,6 +2237,8 @@ $('startRouter').addEventListener('click', () => {
   vscode.postMessage({ type: 'startRouter' });
 });
 $('openDashboard').addEventListener('click', () => vscode.postMessage({ type: 'openDashboard' }));
+$('openCockpitCenter').addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://github.com/jlcodes99/cockpit-tools/releases' }));
+$('disconnectConnection').addEventListener('click', () => vscode.postMessage({ type: 'disconnectProvider' }));
 $('backToChat').addEventListener('click', () => {
   setupDismissed = true;
   setupOpenRequested = false;
@@ -2349,7 +2356,7 @@ $('providerTrigger').addEventListener('click', (event) => {
 $('providerMenu').addEventListener('click', (event) => event.stopPropagation());
 document.querySelectorAll('#providerMenu .provider-option').forEach(option => option.addEventListener('click', (event) => {
   event.stopPropagation();
-  setProvider(option.dataset.provider);
+  setProvider(option.dataset.provider, true, false);
   $('providerMenu').classList.add('hidden');
   $('providerPicker').classList.remove('open');
   $('providerTrigger').setAttribute('aria-expanded', 'false');
@@ -2401,7 +2408,7 @@ $('retryConnection').addEventListener('click', () => {
   $('retryConnection').disabled = true;
   vscode.postMessage({ type: 'diagnostics' });
 });
-$('connectionToggle').addEventListener('click', () => vscode.postMessage({ type: 'checkRouterConnection' }));
+$('connectionToggle').addEventListener('click', () => vscode.postMessage({ type: 'disconnectProvider' }));
 function runConnectionDiagnostics() {
   const meta = providerMeta[activeProvider] || providerMeta['9router'];
   openFloatingSurface('connectionDiagnostics');
@@ -2753,7 +2760,13 @@ window.addEventListener('message', ({ data }) => {
     else if (!launchingRouter) showError(data.message || '');
     if (data.connected && !setupOpenRequested) showSetup(false);
     $('connectionToggle').classList.toggle('hidden', !data.connected);
-     $('connectionToggle').textContent = uiCopy('Kiểm tra', 'Check');
+     $('connectionToggle').textContent = uiCopy('Ngắt kết nối', 'Disconnect');
+     $('disconnectConnection').classList.toggle('hidden', !data.connected);
+     $('disconnectConnection').textContent = uiCopy('Ngắt kết nối', 'Disconnect');
+     $('openCockpitCenter').classList.toggle('hidden', activeProvider !== 'cockpit');
+     $('openCockpitCenter').textContent = data.connected
+       ? uiCopy('Mở Cockpit', 'Open Cockpit')
+       : uiCopy('Cockpit chưa được cài đặt', 'Cockpit is not installed');
      $('topConnectLabel').textContent = data.connected
        ? uiCopy('Kết nối', 'Connect')
        : routerStale
@@ -2794,6 +2807,8 @@ window.addEventListener('message', ({ data }) => {
     } else {
       $('startRouter').classList.toggle('hidden', !isRouter);
       $('openDashboard').classList.add('hidden');
+      $('openCockpitCenter').classList.toggle('hidden', activeProvider !== 'cockpit');
+      $('disconnectConnection').classList.add('hidden');
       $('retryConnection').classList.remove('hidden');
        if (!launchingRouter) setRouterLaunchState('idle', isRouter ? uiCopy('9Router chưa chạy', '9Router is not running') : uiCopy(providerName + ' chưa kết nối', providerName + ' is not connected'));
     }
@@ -2976,6 +2991,8 @@ window.addEventListener('message', ({ data }) => {
       $('openDashboard').classList.add('hidden');
       $('retryConnection').classList.add('hidden');
       $('connectionToggle').classList.add('hidden');
+      $('disconnectConnection').classList.add('hidden');
+      $('openCockpitCenter').classList.add('hidden');
       $('topConnect').classList.add('attention');
     }
   } else if (data.type === 'browserOpened') {

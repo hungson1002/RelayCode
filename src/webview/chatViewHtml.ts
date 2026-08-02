@@ -86,7 +86,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
         <span class="state-mark" aria-hidden="true"></span>
         <div><strong id="launchTitle">Đang kiểm tra kết nối</strong><span id="launchDescription">RelayCode đang xác nhận provider có thể nhận yêu cầu.</span></div>
       </div>
-      <div class="connection-page-actions"><button id="startRouter" class="primary">Kết nối provider</button><button id="openDashboard" class="primary hidden">Mở trang quản lý</button><button id="retryConnection" class="secondary">Kiểm tra kết nối</button></div>
+      <div class="connection-page-actions"><button id="startRouter" class="primary">Kết nối provider</button><button id="openDashboard" class="primary hidden">Mở trang quản lý</button><button id="openCockpitCenter" class="secondary hidden">Mở Cockpit</button><button id="retryConnection" class="secondary">Kiểm tra kết nối</button><button id="disconnectConnection" class="secondary hidden">Ngắt kết nối</button></div>
       <p id="setupCheckResult" class="setup-check-result"><span></span>Chưa kiểm tra sức khỏe API trong phiên này.</p>
     </div>
 
