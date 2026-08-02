@@ -558,6 +558,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.checkRouterConnection();
       } else if (message.type === 'openDashboard') {
         await this.openDashboard();
+      } else if (message.type === 'openCockpit') {
+        await this.openCockpit();
       } else if (message.type === 'openExternal') {
         const target = new URL(message.url);
         if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Chỉ cho phép mở liên kết HTTP hoặc HTTPS.');
@@ -764,6 +766,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     } catch (error) {
       this.interaction.notify(this.errorText(error), 'danger');
     }
+  }
+
+  public async openCockpit(): Promise<void> {
+    const cockpitLink = vscode.Uri.parse('cockpit-tools://');
+    const downloadPage = vscode.Uri.parse('https://github.com/jlcodes99/cockpit-tools/releases');
+    try {
+      if (await vscode.env.openExternal(cockpitLink)) return;
+    } catch {
+      // Fall back to the download page when the desktop protocol is not
+      // registered on this machine.
+    }
+    await vscode.env.openExternal(downloadPage);
   }
 
   private requireTrustedWorkspaceForRouter(): void {

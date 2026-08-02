@@ -25,6 +25,10 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('isKnownProviderEndpoint(current)');
     expect(CHAT_VIEW_CONTROLLER).toContain('function setProvider(next, changeEndpoint = true, updateBadge = true)');
     expect(CHAT_VIEW_CONTROLLER).toContain('setProvider(option.dataset.provider, true, false)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('!currentProfileId || isKnownProviderEndpoint(current)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("const draftProvider = $('configProvider').value || '9router'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function restoreSavedProfileDraft()');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function closeConfigPanel(restoreDraft = true)');
     expect(html).toContain('id="startRouter" class="primary">Kết nối provider</button>');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('setupProviderBadge').textContent = meta.label");
     expect(CHAT_VIEW_CONTROLLER).toContain("'Kết nối ' + providerName");
@@ -176,6 +180,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("endpoint: 'http://127.0.0.1:1455/v1'");
     expect(CHAT_VIEW_CONTROLLER).toContain("keyLabel: 'Cockpit Client Key'");
     expect(CHAT_VIEW_CONTROLLER).toContain("$('openCockpitCenter').addEventListener");
+    expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'openCockpit' })");
+    expect(providerSource).toContain("vscode.Uri.parse('cockpit-tools://')");
   });
 
   it('keeps connection controls available for every saved provider', () => {

@@ -54,6 +54,7 @@ export type WebviewMessage =
   | { type: 'retryConnection' }
   | { type: 'checkRouterConnection' }
   | { type: 'openDashboard' }
+  | { type: 'openCockpit' }
   | { type: 'openExternal'; url: string }
   | { type: 'openFile'; path: string }
   | { type: 'openPlanArtifact'; turnIndex: number }
@@ -89,7 +90,7 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
     'cancelModelCheck', 'getTelemetry', 'openTelemetryDashboard',
     'clearTelemetry', 'getMcpServers', 'setupLocalProvider',
     'stopTurn', 'startRouter', 'retryConnection', 'checkRouterConnection',
-    'openDashboard', 'deleteAllSessions', 'disconnectProvider', 'newThread',
+    'openDashboard', 'openCockpit', 'deleteAllSessions', 'disconnectProvider', 'newThread',
     'refreshSkills', 'openSettings', 'showAgentRecovery'
   ]);
   if (noPayload.has(value.type as string)) return true;

@@ -135,6 +135,7 @@ let assistantActivity = null;
 let activitySteps = new Map();
 let pendingTurnEnd = null;
 let currentProfileId = '';
+let savedProfileId = '';
 let profiles = [];
 let modelHealth = {};
 let allSessions = [];
@@ -206,6 +207,7 @@ document.querySelectorAll('#providerMenu .provider-option').forEach((option) => 
 });
 
 function closeFloatingSurfaces(except = '') {
+  if (except !== 'configPanel' && !$('configPanel')?.classList.contains('hidden')) restoreSavedProfileDraft();
   floatingSurfaces.forEach((id) => {
     if (id === 'uiDialog' && activeUiDialog && except !== 'uiDialog') return;
     if (id !== except) $(id)?.classList.add('hidden');
@@ -571,7 +573,10 @@ function setProvider(next, changeEndpoint = true, updateBadge = true) {
   }
   if (changeEndpoint) {
     const current = $('configEndpoint').value.trim();
-    if (!current || isKnownProviderEndpoint(current)) $('configEndpoint').value = meta.endpoint;
+    // A new profile must never inherit a custom endpoint from the profile
+    // that was active before it. Existing profiles may intentionally keep a
+    // custom endpoint when switching providers.
+    if (!current || !currentProfileId || isKnownProviderEndpoint(current)) $('configEndpoint').value = meta.endpoint;
   }
   $('setupEndpointLabel').textContent = $('configEndpoint').value.trim() || meta.endpoint || 'Chưa có endpoint';
   $('startRouter').textContent = next === '9router' ? 'Kết nối 9Router' : 'Kết nối ' + meta.label;
@@ -699,12 +704,28 @@ function renderProfiles() {
 function applyProfileUi(profile) {
   if (!profile) return;
   currentProfileId = profile.id;
+  savedProfileId = profile.id;
   $('profileName').value = profile.name || '';
   $('configEndpoint').value = profile.endpoint || '';
   $('inputPrice').value = profile.inputPricePerMillion ?? '';
   $('outputPrice').value = profile.outputPricePerMillion ?? '';
   setProvider(profile.kind, false);
   renderProfiles();
+}
+
+function restoreSavedProfileDraft() {
+  const saved = profiles.find((profile) => profile.id === savedProfileId)
+    || profiles.find((profile) => profile.id === currentProfileId);
+  if (!saved) return;
+  applyProfileUi(saved);
+  $('configApiKey').value = '';
+  $('diagnosticsResult').textContent = '';
+  $('diagnosticsResult').className = 'diagnostics-result hidden';
+}
+
+function closeConfigPanel(restoreDraft = true) {
+  if (restoreDraft) restoreSavedProfileDraft();
+  $('configPanel').classList.add('hidden');
 }
 
 function formatCompact(value) {
@@ -2237,7 +2258,7 @@ $('startRouter').addEventListener('click', () => {
   vscode.postMessage({ type: 'startRouter' });
 });
 $('openDashboard').addEventListener('click', () => vscode.postMessage({ type: 'openDashboard' }));
-$('openCockpitCenter').addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://github.com/jlcodes99/cockpit-tools/releases' }));
+$('openCockpitCenter').addEventListener('click', () => vscode.postMessage({ type: 'openCockpit' }));
 $('disconnectConnection').addEventListener('click', () => vscode.postMessage({ type: 'disconnectProvider' }));
 $('backToChat').addEventListener('click', () => {
   setupDismissed = true;
@@ -2504,10 +2525,19 @@ $('settings').addEventListener('click', (event) => {
   event.stopPropagation();
   const opening = $('configPanel').classList.contains('hidden');
   if (opening) openFloatingSurface('configPanel');
-  else $('configPanel').classList.add('hidden');
+  else closeConfigPanel();
 });
-$('closeConfig').addEventListener('click', () => $('configPanel').classList.add('hidden'));
-$('newProfile').addEventListener('click', () => { currentProfileId = ''; $('profileName').value = ''; $('configApiKey').value = ''; $('inputPrice').value = ''; $('outputPrice').value = ''; renderProfiles(); });
+$('closeConfig').addEventListener('click', () => closeConfigPanel());
+$('newProfile').addEventListener('click', () => {
+  currentProfileId = '';
+  $('profileName').value = '';
+  $('configApiKey').value = '';
+  $('inputPrice').value = '';
+  $('outputPrice').value = '';
+  const draftProvider = $('configProvider').value || '9router';
+  setProvider(draftProvider, true, false);
+  renderProfiles();
+});
 $('deleteProfile').addEventListener('click', () => {
   const profile = profiles.find((item) => item.id === currentProfileId);
   if (!profile || profiles.length <= 1) return;
@@ -2540,7 +2570,7 @@ $('runDiagnostics').addEventListener('click', () => {
   });
 });
 $('localSetup').addEventListener('click', () => vscode.postMessage({ type: 'setupLocalProvider' }));
-$('openCockpit').addEventListener('click', () => vscode.postMessage({ type: 'openExternal', url: 'https://github.com/jlcodes99/cockpit-tools/releases' }));
+$('openCockpit').addEventListener('click', () => vscode.postMessage({ type: 'openCockpit' }));
 $('exportDiagnostics').addEventListener('click', () => vscode.postMessage({ type: 'exportDiagnostics' }));
 $('send').addEventListener('click', () => {
   if (running) {
@@ -2764,9 +2794,7 @@ window.addEventListener('message', ({ data }) => {
      $('disconnectConnection').classList.toggle('hidden', !data.connected);
      $('disconnectConnection').textContent = uiCopy('Ngắt kết nối', 'Disconnect');
      $('openCockpitCenter').classList.toggle('hidden', activeProvider !== 'cockpit');
-     $('openCockpitCenter').textContent = data.connected
-       ? uiCopy('Mở Cockpit', 'Open Cockpit')
-       : uiCopy('Cockpit chưa được cài đặt', 'Cockpit is not installed');
+     $('openCockpitCenter').textContent = uiCopy('Mở Cockpit', 'Open Cockpit');
      $('topConnectLabel').textContent = data.connected
        ? uiCopy('Kết nối', 'Connect')
        : routerStale
