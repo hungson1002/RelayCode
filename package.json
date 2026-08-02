@@ -273,6 +273,7 @@
     "test:e2e": "vitest run test/routerExternal.e2e.test.ts test/agentRecovery.e2e.test.ts",
     "check": "npm run typecheck && npm test && npm run build",
     "package": "npm run check && vsce package --no-dependencies --no-rewrite-relative-links",
+    "release:patch": "npm version patch -m \"release: v%s\" && git push origin main --follow-tags",
     "publish:vscode": "node scripts/publish.mjs vscode",
     "publish:openvsx": "node scripts/publish.mjs openvsx"
   },

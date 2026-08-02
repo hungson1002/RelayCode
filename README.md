@@ -238,6 +238,16 @@ RelayCode keeps local chat history, thread titles, provider profiles, pending re
 5. Select the downloaded VSIX.
 6. Run **Developer: Reload Window**.
 
+### Automated releases
+
+Create a GitHub repository secret named `VSCE_PAT` with Marketplace publish permission once. Then run:
+
+```bash
+npm run release:patch
+```
+
+This bumps the patch version, commits and pushes the Git tag. GitHub Actions then runs the tests, publishes the VSIX to the Visual Studio Marketplace, and creates the GitHub Release. Use `npm version minor` or `npm version major` for larger releases.
+
 ### Build from source
 
 ```powershell

@@ -1,21 +1,25 @@
-name: Publish extension
+name: Release extension
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*.*.*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
       OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
     steps:
-      - name: Check out repository
+      - name: Check out tagged source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -26,13 +30,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify extension
-        run: npm run check
+      - name: Verify tag and package version
+        id: metadata
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$tag_version" != "$package_version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $package_version"
+            exit 1
+          fi
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "vsix=relaycode-huxon-${package_version}.vsix" >> "$GITHUB_OUTPUT"
 
-      - name: Publish to VS Code Marketplace
-        if: ${{ env.VSCE_PAT != '' }}
-        run: npm run publish:vscode
+      - name: Package and test extension
+        run: npm run package
 
-      - name: Publish to Open VSX
+      - name: Require Visual Studio Marketplace token
+        shell: bash
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::error::Add a VSCE_PAT repository secret before publishing."
+            exit 1
+          fi
+
+      - name: Publish to Visual Studio Marketplace
+        run: npx --no-install vsce publish --packagePath "${{ steps.metadata.outputs.vsix }}" --pat "$VSCE_PAT" --no-dependencies
+
+      - name: Publish to Open VSX (optional)
         if: ${{ env.OVSX_PAT != '' }}
-        run: npm run publish:openvsx
+        run: npx --no-install ovsx publish "${{ steps.metadata.outputs.vsix }}" --no-dependencies
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "${{ steps.metadata.outputs.vsix }}" --title "RelayCode ${{ steps.metadata.outputs.version }}" --generate-notes
