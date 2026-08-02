@@ -177,7 +177,22 @@ const providerMeta = {
   ollama: { brand: 'ollama', label: 'Ollama', hint: 'Local · không cần API key', endpoint: 'http://localhost:11434/v1', keyLabel: 'API key', local: true },
   'lm-studio': { brand: 'lm-studio', label: 'LM Studio', hint: 'Local · không cần API key', endpoint: 'http://localhost:1234/v1', keyLabel: 'API key', local: true }
 };
-const knownProviderEndpoints = new Set(Object.values(providerMeta).map(item => item.endpoint).filter(Boolean));
+function comparableEndpoint(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    const hostname = url.hostname.toLowerCase() === 'localhost' ? '127.0.0.1' : url.hostname.toLowerCase();
+    const port = url.port ? ':' + url.port : '';
+    const pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return url.protocol + '//' + hostname + port + pathname;
+  } catch {
+    return raw.replace(/\/+$/, '').toLowerCase();
+  }
+}
+
+const knownProviderEndpoints = new Set(Object.values(providerMeta).map(item => comparableEndpoint(item.endpoint)).filter(Boolean));
+const isKnownProviderEndpoint = (value) => knownProviderEndpoints.has(comparableEndpoint(value));
 const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'accessConfirm', 'connectionDiagnostics', 'uiDialog'];
 let activeUiDialog = null;
 let dialogReturnFocus = null;
@@ -551,7 +566,7 @@ function setProvider(next, changeEndpoint = true) {
   }
   if (changeEndpoint) {
     const current = $('configEndpoint').value.trim();
-    if (!current || knownProviderEndpoints.has(current)) $('configEndpoint').value = meta.endpoint;
+    if (!current || isKnownProviderEndpoint(current)) $('configEndpoint').value = meta.endpoint;
   }
   $('setupEndpointLabel').textContent = $('configEndpoint').value.trim() || meta.endpoint || 'Chưa có endpoint';
   $('startRouter').textContent = next === '9router' ? 'Kết nối 9Router' : 'Kết nối ' + meta.label;

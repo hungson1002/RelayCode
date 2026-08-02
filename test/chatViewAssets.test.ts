@@ -20,6 +20,9 @@ const html = renderChatViewHtml({
 describe('Chat webview assets', () => {
   it('uses the selected provider name throughout the connection center', () => {
     expect(html).toContain('id="setupProviderBadge">Provider</strong>');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function comparableEndpoint(value)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("hostname.toLowerCase() === 'localhost' ? '127.0.0.1'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('isKnownProviderEndpoint(current)');
     expect(html).toContain('id="startRouter" class="primary">Kết nối provider</button>');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('setupProviderBadge').textContent = meta.label");
     expect(CHAT_VIEW_CONTROLLER).toContain("'Kết nối ' + providerName");
