@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="media/icon-128.png" alt="RelayCode icon" width="72">
   <h1>RelayCode</h1>
   <p><strong>An AI coding workspace for VS Code and Antigravity.</strong></p>
   <p>Ask questions, plan changes, edit your workspace, run validation, and review every change before it is accepted.</p>
@@ -130,6 +131,7 @@ RelayCode separates the coding workflow from the model source. Supported provide
 | --- | --- | --- |
 | **9Router** | API key | `http://127.0.0.1:20128/v1` |
 | **Cockpit Tools** | Client key | `http://127.0.0.1:1455/v1` |
+| **OpenCode** | API key | `https://console.opencode.ai/inference/openai/v1` |
 | **OpenAI** | API key | Official OpenAI API |
 | **Anthropic Claude** | API key | Anthropic Messages API |
 | **OpenAI-compatible** | Provider-specific | Any compatible endpoint you configure |

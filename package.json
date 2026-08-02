@@ -145,6 +145,7 @@
           "enum": [
             "9router",
             "cockpit",
+            "opencode",
             "openai",
             "anthropic",
             "openai-compatible",
@@ -155,6 +156,7 @@
           "enumDescriptions": [
             "🔷 9Router - Local-first routing with multi-model support",
             "🛩️ Cockpit Tools - Local multi-account API gateway",
+            "⌨️ OpenCode - OpenAI-compatible inference through OpenCode Console",
             "🤖 OpenAI - GPT-4, GPT-3.5 and more",
             "🧠 Anthropic - Claude family models",
             "🔌 OpenAI-Compatible - Custom endpoints (Together, Groq, etc.)",

@@ -762,6 +762,9 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     expect(system).toContain(process.platform === 'win32' ? 'PowerShell' : 'POSIX');
     expect(system).toContain('never recreate the project in a new directory');
     expect(system).toContain('put each file on its own Markdown bullet line');
+    expect(system).toContain('You are RelayCode');
+    expect(system).toContain('selected underlying model identifier');
+    expect(system).not.toContain('Match the communication rhythm of Codex');
   });
 
   it('repairs missing tool results in an older completed checkpoint before retrying', async () => {

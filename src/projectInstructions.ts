@@ -12,7 +12,7 @@ export interface ProjectInstruction {
 
 export async function loadProjectInstructions(workspaceRoot?: string, activeFilePath?: string): Promise<ProjectInstruction[]> {
   const candidates: Array<{ path: string; scope: ProjectInstruction['scope'] }> = [
-    { path: join(homedir(), '.codex', 'AGENTS.md'), scope: 'user' }
+    { path: join(homedir(), '.relaycode', 'AGENTS.md'), scope: 'user' }
   ];
   if (workspaceRoot) {
     candidates.push({ path: join(workspaceRoot, '.agents', 'AGENTS.md'), scope: 'workspace' });

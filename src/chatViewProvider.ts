@@ -76,6 +76,11 @@ interface StoredSession {
   activeSkills?: string[];
 }
 
+function textOnlyContent(content: ChatMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content.map((part) => part.type === 'text' ? part.text : '[Ảnh đính kèm đã được bỏ qua vì model không hỗ trợ ảnh.]').join('\n');
+}
+
 interface PendingChange {
   path: string;
   original: string;
@@ -1439,6 +1444,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (!message.model) throw new Error('Hãy chọn một model trước khi gửi.');
 
     const config = vscode.workspace.getConfiguration('nineRouter');
+    const responseLanguage: 'vi' | 'en' = /[ăâđêôơưĂÂĐÊÔƠƯà-ỹÀ-Ỹ]|\b(?:tôi|bạn|mình|không|với|sao|hãy|giúp)\b/i.test(prompt)
+      ? 'vi'
+      : config.get<'vi' | 'en'>('language', 'vi');
     const codexTuning = /(codex|gpt-5|(?:^|[/_-])o[134](?:$|[/_.-]))/i.test(message.model)
       ? {
           reasoningEffort: message.reasoningEffort,
@@ -1478,7 +1486,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const enrichedPrompt = contextualPrompt
       + (message.mode === 'chat' && selectedSkillInstructions ? `\n\n${selectedSkillInstructions}` : '');
     const attachmentViews = await this.attachmentViews(attachments);
-    const requestContent: ChatMessage['content'] = attachmentViews.some((item) => item.preview)
+    const selectedModelSupportsVision = this.models.find((item) => item.id === message.model)?.capabilities?.vision === true;
+    const requestContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.preview)
       ? [
           { type: 'text', text: enrichedPrompt },
           ...attachmentViews.flatMap((item) => item.preview ? [{ type: 'image_url' as const, image_url: { url: item.preview } }] : [])
@@ -1531,8 +1540,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       : '';
     const taskChangeIds = new Set<string>();
     const onDelta = (delta: string) => {
-      answer += delta;
-      if (message.mode !== 'plan') void this.post({ type: 'delta', delta });
+      const localizedDelta = responseLanguage === 'vi' ? delta.replace(/\bready\b/gi, 'sẵn sàng') : delta;
+      answer += localizedDelta;
+      if (message.mode !== 'plan') void this.post({ type: 'delta', delta: localizedDelta });
       if (!this.recoveryTimer) {
         this.recoveryTimer = setTimeout(() => {
           this.recoveryTimer = undefined;
@@ -1619,9 +1629,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               const waitingSeconds = Math.floor((Date.now() - lastActivityAt) / 1_000);
               if (waitingSeconds >= 3) void this.post({ type: 'status', message: `Đang chờ model · ${waitingSeconds}s` });
             }, 3_000);
+            const chatSystem = responseLanguage === 'vi'
+              ? 'Trả lời hoàn toàn bằng tiếng Việt. Không dùng từ tiếng Anh khi đã có từ tiếng Việt tương đương; dùng “sẵn sàng” thay cho “ready”. Trả lời rõ ràng, gọn và không dùng emoji hoặc icon trang trí.'
+              : 'Answer in English. Keep responses clear and concise without decorative emoji or icons.';
             const chatHistory: ChatMessage[] = [
-              { role: 'system', content: 'Trả lời rõ ràng, gọn và không dùng emoji hoặc icon trang trí.' },
-              ...this.history
+              { role: 'system', content: chatSystem },
+              ...this.history.map((item) => selectedModelSupportsVision ? item : { ...item, content: textOnlyContent(item.content) })
             ];
             const metrics = await providerClient.streamChat(candidate, chatHistory, (delta) => {
               touchActivity();
@@ -1676,11 +1689,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         };
         const projectInstructions = formatProjectInstructions(await loadProjectInstructions(workspaceRoot, vscode.window.activeTextEditor?.document.uri.fsPath));
         const runtimeInstructions = [
+          responseLanguage === 'vi'
+            ? 'Giao tiếp hoàn toàn bằng tiếng Việt. Không dùng từ tiếng Anh khi đã có từ tiếng Việt tương đương; dùng “sẵn sàng” thay cho “ready”.'
+            : 'Communicate in English.',
           projectInstructions,
           activeSkills.length ? '' : skillCatalog(this.skills),
           selectedSkillInstructions
         ].filter(Boolean).join('\n\n');
-        const agentContent: ChatMessage['content'] = attachmentViews.some((item) => item.preview)
+        const agentContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.preview)
           ? [
               { type: 'text', text: contextualPrompt },
               ...attachmentViews.flatMap((item) => item.preview ? [{ type: 'image_url' as const, image_url: { url: item.preview } }] : [])

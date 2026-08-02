@@ -4,7 +4,7 @@ import { smartSessionTitle } from '../src/sessionTitle';
 describe('smartSessionTitle', () => {
   it('removes greetings and preserves technical acronyms', () => {
     expect(smartSessionTitle('xin chào, tạo file html')).toBe('Tạo file HTML');
-    expect(smartSessionTitle('Hi!')).toBe('Cuộc trò chuyện mới');
+    expect(smartSessionTitle('Hi!')).toBe('Hi');
   });
 
   it('removes repeated conversational filler', () => {

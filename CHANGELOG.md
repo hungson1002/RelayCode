@@ -1,5 +1,13 @@
 # Changelog
 
+- Added OpenCode Console as a first-class OpenAI-compatible provider with its
+  official inference endpoint and dedicated provider branding.
+- MCP API-key dialogs now return to the Tool connections panel, while closing
+  a toast or dialog no longer closes the Settings surface underneath it.
+- Opening a dropdown now closes any other open picker or approval menu.
+- Agent activity shimmer now stops as soon as a step is completed or archived.
+- Preserved boolean JSON Schema values in MCP tool definitions, including
+  `additionalProperties`, for provider-compatible Stitch tools.
 - “Clear all” now offers Review, keep-all-and-delete, or undo-all-and-delete
   whenever any file change is still pending. Review opens the newest affected
   conversation, while legacy unbound changes remain visible for resolution.

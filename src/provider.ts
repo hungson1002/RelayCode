@@ -2,7 +2,7 @@ import { RouterClient } from './routerClient';
 import { AnthropicClient } from './anthropicClient';
 import type { ChatMessage, RequestMetrics, RequestTuning, RouterModel } from './types';
 
-export type ProviderKind = '9router' | 'cockpit' | 'openai' | 'anthropic' | 'openai-compatible' | 'ollama' | 'lm-studio';
+export type ProviderKind = '9router' | 'cockpit' | 'opencode' | 'openai' | 'anthropic' | 'openai-compatible' | 'ollama' | 'lm-studio';
 
 export interface ProviderConfig {
   kind: ProviderKind;

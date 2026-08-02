@@ -10,10 +10,11 @@ describe('brand icon registry', () => {
     expect(brandKeyFor('gemini-3.1-pro', '9router')).toBe('gemini');
     expect(brandKeyFor('gpt-5.4', '9router')).toBe('openai');
     expect(brandKeyFor('deepseek-v3.2', 'openai-compatible')).toBe('deepseek');
+    expect(brandKeyFor('opencode/big-pickle', 'opencode')).toBe('opencode');
   });
 
   it('contains branded MCP and local-provider assets', () => {
-    for (const key of ['notion', 'linear', 'sentry', 'figma', 'google', 'mcp', '9router', 'cockpit', 'kiro', 'antigravity', 'kimi', 'zhipu', 'minimax', 'nvidia']) {
+    for (const key of ['notion', 'linear', 'sentry', 'figma', 'google', 'mcp', '9router', 'cockpit', 'opencode', 'kiro', 'antigravity', 'kimi', 'zhipu', 'minimax', 'nvidia']) {
       expect(BRAND_ICONS[key]).toBeTruthy();
     }
   });

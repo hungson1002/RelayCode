@@ -35,6 +35,7 @@ import mistralSvg from '@lobehub/icons-static-svg/icons/mistral-color.svg';
 import nvidiaSvg from '@lobehub/icons-static-svg/icons/nvidia-color.svg';
 import ollamaSvg from '@lobehub/icons-static-svg/icons/ollama.svg';
 import openAiSvg from '@lobehub/icons-static-svg/icons/openai.svg';
+import openCodeSvg from '@lobehub/icons-static-svg/icons/opencode.svg';
 import openRouterSvg from '@lobehub/icons-static-svg/icons/openrouter-color.svg';
 import perplexitySvg from '@lobehub/icons-static-svg/icons/perplexity-color.svg';
 import qwenSvg from '@lobehub/icons-static-svg/icons/qwen-color.svg';
@@ -84,6 +85,7 @@ export const BRAND_ICONS: Record<string, string> = {
   notion: simpleIcon(siNotion, 'currentColor'),
   ollama: ollamaSvg,
   openai: openAiSvg,
+  opencode: openCodeSvg,
   'openai-compatible': openRouterSvg,
   openrouter: openRouterSvg,
   perplexity: perplexitySvg,
@@ -105,6 +107,7 @@ export const MODEL_BRAND_RULES: ReadonlyArray<readonly [string, string]> = [
   ['deepseek', 'deepseek'],
   ['mistral|codestral|mixtral', 'mistral'],
   ['ollama', 'ollama'],
+  ['opencode|open-code', 'opencode'],
   ['qwen|alibaba', 'qwen'],
   ['grok|xai|x-ai', 'grok'],
   ['kiro|^kr/', 'kiro'],

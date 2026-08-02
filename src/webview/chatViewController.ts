@@ -170,6 +170,7 @@ let latestTelemetryRecords = [];
 const providerMeta = {
   '9router': { brand: '9router', label: '9Router', hint: 'Gateway local, nhiều model', endpoint: 'http://127.0.0.1:20128/v1', keyLabel: '9Router API key', local: false },
   cockpit: { brand: 'cockpit', label: 'Cockpit Tools', hint: 'Gateway local · nhiều tài khoản', endpoint: 'http://127.0.0.1:1455/v1', keyLabel: 'Cockpit Client Key', local: false },
+  opencode: { brand: 'opencode', label: 'OpenCode', hint: 'OpenCode Console · OpenAI-compatible', endpoint: 'https://console.opencode.ai/inference/openai/v1', keyLabel: 'OpenCode API key', local: false },
   openai: { brand: 'openai', label: 'OpenAI', hint: 'API chính thức · cần API key', endpoint: 'https://api.openai.com/v1', keyLabel: 'OpenAI API key', local: false },
   anthropic: { brand: 'claude', label: 'Anthropic Claude', hint: 'Messages API · cần API key', endpoint: 'https://api.anthropic.com/v1', keyLabel: 'Anthropic API key', local: false },
   'openai-compatible': { brand: 'openrouter', label: 'OpenAI-compatible', hint: 'Endpoint tùy chỉnh', endpoint: '', keyLabel: 'API key', local: false },
@@ -200,6 +201,30 @@ function closeFloatingSurfaces(except = '') {
 function openFloatingSurface(id) {
   closeFloatingSurfaces(id);
   $(id)?.classList.remove('hidden');
+}
+
+function closeDropdowns(except = null) {
+  const entries = [
+    ['modeMenu', 'modePicker', 'modeTrigger'],
+    ['modelMenu', 'modelPicker', 'modelTrigger'],
+    ['providerMenu', 'providerPicker', 'providerTrigger'],
+    ['languageMenu', 'languagePicker', 'languageTrigger'],
+    ['reasoningMenu', 'reasoningPicker', 'reasoningTrigger'],
+    ['permMenu', 'permDropdown', 'permissionMode']
+  ];
+  for (const [menuId, pickerId, triggerId] of entries) {
+    const menu = $(menuId);
+    if (!menu || menu === except) continue;
+    menu.classList.add('hidden');
+    $(pickerId)?.classList.remove('open');
+    $(triggerId)?.setAttribute('aria-expanded', 'false');
+  }
+  document.querySelectorAll('.permission-menu').forEach((menu) => {
+    if (menu === except) return;
+    menu.classList.add('hidden');
+    menu.closest('.permission-allow-wrap')?.querySelector('.permission-menu-trigger')?.setAttribute('aria-expanded', 'false');
+  });
+  if ($('addMenu') !== except) closeAddMenu();
 }
 
 function closeUiDialog(action) {
@@ -277,7 +302,8 @@ function renderUiDialog(data) {
     });
     actions.append(button);
   }
-  openFloatingSurface('uiDialog');
+  // A modal must not unmount the Settings or MCP surface underneath it.
+  backdrop.classList.remove('hidden');
   requestAnimationFrame(() => {
     if (data.input) {
       input.focus();
@@ -298,7 +324,11 @@ function showUiToast(data) {
   toast.innerHTML = '<span aria-hidden="true">' + uiIcon(data.tone === 'danger' ? 'warning' : data.tone === 'success' ? 'checkCircle' : 'info') + '</span><p></p><button type="button" aria-label="Đóng">' + uiIcon('x') + '</button>';
   toast.querySelector('p').textContent = data.message || '';
   const remove = () => toast.remove();
-  toast.querySelector('button').addEventListener('click', remove);
+  toast.addEventListener('click', (event) => event.stopPropagation());
+  toast.querySelector('button').addEventListener('click', (event) => {
+    event.stopPropagation();
+    remove();
+  });
   $('toastStack').append(toast);
   setTimeout(remove, Math.max(2600, Math.min(7000, String(data.message || '').length * 55)));
 }
@@ -385,9 +415,9 @@ function queueAssistantText(delta) {
   if (typingTimer) return;
   const tick = () => {
     if (!assistantBody) { pendingAssistantText = ''; typingTimer = 0; return; }
-    // Keep streaming readable without making the UI lag behind a provider that
-    // has already produced a large chunk (or the complete final answer).
-    const size = Math.max(4, Math.min(32, Math.ceil(pendingAssistantText.length / 10)));
+    // Keep a short, visible typewriter motion without making the provider wait
+    // for a character-by-character queue. Larger buffered chunks drain faster.
+    const size = Math.max(6, Math.min(18, Math.ceil(pendingAssistantText.length / 4)));
     assistantRawText += pendingAssistantText.slice(0, size);
     pendingAssistantText = pendingAssistantText.slice(size);
     renderMarkdownInto(assistantBody, assistantRawText);
@@ -395,7 +425,7 @@ function queueAssistantText(delta) {
     if (item) item.dataset.rawContent = assistantRawText;
     if (messagesPinnedToBottom) scrollMessagesToBottom();
     else updateRunningScrollIndicator();
-    if (pendingAssistantText) typingTimer = setTimeout(tick, 8);
+    if (pendingAssistantText) typingTimer = setTimeout(tick, 16);
     else {
       typingTimer = 0;
       if (pendingTurnEnd) {
@@ -405,7 +435,7 @@ function queueAssistantText(delta) {
       }
     }
   };
-  typingTimer = setTimeout(tick, 0);
+  typingTimer = setTimeout(tick, 16);
 }
 
 function reconcileFinalAssistantText(content) {
@@ -486,6 +516,14 @@ function setProvider(next, changeEndpoint = true) {
   $('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label);
   $('providerLabel').textContent = meta.label;
   $('providerHint').textContent = meta.hint;
+  $('setupProviderBadge').textContent = meta.label;
+  $('setupTitle').textContent = next === '9router' ? uiCopy('Kết nối 9Router.', 'Connect 9Router.') : uiCopy('Kết nối ' + meta.label + '.', 'Connect ' + meta.label + '.');
+  $('setupCopy').textContent = next === '9router'
+    ? uiCopy('Khởi động gateway, kiểm tra API và mở bảng điều khiển mà không cần tự chạy lệnh.', 'Start the gateway, check the API and open the dashboard without running commands manually.')
+    : next === 'ollama' || next === 'lm-studio'
+      ? uiCopy('Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.', 'A local provider needs no API key, but its app, model and API server must be running.')
+      : uiCopy('Mở Cài đặt để kiểm tra endpoint và API key của provider này.', 'Open Settings to check this provider endpoint and API key.');
+  $('setupEndpointLabel').textContent = $('configEndpoint').value.trim() || meta.endpoint || 'Chưa có endpoint';
   $('apiKeyLabel').textContent = meta.keyLabel;
   document.querySelectorAll('#providerMenu .provider-option').forEach(option => option.classList.toggle('active', option.dataset.provider === next));
   const keyInput = $('configApiKey');
@@ -515,6 +553,8 @@ function setProvider(next, changeEndpoint = true) {
     const current = $('configEndpoint').value.trim();
     if (!current || knownProviderEndpoints.has(current)) $('configEndpoint').value = meta.endpoint;
   }
+  $('setupEndpointLabel').textContent = $('configEndpoint').value.trim() || meta.endpoint || 'Chưa có endpoint';
+  $('startRouter').textContent = next === '9router' ? 'Kết nối 9Router' : 'Kết nối ' + meta.label;
 }
 
 function isCodexTunableModel(model) {
@@ -967,7 +1007,11 @@ function finalizeLiveActivity() {
   assistantActivity.classList.add('archived');
   const current = assistantActivity.querySelector('.activity-current');
   const lastRow = [...assistantActivity.querySelectorAll('.activity-row')].at(-1);
-  if (current && lastRow) current.textContent = lastRow.dataset.done || lastRow.querySelector('.activity-copy')?.textContent || current.textContent;
+  if (current) {
+    if (lastRow) current.textContent = lastRow.dataset.done || lastRow.querySelector('.activity-copy')?.textContent || current.textContent;
+    current.classList.remove('sweeping');
+    delete current.dataset.sweep;
+  }
   setActivityExpanded(false, assistantActivity);
   assistantActivity = null;
   activitySteps = new Map();
@@ -1170,7 +1214,8 @@ function showError(message) {
 function setRouterLaunchState(state, message) {
   launchingRouter = state !== 'ready' && state !== 'idle';
   $('startRouter').disabled = launchingRouter;
-  $('startRouter').textContent = launchingRouter ? message : 'Kết nối 9Router';
+  const providerName = providerMeta[activeProvider]?.label || activeProvider || 'provider';
+  $('startRouter').textContent = launchingRouter ? message : activeProvider === '9router' ? 'Kết nối 9Router' : 'Kết nối ' + providerName;
   $('signalMap').classList.toggle('launching', launchingRouter);
   $('signalMap').classList.toggle('ready', state === 'ready');
   document.querySelector('.launch-panel').classList.toggle('launching', launchingRouter);
@@ -1352,6 +1397,82 @@ function renderUserPrompt(body, content) {
   }
 }
 
+function classifyChatError(raw) {
+  const compact = String(raw || '').replace(/\s+/g, ' ').replace(/<[^>]*>/g, '').trim();
+  if (/image_url|unknown variant.*image|vision|image input|xem ảnh|nhìn ảnh/i.test(compact)) {
+    return {
+      title: uiCopy('Model không hỗ trợ xem ảnh', 'Model does not support image input'),
+      message: uiCopy('Model hiện tại chỉ nhận văn bản. Hãy chọn model có Vision hoặc gửi lại yêu cầu không kèm ảnh.', 'This model accepts text only. Choose a Vision model or resend without the image.')
+    };
+  }
+  if (/HTTP 401|invalid api key|unauthori[sz]ed|API key.*hết hạn|API key.*không hợp lệ/i.test(compact)) {
+    return {
+      title: uiCopy('API key không hợp lệ', 'Invalid API key'),
+      message: uiCopy('Kiểm tra lại API key trong Cài đặt rồi kết nối lại provider.', 'Check the API key in Settings, then reconnect the provider.')
+    };
+  }
+  if (/HTTP 403|forbidden|permission denied|từ chối quyền/i.test(compact)) {
+    return {
+      title: uiCopy('Provider từ chối quyền truy cập', 'Provider access denied'),
+      message: uiCopy('Tài khoản hoặc model hiện tại không có quyền sử dụng request này.', 'The current account or model is not allowed to use this request.')
+    };
+  }
+  if (/HTTP 404|endpoint not found|endpoint không tồn tại|<!doctype html|<html/i.test(String(raw || ''))) {
+    return {
+      title: uiCopy('Endpoint không tồn tại', 'Endpoint not found'),
+      message: uiCopy('Kiểm tra Base URL và đường dẫn API của provider.', 'Check the provider Base URL and API path.')
+    };
+  }
+  if (/INVALID_MODEL_ID|invalid model|model .*not found|model .*không hợp lệ/i.test(compact)) {
+    return {
+      title: uiCopy('Model không hợp lệ', 'Invalid model'),
+      message: uiCopy('Model này không có trong provider. Hãy chọn model khác từ danh sách.', 'This model is not available from the provider. Choose another model from the list.')
+    };
+  }
+  if (/HTTP 429|rate.?limit|too many requests|quota|hạn mức/i.test(compact)) {
+    return {
+      title: uiCopy('Provider đang giới hạn request', 'Provider rate limit'),
+      message: uiCopy('Hãy đợi một lúc rồi thử lại hoặc chọn model/provider khác.', 'Wait a moment and retry, or choose another model/provider.')
+    };
+  }
+  if (/timeout|timed out|không phản hồi trong thời gian/i.test(compact)) {
+    return {
+      title: uiCopy('Model phản hồi quá chậm', 'Model timed out'),
+      message: uiCopy('Model chưa trả lời trong thời gian cho phép. Hãy thử lại hoặc chọn model nhanh hơn.', 'The model did not respond in time. Retry or choose a faster model.')
+    };
+  }
+  if (/fetch failed|ENOTFOUND|ECONNREFUSED|network error|không thể kết nối/i.test(compact)) {
+    return {
+      title: uiCopy('Không thể kết nối provider', 'Provider unreachable'),
+      message: uiCopy('Kiểm tra endpoint, mạng và trạng thái provider rồi thử lại.', 'Check the endpoint, network, and provider status, then retry.')
+    };
+  }
+  return {
+    title: uiCopy('Không thể hoàn tất yêu cầu', 'Request failed'),
+    message: compact.slice(0, 600) || uiCopy('Provider không trả về thông tin lỗi.', 'The provider returned no error details.')
+  };
+}
+
+function renderChatError(body, raw) {
+  const info = classifyChatError(raw);
+  body.classList.add('structured-error');
+  body.replaceChildren();
+  const card = document.createElement('div');
+  card.className = 'chat-error-card';
+  const icon = document.createElement('span');
+  icon.className = 'chat-error-icon';
+  icon.textContent = '!';
+  const copy = document.createElement('div');
+  copy.className = 'chat-error-copy';
+  const title = document.createElement('strong');
+  title.textContent = info.title;
+  const message = document.createElement('span');
+  message.textContent = info.message;
+  copy.append(title, message);
+  card.append(icon, copy);
+  body.append(card);
+}
+
 function appendMessage(role, content, error = false, timestamp = Date.now(), attachments = [], turnIndex = null, artifact = null) {
   document.querySelector('.empty')?.remove();
   const item = document.createElement('article');
@@ -1363,7 +1484,8 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
   label.textContent = formatTime(timestamp);
   const body = document.createElement('div');
   body.className = 'body';
-  if (role === 'assistant') renderMarkdownInto(body, content);
+  if (role === 'assistant' && error) renderChatError(body, content);
+  else if (role === 'assistant') renderMarkdownInto(body, content);
   else renderUserPrompt(body, content);
   const meta = document.createElement('div');
   meta.className = 'message-meta';
@@ -2079,6 +2201,7 @@ document.querySelectorAll('#modeMenu [data-mode]').forEach((button) => button.ad
 $('modeTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('modeMenu').classList.contains('hidden');
+  if (open) closeDropdowns($('modeMenu'));
   $('modeMenu').classList.toggle('hidden', !open);
   $('modePicker').classList.toggle('open', open);
   $('modeTrigger').setAttribute('aria-expanded', String(open));
@@ -2145,6 +2268,7 @@ $('attach').addEventListener('click', (event) => {
   event.stopPropagation();
   const opening = $('addMenu').classList.contains('hidden');
   if (opening) {
+    closeDropdowns($('addMenu'));
     $('composerMenu').classList.add('hidden');
     composerMenuIndex = -1;
     renderAddMenu();
@@ -2178,6 +2302,7 @@ $('model').addEventListener('change', () => {
 $('modelTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('modelMenu').classList.contains('hidden');
+  if (open) closeDropdowns($('modelMenu'));
   $('modelMenu').classList.toggle('hidden', !open);
   $('modelPicker').classList.toggle('open', open);
   $('modelTrigger').setAttribute('aria-expanded', String(open));
@@ -2201,6 +2326,7 @@ function keepModelMenuOpen() {
 $('providerTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('providerMenu').classList.contains('hidden');
+  if (open) closeDropdowns($('providerMenu'));
   $('providerMenu').classList.toggle('hidden', !open);
   $('providerPicker').classList.toggle('open', open);
   $('providerTrigger').setAttribute('aria-expanded', String(open));
@@ -2216,6 +2342,7 @@ document.querySelectorAll('#providerMenu .provider-option').forEach(option => op
 $('reasoningTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('reasoningMenu').classList.contains('hidden');
+  if (open) closeDropdowns($('reasoningMenu'));
   $('reasoningMenu').classList.toggle('hidden', !open);
   $('reasoningPicker').classList.toggle('open', open);
   $('reasoningTrigger').setAttribute('aria-expanded', String(open));
@@ -2238,6 +2365,7 @@ $('quotaReset').addEventListener('click', () => vscode.postMessage({ type: 'open
 $('languageTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('languageMenu').classList.contains('hidden');
+  if (open) closeDropdowns($('languageMenu'));
   $('languageMenu').classList.toggle('hidden', !open);
   $('languagePicker').classList.toggle('open', open);
   $('languageTrigger').setAttribute('aria-expanded', String(open));
@@ -2311,6 +2439,7 @@ $('permissionMode').addEventListener('click', (e) => {
   e.stopPropagation();
   const wrap = $('permDropdown');
   const isOpen = wrap.classList.contains('open');
+  if (!isOpen) closeDropdowns($('permMenu'));
   wrap.classList.toggle('open', !isOpen);
   $('permMenu').classList.toggle('hidden', isOpen);
   $('permissionMode').setAttribute('aria-expanded', String(!isOpen));
@@ -2346,28 +2475,8 @@ $('configPanel').addEventListener('click', (event) => {
   }
 });
 document.addEventListener('click', () => {
-  document.querySelectorAll('.permission-menu').forEach((menu) => menu.classList.add('hidden'));
-  document.querySelectorAll('.permission-menu-trigger').forEach((button) => button.setAttribute('aria-expanded', 'false'));
-  closeAddMenu();
-  $('permDropdown')?.classList.remove('open');
-  $('permMenu')?.classList.add('hidden');
-  $('permissionMode')?.setAttribute('aria-expanded', 'false');
-  $('modelMenu')?.classList.add('hidden');
-  $('modelPicker')?.classList.remove('open');
-  $('modelTrigger')?.setAttribute('aria-expanded', 'false');
+  closeDropdowns();
   closeFloatingSurfaces();
-  $('providerMenu')?.classList.add('hidden');
-  $('providerPicker')?.classList.remove('open');
-  $('providerTrigger')?.setAttribute('aria-expanded', 'false');
-  $('languageMenu')?.classList.add('hidden');
-  $('languagePicker')?.classList.remove('open');
-  $('languageTrigger')?.setAttribute('aria-expanded', 'false');
-  $('reasoningMenu')?.classList.add('hidden');
-  $('reasoningPicker')?.classList.remove('open');
-  $('reasoningTrigger')?.setAttribute('aria-expanded', 'false');
-  $('modeMenu')?.classList.add('hidden');
-  $('modePicker')?.classList.remove('open');
-  $('modeTrigger')?.setAttribute('aria-expanded', 'false');
 });
 $('settings').addEventListener('click', (event) => {
   event.stopPropagation();
@@ -2980,6 +3089,7 @@ window.addEventListener('message', ({ data }) => {
       menuTrigger.addEventListener('click', (event) => {
         event.stopPropagation();
         const opening = allowMenu.classList.contains('hidden');
+        if (opening) closeDropdowns(allowMenu);
         allowMenu.classList.toggle('hidden', !opening);
         menuTrigger.setAttribute('aria-expanded', String(opening));
       });

@@ -89,6 +89,17 @@ describe('MCP schema compatibility', () => {
     expect(missing.warnings).toHaveLength(2);
   });
 
+  it('preserves boolean JSON Schema values required by provider tool schemas', () => {
+    expect(normalizeMcpInputSchema({
+      type: 'object',
+      properties: { metadata: { type: 'object', additionalProperties: true } },
+      additionalProperties: false
+    })).toMatchObject({
+      properties: { metadata: { additionalProperties: true } },
+      additionalProperties: false
+    });
+  });
+
   it('forces malformed tool inputs to a provider-compatible object root', () => {
     expect(normalizeMcpInputSchema({ type: 'string' })).toEqual({
       type: 'object',

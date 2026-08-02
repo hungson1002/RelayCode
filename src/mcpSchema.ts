@@ -65,7 +65,9 @@ function normalizeNode(
     warnings.push('MCP schema was too large and was safely truncated.');
     return cycleFallback(value);
   }
-  if (typeof value === 'boolean') return value ? {} : { not: {} };
+  // JSON Schema allows boolean schemas. Preserve them because keywords such as
+  // `additionalProperties` require an actual boolean in provider tool schemas.
+  if (typeof value === 'boolean') return value;
   if (Array.isArray(value)) return value.map((item) => normalizeNode(item, root, activeReferences, warnings, budget));
   if (!isObject(value)) return value;
 

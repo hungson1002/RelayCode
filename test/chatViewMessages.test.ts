@@ -22,6 +22,7 @@ describe('chat webview message validation', () => {
 
   it('validates provider key-state requests', () => {
     expect(isWebviewMessage({ type: 'getProviderKeyState', provider: 'openai', profileId: 'profile-1' })).toBe(true);
+    expect(isWebviewMessage({ type: 'getProviderKeyState', provider: 'opencode', profileId: 'profile-2' })).toBe(true);
     expect(isWebviewMessage({ type: 'getProviderKeyState', provider: 'unknown' })).toBe(false);
   });
 

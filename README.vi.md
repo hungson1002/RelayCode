@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="media/icon-128.png" alt="Biểu tượng RelayCode" width="72">
   <img src="docs/assets/hero.png" alt="RelayCode — AI Coding Agent" width="100%">
   <br><br>
   <strong>Không gian lập trình AI cho VS Code và Antigravity — dùng model của bạn, công cụ của bạn và luôn giữ quyền kiểm soát.</strong>
@@ -25,7 +26,7 @@ RelayCode dành cho người muốn sử dụng coding agent đa model nhưng v�
 | Nhóm | Chức năng |
 | --- | --- |
 | **Agent, Chat và Plan** | Dùng Agent cho công việc trong workspace, Chat cho câu hỏi trực tiếp và Plan để lập kế hoạch trước. |
-| **Nhiều nguồn model** | 9Router, Cockpit Tools, OpenAI, Anthropic Claude, API tương thích OpenAI, Ollama và LM Studio. |
+| **Nhiều nguồn model** | 9Router, Cockpit Tools, OpenCode, OpenAI, Anthropic Claude, API tương thích OpenAI, Ollama và LM Studio. |
 | **Theo dõi khi thực hiện** | Xem lệnh, output terminal, tool call và tiến trình ngay trong cuộc trò chuyện. |
 | **Xem lại thay đổi** | Kiểm tra từng file hoặc từng hunk, sau đó Accept hay Undo theo file, tác vụ hoặc toàn bộ. |
 | **Chính sách quyền** | Hỏi trước, cho phép sửa file hoặc bật Full access với bước xác nhận rõ ràng. |
@@ -41,8 +42,9 @@ RelayCode dành cho người muốn sử dụng coding agent đa model nhưng v�
 
 | Provider | Xác thực | Endpoint mặc định |
 | --- | --- | --- |
-| 9Router | API key | `http://localhost:20128/v1` |
+| 9Router | API key | `http://127.0.0.1:20128/v1` |
 | Cockpit Tools | Client Key | `http://127.0.0.1:1455/v1` |
+| OpenCode | API key | `https://console.opencode.ai/inference/openai/v1` |
 | OpenAI | API key | API chính thức của OpenAI |
 | Anthropic Claude | API key | Anthropic Messages API |
 | OpenAI-compatible | Tùy provider | Endpoint do bạn nhập |

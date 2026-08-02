@@ -6,6 +6,7 @@ import { renderChatViewHtml } from '../src/webview/chatViewHtml';
 import { CHAT_VIEW_STYLES } from '../src/webview/chatViewStyles';
 
 const providerSource = readFileSync(resolve('src/chatViewProvider.ts'), 'utf8');
+const projectInstructionsSource = readFileSync(resolve('src/projectInstructions.ts'), 'utf8');
 const extensionManifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
 
 const html = renderChatViewHtml({
@@ -17,6 +18,18 @@ const html = renderChatViewHtml({
 });
 
 describe('Chat webview assets', () => {
+  it('uses the selected provider name throughout the connection center', () => {
+    expect(html).toContain('id="setupProviderBadge">Provider</strong>');
+    expect(html).toContain('id="startRouter" class="primary">Kết nối provider</button>');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('setupProviderBadge').textContent = meta.label");
+    expect(CHAT_VIEW_CONTROLLER).toContain("'Kết nối ' + providerName");
+  });
+
+  it('keeps RelayCode user instructions separate from Codex identity instructions', () => {
+    expect(projectInstructionsSource).toContain("'.relaycode', 'AGENTS.md'");
+    expect(projectInstructionsSource).not.toContain("'.codex', 'AGENTS.md'");
+  });
+
   it('contains valid standalone controller JavaScript', () => {
     expect(() => new Function(CHAT_VIEW_CONTROLLER)).not.toThrow();
     expect(CHAT_VIEW_CONTROLLER).not.toContain('currentLanguage');
@@ -142,7 +155,7 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain("message.type === 'proceed'");
     expect(providerSource).toContain("mode: 'agent'");
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'planRevision'");
-    expect(providerSource).toContain("if (message.mode !== 'plan') void this.post({ type: 'delta', delta });");
+    expect(providerSource).toContain("if (message.mode !== 'plan') void this.post({ type: 'delta', delta: localizedDelta });");
     expect(providerSource).toContain('planChatSummary');
     expect(providerSource).toContain("artifact: planArtifact");
     expect(providerSource).toContain("message.type === 'openPlanArtifact'");
@@ -156,6 +169,13 @@ describe('Chat webview assets', () => {
     expect(html).toContain('<option value="cockpit">Cockpit Tools</option>');
     expect(CHAT_VIEW_CONTROLLER).toContain("endpoint: 'http://127.0.0.1:1455/v1'");
     expect(CHAT_VIEW_CONTROLLER).toContain("keyLabel: 'Cockpit Client Key'");
+  });
+
+  it('exposes OpenCode Console as a native OpenAI-compatible provider', () => {
+    expect(html).toContain('data-provider="opencode"');
+    expect(html).toContain('<option value="opencode">OpenCode</option>');
+    expect(CHAT_VIEW_CONTROLLER).toContain("endpoint: 'https://console.opencode.ai/inference/openai/v1'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("keyLabel: 'OpenCode API key'");
   });
 
   it('allows saved provider profiles and their secret keys to be deleted safely', () => {
@@ -183,7 +203,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.toast-stack');
     expect(CHAT_VIEW_CONTROLLER).toContain('let queuedUiDialogs = []');
     expect(CHAT_VIEW_CONTROLLER).toContain('queuedUiDialogs.shift()');
-    expect(CHAT_VIEW_CONTROLLER).toContain("openFloatingSurface('uiDialog')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("backdrop.classList.remove('hidden')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("toast.addEventListener('click', (event) => event.stopPropagation())");
   });
 
   it('makes chat deletion explicit and derives concise history titles', () => {
@@ -277,12 +298,26 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("if (element.classList.contains('sweeping')) return");
     expect(CHAT_VIEW_STYLES).toContain('.activity-row.active .activity-copy{color:#969ba1!important');
     expect(CHAT_VIEW_CONTROLLER).toContain('currentActivity.dataset.sweep = status');
+    expect(CHAT_VIEW_CONTROLLER).toContain("current.classList.remove('sweeping')");
+    expect(CHAT_VIEW_CONTROLLER).toContain('delete current.dataset.sweep');
     expect(CHAT_VIEW_STYLES).toContain('.activity-current.sweeping::after{content:attr(data-sweep)');
-    expect(CHAT_VIEW_STYLES).toContain('animation:activityTextSweep 5s cubic-bezier(.22,.7,.25,1) infinite');
+    expect(CHAT_VIEW_STYLES).toContain('animation:activityTextSweep 3s cubic-bezier(.22,.7,.25,1) infinite');
     expect(CHAT_VIEW_STYLES).toContain('@keyframes activityTextSweep{0%,12%{background-position:160% 0}72%,100%{background-position:-60% 0}}');
     expect(CHAT_VIEW_STYLES).toContain('background:linear-gradient(90deg,transparent 42%,#f2f5f7 49%');
     expect(CHAT_VIEW_STYLES).not.toContain('will-change:background-position');
-    expect(CHAT_VIEW_CONTROLLER).not.toContain("element.classList.remove('sweeping')");
+    expect(CHAT_VIEW_STYLES).toContain('.agent-activity.archived .activity-current.sweeping::after{display:none;animation:none}');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function classifyChatError(raw)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('Model không hỗ trợ xem ảnh');
+    expect(CHAT_VIEW_CONTROLLER).toContain("body.classList.add('structured-error')");
+    expect(CHAT_VIEW_STYLES).toContain('.chat-error-card');
+  });
+
+  it('keeps only one dropdown open at a time', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('function closeDropdowns(except = null)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (open) closeDropdowns($('modelMenu'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (open) closeDropdowns($('providerMenu'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (!isOpen) closeDropdowns($('permMenu'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (opening) closeDropdowns(allowMenu)');
   });
 
   it('shows live activity but removes progress and technical output after a turn finishes', () => {
@@ -309,8 +344,9 @@ describe('Chat webview assets', () => {
   });
 
   it('keeps the typewriter close to provider streaming speed', () => {
-    expect(CHAT_VIEW_CONTROLLER).toContain('Math.max(4, Math.min(32, Math.ceil(pendingAssistantText.length / 10)))');
-    expect(CHAT_VIEW_CONTROLLER).toContain('typingTimer = setTimeout(tick, 8)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const size = Math.max(6, Math.min(18, Math.ceil(pendingAssistantText.length / 4)))');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantRawText += pendingAssistantText.slice(0, size);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('typingTimer = setTimeout(tick, 16)');
   });
 
   it('deduplicates approval prompts and supports a persistent edit permission', () => {
@@ -551,8 +587,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'turnEnd') {\n    // Never let the cosmetic typing animation own the lifecycle of a turn.");
     expect(CHAT_VIEW_CONTROLLER).toContain("reconcileFinalAssistantText(data.content)");
     expect(providerSource).toContain("content: finalAnswer");
-    expect(CHAT_VIEW_CONTROLLER).toContain('setTimeout(tick, 8)');
-    expect(CHAT_VIEW_CONTROLLER).toContain('Math.max(4, Math.min(32, Math.ceil(pendingAssistantText.length / 10)))');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantRawText += pendingAssistantText.slice(0, size);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('setTimeout(tick, 16)');
     expect(CHAT_VIEW_CONTROLLER).toContain('pendingTurnEnd = data;');
     expect(CHAT_VIEW_CONTROLLER).toContain("settleTurn(data);");
     expect(CHAT_VIEW_CONTROLLER).toContain("function settleTurn(data) {");

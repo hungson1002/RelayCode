@@ -7,7 +7,7 @@ const ACTIVE_PROFILE_STATE = 'nineRouter.activeProfileId';
 const PROFILE_KEY_PREFIX = 'nineRouter.profileKey.';
 const EXPLICITLY_CLEARED_KEY = '__relaycode_key_explicitly_cleared__';
 const TELEMETRY_STATE = 'nineRouter.telemetry';
-const PROVIDER_KINDS: ProviderKind[] = ['9router', 'cockpit', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio'];
+const PROVIDER_KINDS: ProviderKind[] = ['9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio'];
 
 export interface ProviderProfile {
   id: string;
@@ -159,7 +159,7 @@ export class TelemetryStore {
 }
 
 function providerLabel(kind: ProviderKind): string {
-  return kind === 'cockpit' ? 'Cockpit Tools' : kind === 'anthropic' ? 'Anthropic Claude' : kind === 'lm-studio' ? 'LM Studio' : kind === 'openai-compatible' ? 'OpenAI-compatible' : kind === 'openai' ? 'OpenAI' : kind === 'ollama' ? 'Ollama' : '9Router';
+  return kind === 'cockpit' ? 'Cockpit Tools' : kind === 'opencode' ? 'OpenCode' : kind === 'anthropic' ? 'Anthropic Claude' : kind === 'lm-studio' ? 'LM Studio' : kind === 'openai-compatible' ? 'OpenAI-compatible' : kind === 'openai' ? 'OpenAI' : kind === 'ollama' ? 'Ollama' : '9Router';
 }
 
 function positive(value: number | undefined): number | undefined {

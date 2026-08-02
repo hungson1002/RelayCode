@@ -214,7 +214,7 @@ function isOneOf<const T extends readonly string[]>(value: unknown, choices: T):
 }
 
 function isProviderKind(value: unknown): value is ProviderKind {
-  return isOneOf(value, ['9router', 'cockpit', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio']);
+  return isOneOf(value, ['9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio']);
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

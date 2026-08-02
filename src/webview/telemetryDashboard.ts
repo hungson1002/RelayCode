@@ -376,6 +376,7 @@ function providerName(provider: string): string {
   if (provider === '9router') return '9Router';
   if (provider === 'cockpit') return 'Cockpit Tools';
   if (provider === 'openai-compatible') return 'OpenAI-compatible';
+  if (provider === 'opencode') return 'OpenCode';
   if (provider === 'lm-studio') return 'LM Studio';
   return provider.replace(/[-_]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

@@ -6,12 +6,13 @@ const ACRONYMS = new Map([
 ]);
 
 export function smartSessionTitle(prompt: string): string {
-  let title = prompt
+  const originalTitle = prompt
     .replace(/<[^>]+>/g, ' ')
     .replace(/[`*_#>\[\]()]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .split(/(?:[.!?]\s+|\n)/, 1)[0] ?? '';
+  let title = originalTitle;
 
   const conversationalPrefix = /^(?:(?:xin\s+)?chào(?:\s+bạn)?|hello|hi|hey)[,.!?;:\s-]*|^(?:(?:bạn\s+)?có\s+thể\s+|bạn\s+|hãy\s+|vui\s+lòng\s+|làm\s+ơn\s+|tôi\s+muốn\s+|mình\s+muốn\s+|giúp\s+(?:tôi|mình)\s+|cho\s+(?:tôi|mình)\s+)/i;
   for (let pass = 0; pass < 4; pass += 1) {
@@ -21,9 +22,13 @@ export function smartSessionTitle(prompt: string): string {
     if (!title) break;
   }
 
-  if (!title) return 'Cuộc trò chuyện mới';
+  if (!title) {
+    const greeting = originalTitle.replace(/[.!?]+$/g, '').trim();
+    if (greeting) return greeting.charAt(0).toLocaleUpperCase('vi-VN') + greeting.slice(1);
+    return 'Cuộc trò chuyện mới';
+  }
   title = title.replace(/[.!?]+$/g, '').trim();
-  if (!title) return 'Cuộc trò chuyện mới';
+  if (!title) return originalTitle || 'Cuộc trò chuyện mới';
   title = title.replace(/\b(api|css|html|http|javascript|js|json|jsx|sql|typescript|ts|tsx|ui|url|ux)\b/gi,
     (word) => ACRONYMS.get(word.toLowerCase()) ?? word);
   title = title.charAt(0).toLocaleUpperCase('vi-VN') + title.slice(1);
