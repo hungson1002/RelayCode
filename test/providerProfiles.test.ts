@@ -75,6 +75,24 @@ describe('ProviderProfileStore API keys', () => {
     expect(store.list()[0]?.endpoint).toBe('https://opencode.ai/zen/v1');
   });
 
+  it('migrates the legacy shared KiraAI endpoint to each provider default', async () => {
+    const profiles: ProviderProfile[] = [
+      { id: 'router-profile', name: '9Router', kind: '9router', endpoint: 'https://kiraai.vn/api/v1' },
+      { id: 'openai-profile', name: 'OpenAI', kind: 'openai', endpoint: 'https://kiraai.vn/api/v1' },
+      { id: 'custom-profile', name: 'Custom', kind: 'openai-compatible', endpoint: 'https://kiraai.vn/api/v1' }
+    ];
+    const fixture = contextFixture(profiles);
+    const store = new ProviderProfileStore(fixture.context as never);
+
+    await store.ensure('9router', profiles[0]!.endpoint);
+
+    expect(store.list()).toEqual([
+      { ...profiles[0], endpoint: 'http://127.0.0.1:20128/v1' },
+      { ...profiles[1], endpoint: 'https://api.openai.com/v1' },
+      { ...profiles[2], endpoint: '' }
+    ]);
+  });
+
   it('keeps the last saved key available if SecretStorage briefly returns no value', async () => {
     const profile: ProviderProfile = { id: 'profile-cache', name: 'Cached', kind: 'openai', endpoint: 'https://api.openai.com/v1' };
     const fixture = contextFixture([profile]);

@@ -26,13 +26,14 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('isKnownProviderEndpoint(current)');
     expect(CHAT_VIEW_CONTROLLER).toContain('function setProvider(next, changeEndpoint = true, updateBadge = true)');
     expect(CHAT_VIEW_CONTROLLER).toContain('setProvider(option.dataset.provider, true, false)');
-    expect(CHAT_VIEW_CONTROLLER).toContain('!currentProfileId || isKnownProviderEndpoint(current)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('!currentProfileId || previous !== next || isKnownProviderEndpoint(current)');
     expect(CHAT_VIEW_CONTROLLER).toContain("const draftProvider = $('configProvider').value || '9router'");
     expect(CHAT_VIEW_CONTROLLER).toContain('function restoreSavedProfileDraft()');
     expect(CHAT_VIEW_CONTROLLER).toContain('function closeConfigPanel(restoreDraft = true)');
-    expect(html).toContain('id="startRouter" class="primary">Kết nối provider</button>');
+    expect(html).toContain('id="startRouter" class="primary">Mở 9Router</button>');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('setupProviderBadge').textContent = meta.label");
     expect(CHAT_VIEW_CONTROLLER).toContain("'Kết nối ' + providerName");
+    expect(CHAT_VIEW_CONTROLLER).toContain("'Mở 9Router'");
   });
 
   it('keeps RelayCode user instructions separate from Codex identity instructions', () => {
@@ -104,6 +105,31 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('#connectionBadge.route-meta');
     expect(CHAT_VIEW_CONTROLLER).toContain("let language = $('uiLanguage').value");
     expect(CHAT_VIEW_CONTROLLER).toContain("language = $('uiLanguage').value");
+  });
+
+  it('switches language without remounting the webview and keeps settings open for MCP', () => {
+    expect(providerSource).toContain("type: 'languageChanged', language: message.language");
+    expect(providerSource).toContain('Keep the current webview mounted');
+    expect(providerSource).toContain('localized.replace(controllerMarker, () => CHAT_VIEW_CONTROLLER)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function applyLanguageUi()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("openFloatingSurface('mcpPanel', { preserve: ['configPanel'] })");
+    expect(CHAT_VIEW_CONTROLLER).toContain('const liveLanguagePairs');
+  });
+
+  it('translates dynamically rendered add and slash-command menus', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("appendMenuSection(menu, uiCopy('Thêm', 'Add'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Đính kèm ngữ cảnh từ workspace', 'Attach context from workspace')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Run a long task that can be paused and resumed')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Đoạn code đang chọn', 'Selected code')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Mở 9Router', 'Open 9Router')");
+    expect(providerSource).toContain("'Đang khởi động 9Router': 'Starting 9Router'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("['+ Hồ sơ mới', '+ New profile']");
+  });
+
+  it('localizes the model check confirmation from the selected language', () => {
+    expect(providerSource).toContain("title: english ? `Check ${this.models.length} models?`");
+    expect(providerSource).toContain("label: english ? 'Check all' : 'Kiểm tra tất cả'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('checkModels').textContent = checkingModels");
   });
 
   it('normalizes a tampered language value before rendering HTML attributes', () => {
@@ -219,7 +245,7 @@ describe('Chat webview assets', () => {
 
   it('closes floating panels when another surface or the outside area is clicked', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'accessConfirm', 'connectionDiagnostics', 'uiDialog']");
-    expect(CHAT_VIEW_CONTROLLER).toContain("function openFloatingSurface(id)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("function openFloatingSurface(id, options = {})");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (event.target === $('accessConfirm'))");
     expect(CHAT_VIEW_CONTROLLER).toContain("closeFloatingSurfaces();");
   });
@@ -258,7 +284,7 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('syncPendingMcpOutcome(data.servers || [])');
     expect(providerSource).toContain('runMcpConnectionAction(');
     expect(providerSource).toContain("type: 'openMcpPanel'");
-    expect(CHAT_VIEW_CONTROLLER).toContain("closeConfigPanel(); openFloatingSurface('mcpPanel')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("openFloatingSurface('mcpPanel', { preserve: ['configPanel'] })");
     expect(providerSource).toContain('đã kết nối thành công');
     expect(CHAT_VIEW_STYLES).toContain('.mcp-connection-notice.success');
   });
@@ -562,6 +588,8 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain("if (provider === '9router' && vscode.workspace.isTrusted && routerRuntime?.state !== 'ready')");
     expect(providerSource).toContain('this.requireTrustedWorkspaceForRouter();');
     expect(providerSource).toContain("await this.routerProcess.ensureRunning(this.endpoint, routerCommand");
+    expect(providerSource).toContain('private async ensureRouterInstalled(routerCommand: string): Promise<boolean>');
+    expect(providerSource).toContain("label: 'Cài và mở 9Router'");
   });
 
   it('does not block provider and model startup on skill discovery', () => {

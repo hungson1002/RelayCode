@@ -20,6 +20,12 @@ describe('9Router background lifecycle', () => {
     expect(manager).toContain('isAvailableWithRetry(healthUrl, 3)');
   });
 
+  it('bounds install and executable checks so the connection action cannot spin forever', () => {
+    expect(manager).toContain('8_000');
+    expect(manager).toContain('120_000');
+    expect(manager).toContain('Cài ${packageName} quá thời gian chờ');
+  });
+
   it('requires repeated monitor failures before marking the provider offline', () => {
     expect(provider).toContain('this.connectionFailureCount++');
     expect(provider).toContain('if (this.connectionFailureCount < 3) return');

@@ -4,6 +4,7 @@ import { AgentRuntime } from './agentRuntime';
 import { normalizeEndpoint } from './routerClient';
 import { localizeProviderError } from './providerErrorMessages';
 import { smartSessionTitle } from './sessionTitle';
+import { detectResponseLanguage, responseLanguageInstruction } from './responseLanguage';
 import { RouterProcessManager, type RouterLaunchProgress, type RouterRuntimeStatus } from './routerProcessManager';
 import type { AgentRunCheckpoint, AgentToolFailureDecision, ChatMessage, ChatMode, ReasoningEffort, RouterModel } from './types';
 import { capabilitiesForModel, createProvider, type ProviderKind } from './provider';
@@ -32,7 +33,6 @@ const PERMISSION_MODE_STATE = 'nineRouter.permissionMode';
 const CHAT_SESSIONS_STATE = 'nineRouter.chatSessions';
 const PROVIDER_KIND_STATE = 'nineRouter.providerKind';
 const PENDING_CHANGES_STATE = 'nineRouter.pendingChanges';
-const ONBOARDING_STATE = 'nineRouter.onboardingSeen';
 const FAVORITE_MODELS_STATE = 'nineRouter.favoriteModels';
 const RECENT_MODELS_STATE = 'nineRouter.recentModels';
 const LAST_TERMINAL_STATE = 'nineRouter.lastTerminalOutput';
@@ -394,10 +394,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           // Keep an interrupted run out of the initial transcript. The user
           // can reveal it from Chat history when they actually want to resume.
         }
-        if (!this.context.globalState.get<boolean>(ONBOARDING_STATE, false)) {
-          await this.context.globalState.update(ONBOARDING_STATE, true);
-          await this.post({ type: 'onboarding', message: 'Chọn model, dùng Agent để sửa code, gõ @ để thêm ngữ cảnh hoặc / để xem lệnh nhanh.' });
-        }
       } else if (message.type === 'getProviderKeyState') {
         const profile = message.profileId
           ? this.profileStore.list().find((item) => item.id === message.profileId)
@@ -534,7 +530,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.post({ type: 'permissionMode', mode: message.mode });
       } else if (message.type === 'setLanguage') {
         await vscode.workspace.getConfiguration('nineRouter').update('language', message.language, vscode.ConfigurationTarget.Global);
-        if (this.view) this.view.webview.html = this.html(this.view.webview);
+        // Keep the current webview mounted. Reassigning `.html` here drops the
+        // one-shot ready handshake and leaves Antigravity showing a permanent
+        // "Checking" state while the provider is initialized again.
+        await this.post({ type: 'languageChanged', language: message.language });
       } else if (message.type === 'toggleFavoriteModel') {
         const favorites = this.context.globalState.get<string[]>(FAVORITE_MODELS_STATE, []);
         const next = favorites.includes(message.model) ? favorites.filter((item) => item !== message.model) : [message.model, ...favorites].slice(0, 20);
@@ -757,9 +756,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   public async openDashboard(): Promise<void> {
     try {
       this.requireTrustedWorkspaceForRouter();
+      const routerCommand = vscode.workspace.getConfiguration('nineRouter').get('routerCommand', '9router');
+      if (!await this.ensureRouterInstalled(routerCommand)) return;
       const url = await this.routerProcess.ensureRunning(
         this.endpoint,
-        vscode.workspace.getConfiguration('nineRouter').get('routerCommand', '9router'),
+        routerCommand,
         () => undefined
       );
       await vscode.env.openExternal(vscode.Uri.parse(url));
@@ -786,35 +787,39 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
   }
 
+  private async ensureRouterInstalled(routerCommand: string): Promise<boolean> {
+    if (await this.routerProcess.isInstalled(routerCommand)) return true;
+    const choice = await this.interaction.choose({
+      title: 'Cài 9Router?',
+      message: '9Router chưa được cài trên máy này.',
+      detail: 'RelayCode có thể cài 9Router bằng npm rồi mở trang quản lý cho bạn.',
+      icon: 'downloadSimple',
+      actions: [
+        { id: 'later', label: 'Để sau', kind: 'secondary' },
+        { id: 'install', label: 'Cài và mở 9Router', kind: 'primary' }
+      ]
+    });
+    if (choice !== 'install') return false;
+    await this.post({ type: 'routerLaunch', progress: 'installing', message: 'Đang cài 9Router' });
+    await this.routerProcess.install(routerCommand, (message) => void this.post({ type: 'routerLaunch', progress: 'installing', message }));
+    return true;
+  }
+
   private async startRouter(): Promise<void> {
     await this.context.globalState.update(DISCONNECTED_STATE, false);
     try {
       this.requireTrustedWorkspaceForRouter();
       const routerCommand = vscode.workspace.getConfiguration('nineRouter').get('routerCommand', '9router');
-      if (!(await this.routerProcess.isInstalled(routerCommand))) {
-        const choice = await this.interaction.choose({
-          title: 'Cài 9Router?',
-          message: '9Router chưa có trên máy này.',
-          detail: 'RelayCode có thể cài và khởi động dịch vụ tự động.',
-          icon: 'downloadSimple',
-          actions: [
-            { id: 'later', label: 'Để sau', kind: 'secondary' },
-            { id: 'install', label: 'Cài 9Router', kind: 'primary' }
-          ]
-        });
-        if (choice !== 'install') {
-          await this.post({ type: 'routerLaunch', progress: 'stopped', message: '9Router chưa chạy' });
-          return;
-        }
-        await this.post({ type: 'routerLaunch', progress: 'installing', message: 'Đang cài 9Router' });
-        await this.routerProcess.install(routerCommand, (message) => void this.post({ type: 'routerLaunch', progress: 'installing', message }));
+      if (!await this.ensureRouterInstalled(routerCommand)) {
+        await this.post({ type: 'routerLaunch', progress: 'stopped', message: '9Router chưa chạy' });
+        return;
       }
       const progressLabel: Record<RouterLaunchProgress, string> = {
         checking: 'Đang kiểm tra cổng 9Router',
         installing: 'Đang cài 9Router',
         starting: 'Đang khởi động 9Router',
         waiting: 'Đang chờ Dashboard sẵn sàng',
-        ready: '9Router đã sẵn sàng',
+        ready: 'Đã mở 9Router',
         stopped: '9Router đã tắt'
       };
       const url = await this.routerProcess.ensureRunning(
@@ -824,6 +829,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       );
       await vscode.env.openExternal(vscode.Uri.parse(url));
       await this.post({ type: 'browserOpened', url });
+      // Opening the dashboard must work even when the user has not entered an
+      // API key yet. The connection refresh reports the missing key separately
+      // and leaves the settings page available for configuration.
       await this.refreshConnection(false);
     } catch (error) {
       const message = this.errorText(error);
@@ -1079,15 +1087,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async checkModels(): Promise<void> {
     if (!this.models.length) throw new Error('Chưa có model để kiểm tra.');
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+    const english = language === 'en';
     const choice = await this.interaction.choose({
-      title: `Kiểm tra ${this.models.length} model?`,
-      message: 'RelayCode sẽ gửi một request ngắn đến từng model.',
-      detail: 'Thao tác này có thể phát sinh phí hoặc chạm rate limit.',
+      title: english ? `Check ${this.models.length} models?` : `Kiểm tra ${this.models.length} model?`,
+      message: english ? 'RelayCode will send a short request to each model.' : 'RelayCode sẽ gửi một request ngắn đến từng model.',
+      detail: english ? 'This may incur charges or hit a rate limit.' : 'Thao tác này có thể phát sinh phí hoặc chạm rate limit.',
       tone: 'warning',
       icon: 'pulse',
       actions: [
-        { id: 'cancel', label: 'Hủy', kind: 'secondary' },
-        { id: 'confirm', label: 'Kiểm tra tất cả', kind: 'primary' }
+        { id: 'cancel', label: english ? 'Cancel' : 'Hủy', kind: 'secondary' },
+        { id: 'confirm', label: english ? 'Check all' : 'Kiểm tra tất cả', kind: 'primary' }
       ]
     });
     if (choice !== 'confirm') return;
@@ -1464,9 +1474,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (!message.model) throw new Error('Hãy chọn một model trước khi gửi.');
 
     const config = vscode.workspace.getConfiguration('nineRouter');
-    const responseLanguage: 'vi' | 'en' = /[ăâđêôơưĂÂĐÊÔƠƯà-ỹÀ-Ỹ]|\b(?:tôi|bạn|mình|không|với|sao|hãy|giúp)\b/i.test(prompt)
-      ? 'vi'
-      : config.get<'vi' | 'en'>('language', 'vi');
+    const responseLanguage = detectResponseLanguage(prompt, config.get<'vi' | 'en'>('language', 'vi'));
     const codexTuning = /(codex|gpt-5|(?:^|[/_-])o[134](?:$|[/_.-]))/i.test(message.model)
       ? {
           reasoningEffort: message.reasoningEffort,
@@ -1554,13 +1562,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
     let answer = '';
     const planChatSummary = message.mode === 'plan'
-      ? (config.get<'vi' | 'en'>('language', 'vi') === 'en'
+      ? ((responseLanguage === 'en' || (responseLanguage === 'same' && config.get<'vi' | 'en'>('language', 'vi') === 'en'))
         ? 'Plan is ready. Open the Implementation Plan tab to review, revise or proceed.'
         : 'Đã lập xong kế hoạch. Mở tab Kế hoạch thực hiện để xem, chỉnh sửa hoặc thực hiện.')
       : '';
     const taskChangeIds = new Set<string>();
     const onDelta = (delta: string) => {
-      const localizedDelta = responseLanguage === 'vi' ? delta.replace(/\bready\b/gi, 'sẵn sàng') : delta;
+      // Keep streamed model text untouched. Language is controlled by the
+      // system instruction; rewriting words in the stream could corrupt code
+      // blocks, file names, or quoted content.
+      const localizedDelta = delta;
       answer += localizedDelta;
       if (message.mode !== 'plan') void this.post({ type: 'delta', delta: localizedDelta });
       if (!this.recoveryTimer) {
@@ -1649,9 +1660,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               const waitingSeconds = Math.floor((Date.now() - lastActivityAt) / 1_000);
               if (waitingSeconds >= 3) void this.post({ type: 'status', message: `Đang chờ model · ${waitingSeconds}s` });
             }, 3_000);
-            const chatSystem = responseLanguage === 'vi'
-              ? 'Trả lời hoàn toàn bằng tiếng Việt. Không dùng từ tiếng Anh khi đã có từ tiếng Việt tương đương; dùng “sẵn sàng” thay cho “ready”. Trả lời rõ ràng, gọn và không dùng emoji hoặc icon trang trí.'
-              : 'Answer in English. Keep responses clear and concise without decorative emoji or icons.';
+            const chatSystem = `${responseLanguageInstruction(responseLanguage)} Trả lời rõ ràng và gọn.`;
             const chatHistory: ChatMessage[] = [
               { role: 'system', content: chatSystem },
               ...this.history.map((item) => selectedModelSupportsVision ? item : { ...item, content: textOnlyContent(item.content) })
@@ -1709,9 +1718,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         };
         const projectInstructions = formatProjectInstructions(await loadProjectInstructions(workspaceRoot, vscode.window.activeTextEditor?.document.uri.fsPath));
         const runtimeInstructions = [
-          responseLanguage === 'vi'
-            ? 'Giao tiếp hoàn toàn bằng tiếng Việt. Không dùng từ tiếng Anh khi đã có từ tiếng Việt tương đương; dùng “sẵn sàng” thay cho “ready”.'
-            : 'Communicate in English.',
+          responseLanguageInstruction(responseLanguage),
           projectInstructions,
           activeSkills.length ? '' : skillCatalog(this.skills),
           selectedSkillInstructions
@@ -3199,13 +3206,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private html(webview: vscode.Webview): string {
     const nonce = getNonce();
     const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
-    return localizeUiDocument(renderChatViewHtml({
+    // Localize the static HTML, but keep the controller source bilingual. If
+    // the controller is localized as plain text too, switching from English
+    // back to Vietnamese loses the original `uiCopy(vi, en)` branches.
+    const controllerMarker = '__RELAYCODE_CONTROLLER__';
+    const localized = localizeUiDocument(renderChatViewHtml({
       language,
       nonce,
       cspSource: webview.cspSource,
       styles: CHAT_VIEW_STYLES,
-      controller: CHAT_VIEW_CONTROLLER
+      controller: controllerMarker
     }), language);
+    // Use a function replacement: the controller contains many `$` tokens
+    // (`$()`, `${...}`, `$&`, etc.). Passing it as a replacement string makes
+    // String.replace interpret those tokens and corrupt the webview script.
+    return localized.replace(controllerMarker, () => CHAT_VIEW_CONTROLLER);
   }
 
   public dispose(): void {
@@ -3283,7 +3298,7 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Chỉ chạy khi có Docker hoặc Podman': 'Run only when Docker or Podman is available',
     'Hỏi trước khi chạy trực tiếp': 'Ask before falling back to direct execution',
     'Chọn nguồn model cho mọi yêu cầu': 'Choose the model source for every request',
-    'Kết nối 9Router bằng một nút.': 'Connect 9Router in one click.',
+    'Mở 9Router bằng một nút.': 'Open 9Router in one click.',
     'Hãy chọn hoặc nhập một model trước khi gửi.': 'Select or enter a model before sending.',
     'Model này không hỗ trợ tools nên không thể chạy Agent mode. Hãy chuyển sang Chat hoặc chọn model khác.': 'This model does not support tools and cannot run in Agent mode. Switch to Chat or choose another model.',
     'Đã lưu API key an toàn': 'API key stored securely',
@@ -3303,10 +3318,15 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Đã ngắt provider.': 'Provider disconnected.',
     '9Router đã tắt': '9Router stopped',
     '9Router sẵn sàng': '9Router ready',
+    'Đang kiểm tra cổng 9Router': 'Checking the 9Router port',
     'Provider đã sẵn sàng': 'Provider is ready',
     'Provider chưa thể sử dụng': 'Provider is unavailable',
     'Gateway và API đang sẵn sàng nhận yêu cầu từ Chat hoặc Agent.': 'The gateway and API are ready for Chat or Agent requests.',
     'Đang cài 9Router': 'Installing 9Router',
+    'Đang khởi động 9Router': 'Starting 9Router',
+    'Đang chờ Dashboard sẵn sàng': 'Waiting for the dashboard to be ready',
+    'Đã mở 9Router': '9Router opened',
+    'Không thể khởi động 9Router': 'Unable to start 9Router',
     'Kết nối lại': 'Reconnect',
     'Cấu hình': 'Configure',
     'Quay lại chat': 'Back to chat',
@@ -3345,7 +3365,7 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Xuất chẩn đoán': 'Export diagnostics',
     'Thiết lập local': 'Set up local provider',
     '9Router chưa chạy': '9Router is not running',
-    'Đang kết nối 9Router': 'Connecting to 9Router',
+    'Đang mở 9Router': 'Opening 9Router',
     '9Router đang hoạt động': '9Router is running',
     'Mở lại trình quản lý': 'Open management page',
     'Kiểm tra lại': 'Check again',
@@ -3360,7 +3380,6 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Tùy chọn': 'Optional',
     'Dùng model này': 'Use this model',
     'Nói điều bạn muốn xây.': 'Describe what you want to build.',
-    'Bắt đầu nhanh': 'Quick start',
     'Mở menu thêm': 'Open add menu',
     'Nhanh và cân bằng': 'Fast and balanced',
     'Suy luận kỹ hơn': 'Deeper reasoning',
@@ -3398,7 +3417,7 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     'Tên server': 'Server name',
     'Đã thêm': 'Added',
     'Tiếng Việt': 'Vietnamese',
-    'Kết nối 9Router': 'Connect 9Router',
+    'Mở 9Router': 'Open 9Router',
     'Lịch sử': 'History',
     'Số liệu': 'Usage',
     'Cài đặt': 'Settings',

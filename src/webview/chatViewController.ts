@@ -113,7 +113,7 @@ const uiCopy = (vi, en) => language === 'en' ? en : vi;
 $('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
 $('uiLanguage').addEventListener('change', () => {
   language = $('uiLanguage').value;
-  $('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
+  applyLanguageUi();
   vscode.postMessage({ type: 'setLanguage', language: $('uiLanguage').value });
 });
 let mode = 'agent';
@@ -150,6 +150,8 @@ let checkingModels = false;
 let favoriteModels = [];
 let favoriteModelsAtMenuOpen = [];
 let recentModels = [];
+let mcpServerState = [];
+let mcpPresetState = [];
 let keyStateRequestId = 0;
 let pendingToolFailureId = '';
 let activeTerminal = null;
@@ -180,6 +182,87 @@ const providerMeta = {
   ollama: { brand: 'ollama', label: 'Ollama', hint: 'Local · không cần API key', endpoint: 'http://localhost:11434/v1', keyLabel: 'API key', local: true },
   'lm-studio': { brand: 'lm-studio', label: 'LM Studio', hint: 'Local · không cần API key', endpoint: 'http://localhost:1234/v1', keyLabel: 'API key', local: true }
 };
+
+// Static shell labels are translated in place so changing language never
+// requires replacing the webview document.
+const liveLanguagePairs = [
+  ['Kết nối provider', 'Connect provider'], ['Kết nối', 'Connect'], ['Lịch sử chat', 'Chat history'],
+  ['Lịch sử', 'History'], ['Số liệu sử dụng', 'Usage metrics'], ['Số liệu', 'Usage'], ['Cài đặt', 'Settings'],
+  ['Đóng', 'Close'], ['Xóa tất cả', 'Clear all'], ['Hoạt động provider', 'Provider activity'],
+  ['Token, chi phí ước tính, tốc độ và rate limit', 'Tokens, estimated cost, latency and rate limits'],
+  ['Kết nối công cụ', 'Tool connections'], ['Chọn dịch vụ và đăng nhập trong trình duyệt', 'Choose a service and sign in through your browser'],
+  ['MCP có thể kết nối', 'Available MCP connections'], ['Đã thêm', 'Added'], ['Thêm MCP khác', 'Add another MCP'],
+  ['Chọn một dịch vụ ở trên hoặc thêm MCP riêng.', 'Choose a service above or add a custom MCP.'],
+  ['Tên server', 'Server name'], ['Kết nối server', 'Connect server'], ['Cấu hình provider', 'Provider settings'],
+  ['Chọn nguồn model cho mọi yêu cầu', 'Choose the model source for every request'], ['Ngôn ngữ giao diện', 'Interface language'],
+  ['Giao diện tiếng Việt', 'Vietnamese interface'], ['Hồ sơ đang dùng', 'Active profile'], ['Xóa hồ sơ', 'Delete profile'],
+  ['+ Hồ sơ mới', '+ New profile'], ['Thêm', 'Add'], ['Tệp và thư mục', 'Files and folders'],
+  ['Đính kèm ngữ cảnh từ workspace', 'Attach context from workspace'], ['Đặt mục tiêu để agent tiếp tục theo đuổi', 'Set a goal for Agent to keep pursuing'],
+  ['Lập kế hoạch trước khi thực hiện', 'Plan before implementation'], ['Thêm skill vào yêu cầu', 'Add a skill to the request'],
+  ['Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Run a long task that can be paused and resumed'],
+  ['Bắt đầu một cuộc chat mới', 'Start a new chat'], ['Rút gọn ngữ cảnh cuộc chat', 'Compact this chat context'],
+  ['Tìm và chèn skill', 'Find and insert a skill'], ['Mở danh sách model', 'Open the model list'],
+  ['Chuyển sang chế độ Plan', 'Switch to Plan mode'], ['Xem các file đã thay đổi', 'View changed files'],
+  ['Mở các thay đổi đang chờ review', 'Open changes awaiting review'], ['Bật hoặc tắt file đang mở trong ngữ cảnh', 'Toggle the open file in context'],
+  ['Tạo khung AGENTS.md cho dự án', 'Create an AGENTS.md scaffold for the project'], ['Xem provider, MCP và skills', 'View provider, MCP and skills status'],
+  ['Mở công cụ MCP', 'Open MCP tools'], ['Mở cấu hình', 'Open settings'], ['Mở Output Channel', 'Open Output Channel'],
+  ['Mở 9Router', 'Open 9Router'],
+  ['Tên hồ sơ', 'Profile name'], ['Ví dụ: OpenAI cá nhân', 'For example: Personal OpenAI'], ['Endpoint và API key', 'Endpoint and API key'],
+  ['Nhập API key của provider', 'Enter the provider API key'], ['Tùy chọn', 'Optional'], ['Lưu và kết nối lại', 'Save and reconnect'],
+  ['Chẩn đoán', 'Diagnostics'], ['Xuất chẩn đoán', 'Export diagnostics'], ['Mở Cockpit', 'Open Cockpit'],
+  ['Thiết lập local', 'Set up local provider'], ['Connection center', 'Connection center'], ['Kết nối mô hình.', 'Connect a model.'],
+  ['Quản lý provider, kiểm tra API và mở bảng điều khiển tại một nơi.', 'Manage providers, check APIs and open dashboards in one place.'],
+  ['Mở trang quản lý', 'Open dashboard'], ['Kiểm tra kết nối', 'Check connection'], ['Ngắt kết nối', 'Disconnect'],
+  ['Kết nối thủ công', 'Connect manually'], ['Nói điều bạn muốn xây.', 'Describe what you want to build.'],
+  ['Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.', 'Agent can read the project, edit files and run commands in the workspace.'],
+  ['Nhập yêu cầu, dùng /, $ hoặc @…', 'Ask anything, use /, $ or @…'], ['Đọc, sửa file và chạy lệnh', 'Read, edit files and run commands'],
+  ['Trò chuyện trực tiếp với model', 'Chat directly with the model'], ['Lập kế hoạch trước khi hành động', 'Plan before taking action'],
+  ['Hỏi mọi thao tác', 'Ask for every action'], ['Luôn hỏi trước khi thực hiện', 'Always ask before acting'],
+  ['Cho phép sửa file', 'Allow file edits'], ['Chỉ hỏi khi chạy lệnh', 'Ask only before running commands'],
+  ['Không hỏi lại khi Agent hoạt động', 'Do not ask again while Agent is working'], ['Chọn model', 'Select model'],
+  ['Tìm model…', 'Search models…'], ['Kiểm tra model', 'Check models'], ['Gửi', 'Send'], ['Bật Full access?', 'Enable Full access?'],
+  ['Bật Full access', 'Enable Full access'], ['Hủy', 'Cancel'], ['Quay lại chat', 'Back to chat'],
+  ['Đang kiểm tra', 'Checking'], ['Đang gửi yêu cầu kiểm tra provider…', 'Sending a provider check request…'],
+  ['Đang kiểm tra provider hiện tại', 'Checking the current provider'], ['Độ trễ', 'Latency'], ['Chưa có endpoint', 'No endpoint'],
+  ['Đang làm việc', 'Working'], ['Tạm dừng', 'Pause'], ['Tiếp tục', 'Resume'], ['Xem', 'View'], ['Ẩn', 'Hide']
+];
+
+function translateLiveDom(languageValue) {
+  const pairs = languageValue === 'en' ? liveLanguagePairs : liveLanguagePairs.map(([vi, en]) => [en, vi]);
+  const translations = new Map(pairs);
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.parentElement?.closest('script,style')) continue;
+    const raw = node.nodeValue || '';
+    const trimmed = raw.trim();
+    const replacement = translations.get(trimmed);
+    if (replacement) node.nodeValue = raw.replace(trimmed, replacement);
+  }
+  document.querySelectorAll('[placeholder],[title],[aria-label],[data-tooltip]').forEach((element) => {
+    for (const attribute of ['placeholder', 'title', 'aria-label', 'data-tooltip']) {
+      const value = element.getAttribute(attribute);
+      const replacement = value ? translations.get(value.trim()) : undefined;
+      if (replacement) element.setAttribute(attribute, value.replace(value.trim(), replacement));
+    }
+  });
+}
+
+function applyLanguageUi() {
+  document.documentElement.lang = language;
+  document.body.dataset.language = language;
+  $('uiLanguageLabel').textContent = language === 'en' ? 'English' : 'Tiếng Việt';
+  translateLiveDom(language);
+  updateComposerPlaceholder();
+  setPermissionMode($('permissionMode').dataset.mode || 'ask');
+  $('modelSearch').placeholder = uiCopy('Tìm model…', 'Search models…');
+  $('checkModels').textContent = checkingModels
+    ? uiCopy('Đang kiểm tra · Bấm để hủy', 'Checking · Click to cancel')
+    : uiCopy('Kiểm tra model', 'Check models');
+  renderModelMenu($('modelSearch').value);
+  if (mcpPresetState.length || mcpServerState.length) renderMcpServers(mcpServerState, mcpPresetState);
+}
+
 function comparableEndpoint(value) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -208,19 +291,20 @@ document.querySelectorAll('#providerMenu .provider-option').forEach((option) => 
   option.prepend(slot);
 });
 
-function closeFloatingSurfaces(except = '') {
-  if (except !== 'configPanel' && !$('configPanel')?.classList.contains('hidden')) restoreSavedProfileDraft();
+function closeFloatingSurfaces(except = '', preserve = []) {
+  if (except !== 'configPanel' && !preserve.includes('configPanel') && !$('configPanel')?.classList.contains('hidden')) restoreSavedProfileDraft();
   floatingSurfaces.forEach((id) => {
     if (id === 'uiDialog' && activeUiDialog && except !== 'uiDialog') return;
-    if (id !== except) $(id)?.classList.add('hidden');
+    if (id !== except && !preserve.includes(id)) $(id)?.classList.add('hidden');
   });
   if (except !== 'historyPanel') historyExpanded = false;
 }
 
-function openFloatingSurface(id) {
+function openFloatingSurface(id, options = {}) {
   closeDropdowns();
-  if (id !== 'configPanel') closeConfigPanel();
-  closeFloatingSurfaces(id);
+  const preserve = options.preserve || [];
+  if (id !== 'configPanel' && !preserve.includes('configPanel')) closeConfigPanel();
+  closeFloatingSurfaces(id, preserve);
   $(id)?.classList.remove('hidden');
 }
 
@@ -314,7 +398,7 @@ function renderUiDialog(data) {
     button.dataset.action = action.id;
     button.addEventListener('click', () => {
       if (data.input?.required && !input.value.trim() && action.kind !== 'secondary') {
-        $('uiDialogError').textContent = 'Trường này không được để trống.';
+        $('uiDialogError').textContent = uiCopy('Trường này không được để trống.', 'This field is required.');
         $('uiDialogError').classList.remove('hidden');
         input.focus();
         return;
@@ -468,12 +552,12 @@ function reconcileFinalAssistantText(content) {
 
 function updateComposerPlaceholder() {
   $('prompt').placeholder = composerCommand
-    ? 'Nhấn gửi để chạy ' + composerCommand.key
+    ? uiCopy('Nhấn gửi để chạy ' + composerCommand.key, 'Press send to run ' + composerCommand.key)
     : composerGoalMode
-    ? 'Mô tả mục tiêu dài hạn…'
+    ? uiCopy('Mô tả mục tiêu dài hạn…', 'Describe a long-term goal…')
     : mode === 'agent'
-      ? 'Nhập yêu cầu, dùng /, $ hoặc @…'
-      : mode === 'plan' ? 'Mô tả mục tiêu để Agent lập kế hoạch…' : 'Hỏi nhanh qua model đang chọn…';
+      ? uiCopy('Nhập yêu cầu, dùng /, $ hoặc @…', 'Ask anything, use /, $ or @…')
+      : mode === 'plan' ? uiCopy('Mô tả mục tiêu để Agent lập kế hoạch…', 'Describe the goal for Agent to plan…') : uiCopy('Hỏi nhanh qua model đang chọn…', 'Ask the selected model…');
 }
 
 function setMode(next) {
@@ -517,6 +601,20 @@ function requestBootstrap() {
   startupReadyTimer = setTimeout(requestBootstrap, 1500);
 }
 
+function providerHintCopy(kind, fallback) {
+  const english = {
+    '9router': 'Local gateway, many models',
+    cockpit: 'Local gateway · multiple accounts',
+    opencode: 'OpenCode Zen · OpenAI-compatible',
+    openai: 'Official API · API key required',
+    anthropic: 'Messages API · API key required',
+    'openai-compatible': 'Custom endpoint',
+    ollama: 'Local · no API key required',
+    'lm-studio': 'Local · no API key required'
+  };
+  return uiCopy(fallback, english[kind] || fallback);
+}
+
 function setProvider(next, changeEndpoint = true, updateBadge = true) {
   const meta = providerMeta[next] || providerMeta['9router'];
   const previous = $('configProvider').value;
@@ -529,11 +627,11 @@ function setProvider(next, changeEndpoint = true, updateBadge = true) {
     $('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label);
   }
   $('providerLabel').textContent = meta.label;
-  $('providerHint').textContent = meta.hint;
+  $('providerHint').textContent = providerHintCopy(next, meta.hint);
   $('setupProviderBadge').textContent = meta.label;
-  $('setupTitle').textContent = next === '9router' ? uiCopy('Kết nối 9Router.', 'Connect 9Router.') : uiCopy('Kết nối ' + meta.label + '.', 'Connect ' + meta.label + '.');
+  $('setupTitle').textContent = next === '9router' ? uiCopy('Mở 9Router.', 'Open 9Router.') : uiCopy('Kết nối ' + meta.label + '.', 'Connect ' + meta.label + '.');
   $('setupCopy').textContent = next === '9router'
-    ? uiCopy('Khởi động gateway, kiểm tra API và mở bảng điều khiển mà không cần tự chạy lệnh.', 'Start the gateway, check the API and open the dashboard without running commands manually.')
+    ? uiCopy('Kiểm tra hoặc cài 9Router rồi mở bảng điều khiển. Không cần API key để mở trang quản lý.', 'Check or install 9Router, then open its dashboard. An API key is not required to open the management page.')
     : next === 'ollama' || next === 'lm-studio'
       ? uiCopy('Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.', 'A local provider needs no API key, but its app, model and API server must be running.')
       : uiCopy('Mở Cài đặt để kiểm tra endpoint và API key của provider này.', 'Open Settings to check this provider endpoint and API key.');
@@ -568,10 +666,10 @@ function setProvider(next, changeEndpoint = true, updateBadge = true) {
     // A new profile must never inherit a custom endpoint from the profile
     // that was active before it. Existing profiles may intentionally keep a
     // custom endpoint when switching providers.
-    if (!current || !currentProfileId || isKnownProviderEndpoint(current)) $('configEndpoint').value = meta.endpoint;
+    if (!current || !currentProfileId || previous !== next || isKnownProviderEndpoint(current)) $('configEndpoint').value = meta.endpoint;
   }
   $('setupEndpointLabel').textContent = $('configEndpoint').value.trim() || meta.endpoint || 'Chưa có endpoint';
-  $('startRouter').textContent = next === '9router' ? 'Kết nối 9Router' : 'Kết nối ' + meta.label;
+  $('startRouter').textContent = next === '9router' ? uiCopy('Mở 9Router', 'Open 9Router') : uiCopy('Kết nối ' + meta.label, 'Connect ' + meta.label);
 }
 
 function isCodexTunableModel(model) {
@@ -644,20 +742,20 @@ function renderModelMenu(query = '') {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option';
     const healthStatus = modelHealth[option.value]?.status || '';
     const icon = document.createElement('span'); icon.className = 'model-brand'; icon.innerHTML = brandIcon(brandKey(option.value, activeProvider), option.text);
-    const health = document.createElement('span'); health.className = 'model-health ' + healthStatus; health.setAttribute('aria-label', healthStatus === 'ok' ? 'Model hoạt động' : healthStatus === 'limited' ? 'Model đang bị giới hạn tạm thời' : healthStatus === 'error' ? 'Model không khả dụng' : healthStatus === 'checking' ? 'Đang kiểm tra model' : 'Chưa kiểm tra');
+    const health = document.createElement('span'); health.className = 'model-health ' + healthStatus; health.setAttribute('aria-label', healthStatus === 'ok' ? uiCopy('Model hoạt động', 'Model available') : healthStatus === 'limited' ? uiCopy('Model đang bị giới hạn tạm thời', 'Model temporarily rate-limited') : healthStatus === 'error' ? uiCopy('Model không khả dụng', 'Model unavailable') : healthStatus === 'checking' ? uiCopy('Đang kiểm tra model', 'Checking model') : uiCopy('Chưa kiểm tra', 'Not checked'));
     const label = document.createElement('span'); label.className = 'model-option-label'; label.textContent = option.text;
     const meta = document.createElement('small'); meta.className = 'model-option-meta';
     const healthMessage = modelHealth[option.value]?.message || '';
     const latency = healthMessage.match(/(\d+)\s*ms/i)?.[1];
     meta.textContent = healthStatus === 'limited'
-      ? 'Tạm giới hạn · thử lại sau'
+      ? uiCopy('Tạm giới hạn · thử lại sau', 'Temporarily limited · retry later')
       : healthStatus === 'error'
-        ? 'Kiểm tra không thành công'
+        ? uiCopy('Kiểm tra không thành công', 'Check failed')
         : option.dataset.tools === 'false'
           ? 'Chat only'
-          : (option.dataset.reasoning === 'true' ? 'Agent · reasoning' : 'Agent') + (latency ? ' · ' + latency + ' ms' : '');
+          : (option.dataset.reasoning === 'true' ? uiCopy('Agent · reasoning', 'Agent · reasoning') : 'Agent') + (latency ? ' · ' + latency + ' ms' : '');
     const copy = document.createElement('span'); copy.className = 'model-option-copy'; copy.append(label, meta);
-    const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 4.75A1.75 1.75 0 0 1 8.5 3h7a1.75 1.75 0 0 1 1.75 1.75v16L12 17.5l-5.25 3.25v-16Z"/></svg>'; favorite.title = favoriteModels.includes(option.value) ? 'Bỏ dấu model' : 'Đánh dấu model'; favorite.setAttribute('aria-label', favorite.title); favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
+    const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 4.75A1.75 1.75 0 0 1 8.5 3h7a1.75 1.75 0 0 1 1.75 1.75v16L12 17.5l-5.25 3.25v-16Z"/></svg>'; favorite.title = favoriteModels.includes(option.value) ? uiCopy('Bỏ dấu model', 'Remove model bookmark') : uiCopy('Đánh dấu model', 'Bookmark model'); favorite.setAttribute('aria-label', favorite.title); favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
     favorite.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'toggleFavoriteModel', model: option.value }); });
     favorite.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); favorite.click(); } });
     button.append(icon, copy, health, favorite); button.title = healthMessage;
@@ -948,8 +1046,7 @@ function renderMarkdownInto(container, source) {
   bindRichContent(container);
 }
 
-const englishUi = document.body.dataset.language === 'en';
-const activityCopy = (vi, en) => englishUi ? en : vi;
+const activityCopy = (vi, en) => language === 'en' ? en : vi;
 
 function activityInfo(status) {
   const detail = status.includes(':') ? status.slice(status.indexOf(':') + 1).trim() : '';
@@ -974,7 +1071,7 @@ function activityInfo(status) {
   if (/đọc file|reading file/i.test(status)) return { kind: 'inspect', key: 'read:' + detail, done: detail ? activityCopy('Đã đọc ', 'Read ') + detail : activityCopy('Đã đọc file', 'File read') };
   if (/cấu trúc dự án|project structure/i.test(status)) return { kind: 'inspect', key: 'list:' + detail, done: detail ? activityCopy('Đã xem file: ', 'Inspected files: ') + detail : activityCopy('Đã xem cấu trúc dự án', 'Project structure inspected') };
   if (/tìm trong dự án|searching project/i.test(status)) return { kind: 'inspect', key: 'search:' + detail, done: detail ? activityCopy('Đã tìm: ', 'Searched: ') + detail : activityCopy('Đã tìm trong dự án', 'Project searched') };
-  if (/MCP/i.test(status)) return { kind: 'mcp', key: 'mcp:' + status, done: englishUi ? status.replace(/^Using/i, 'Used') : status.replace(/^Đang dùng/i, 'Đã dùng') };
+  if (/MCP/i.test(status)) return { kind: 'mcp', key: 'mcp:' + status, done: language === 'en' ? status.replace(/^Using/i, 'Used') : status.replace(/^Đang dùng/i, 'Đã dùng') };
   if (/phân tích hướng thực hiện|analyzing the approach/i.test(status)) return { kind: 'thinking', key: 'thinking-direction', done: activityCopy('Đã xác định hướng thực hiện', 'Approach determined') };
   if (/bước tiếp theo|next step/i.test(status)) return { kind: 'thinking', key: 'thinking-next', done: activityCopy('Đã xác định bước tiếp theo', 'Next step determined') };
   return { kind: 'thinking', key: 'thinking', done: activityCopy('Đã phân tích yêu cầu', 'Request analyzed') };
@@ -1191,7 +1288,7 @@ function renderTelemetry(records = []) {
   const totalOutput = records.reduce((sum, item) => sum + (item.outputTokens || 0), 0);
   const costs = records.filter(item => typeof item.cost === 'number').reduce((sum, item) => sum + item.cost, 0);
   const avgLatency = records.length ? Math.round(records.reduce((sum, item) => sum + (item.latencyMs || 0), 0) / records.length) : 0;
-  $('telemetrySummary').innerHTML = '<div class="metric-card"><strong>' + formatCompact(totalInput + totalOutput) + '</strong><span>Tổng token</span></div><div class="metric-card"><strong>' + (costs ? '$' + costs.toFixed(4) : 'Chưa có') + '</strong><span>Chi phí ước tính</span></div><div class="metric-card"><strong>' + avgLatency + ' ms</strong><span>Latency trung bình</span></div>';
+  $('telemetrySummary').innerHTML = '<div class="metric-card"><strong>' + formatCompact(totalInput + totalOutput) + '</strong><span>' + uiCopy('Tổng token', 'Total tokens') + '</span></div><div class="metric-card"><strong>' + (costs ? '$' + costs.toFixed(4) : uiCopy('Chưa có', 'Not available')) + '</strong><span>' + uiCopy('Chi phí ước tính', 'Estimated cost') + '</span></div><div class="metric-card"><strong>' + avgLatency + ' ms</strong><span>' + uiCopy('Latency trung bình', 'Average latency') + '</span></div>';
   const latest = records[0]?.rateLimit;
   $('telemetryRate').textContent = latest ? 'Rate limit · requests ' + (latest.requestsRemaining || '?') + ' / ' + (latest.requestsLimit || '?') + ' · tokens ' + (latest.tokensRemaining || '?') + ' / ' + (latest.tokensLimit || '?') + ' · reset ' + (latest.reset || '?') : 'Chưa nhận được header rate limit từ provider.';
   const list = $('telemetryList'); list.replaceChildren();
@@ -1213,15 +1310,15 @@ function renderMcpCatalog(presets = [], servers = []) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'mcp-card' + (server?.connected ? ' connected' : server?.authPending ? ' pending' : server?.error ? ' failed' : '');
-    card.title = server?.error || (server?.connected ? preset.name + ' đã kết nối' : preset.authMode === 'api-key' ? 'Mở trang tạo API key' : 'Đăng nhập ' + preset.name);
+    card.title = server?.error || (server?.connected ? preset.name + ' ' + uiCopy('đã kết nối', 'connected') : preset.authMode === 'api-key' ? uiCopy('Mở trang tạo API key', 'Open API key page') : uiCopy('Đăng nhập ', 'Sign in to ') + preset.name);
     const cardStatus = server?.connected
-      ? (server.toolCount || 0) + ' công cụ sẵn sàng'
+      ? (server.toolCount || 0) + uiCopy(' công cụ sẵn sàng', ' tools ready')
       : server?.authPending
-        ? 'Đang chờ đăng nhập'
+        ? uiCopy('Đang chờ đăng nhập', 'Waiting for sign-in')
           : server?.error
             ? server.error
           : server?.hasToken
-          ? 'Có API key · cần kết nối lại'
+          ? uiCopy('Có API key · cần kết nối lại', 'API key saved · reconnect required')
           : preset.description;
     card.innerHTML = '<span class="mcp-brand-icon">' + mcpIcon(preset.icon) + '</span><span class="mcp-card-copy"><strong>' + escapeHtml(preset.name) + '</strong><small>' + escapeHtml(cardStatus) + '</small></span><i class="mcp-card-state"></i>';
     card.addEventListener('click', () => {
@@ -1256,15 +1353,17 @@ function syncPendingMcpOutcome(servers) {
     notice.textContent = server.name + ' đã kết nối thành công · ' + (server.toolCount || 0) + ' công cụ sẵn sàng.';
     notice.className = 'mcp-connection-notice success';
   } else if (server.error) {
-    notice.textContent = 'Không thể kết nối ' + server.name + ': ' + server.error;
+    notice.textContent = uiCopy('Không thể kết nối ', 'Unable to connect to ') + server.name + ': ' + server.error;
     notice.className = 'mcp-connection-notice danger';
   }
 }
 
 function renderMcpServers(servers = [], presets = []) {
+  mcpServerState = servers;
+  mcpPresetState = presets;
   renderMcpCatalog(presets, servers);
   const list = $('mcpList'); list.replaceChildren();
-  if (!servers.length) { list.innerHTML = '<div class="mcp-empty">Chọn một dịch vụ ở trên hoặc thêm MCP riêng.</div>'; return; }
+  if (!servers.length) { list.innerHTML = '<div class="mcp-empty">' + escapeHtml(uiCopy('Chọn một dịch vụ ở trên hoặc thêm MCP riêng.', 'Choose a service above or add a custom MCP.')) + '</div>'; return; }
   for (const server of servers) {
     const row = document.createElement('div'); row.className = 'mcp-row' + (server.error ? ' has-error' : '');
     const main = document.createElement('div'); main.className = 'mcp-row-main';
@@ -1272,14 +1371,14 @@ function renderMcpServers(servers = [], presets = []) {
     const icon = document.createElement('span'); icon.className = 'mcp-brand-icon'; icon.innerHTML = mcpIcon(iconKind);
     const info = document.createElement('span');
     const stateText = server.connected
-      ? (server.toolCount || 0) + ' tools · Đã kết nối'
+      ? (server.toolCount || 0) + uiCopy(' công cụ · Đã kết nối', ' tools · Connected')
       : server.error
         ? server.error
       : server.authPending
-        ? 'Đang chờ đăng nhập trên trình duyệt'
+        ? uiCopy('Đang chờ đăng nhập trên trình duyệt', 'Waiting for browser sign-in')
         : server.hasOAuthTokens
-          ? 'Cần kết nối lại'
-          : server.authMode === 'oauth' ? 'Chưa đăng nhập' : 'Ngoại tuyến';
+          ? uiCopy('Cần kết nối lại', 'Reconnect required')
+          : server.authMode === 'oauth' ? uiCopy('Chưa đăng nhập', 'Not signed in') : uiCopy('Ngoại tuyến', 'Offline');
     info.innerHTML = '<strong>' + escapeHtml(server.name) + '</strong><small>' + escapeHtml(stateText) + '</small>';
     info.title = server.error || '';
     main.append(icon, info);
@@ -1288,22 +1387,22 @@ function renderMcpServers(servers = [], presets = []) {
     if (server.authMode === 'oauth') {
       const auth = document.createElement('button'); auth.type = 'button';
       auth.className = 'mcp-action ' + (server.hasOAuthTokens ? 'logout' : 'login');
-      auth.textContent = server.hasOAuthTokens ? 'Đăng xuất' : (server.authPending ? 'Đang mở…' : 'Đăng nhập');
+      auth.textContent = server.hasOAuthTokens ? uiCopy('Đăng xuất', 'Sign out') : (server.authPending ? uiCopy('Đang mở…', 'Opening…') : uiCopy('Đăng nhập', 'Sign in'));
       auth.disabled = Boolean(server.authPending);
       auth.addEventListener('click', () => vscode.postMessage({ type: server.hasOAuthTokens ? 'logoutMcp' : 'loginMcp', id: server.id }));
       actions.append(auth);
     } else if (server.authMode === 'api-key') {
       const key = document.createElement('button'); key.type = 'button'; key.className = 'mcp-action ' + (server.hasToken ? 'logout' : 'login');
-      key.textContent = server.hasToken ? 'Đổi key' : 'Nhập key';
+      key.textContent = server.hasToken ? uiCopy('Đổi key', 'Change key') : uiCopy('Nhập key', 'Enter key');
       key.addEventListener('click', () => vscode.postMessage({ type: 'configureMcpApiKey', id: server.id }));
       actions.append(key);
     } else if (!server.connected) {
       const reconnect = document.createElement('button'); reconnect.type = 'button'; reconnect.className = 'mcp-action login';
-      reconnect.textContent = 'Kết nối lại';
+      reconnect.textContent = uiCopy('Kết nối lại', 'Reconnect');
       reconnect.addEventListener('click', () => vscode.postMessage({ type: 'reconnectMcp', id: server.id }));
       actions.append(reconnect);
     }
-    const remove = document.createElement('button'); remove.className = 'mcp-remove'; remove.type = 'button'; remove.title = 'Xóa MCP'; remove.textContent = '×'; remove.addEventListener('click', () => vscode.postMessage({ type: 'removeMcpServer', id: server.id }));
+    const remove = document.createElement('button'); remove.className = 'mcp-remove'; remove.type = 'button'; remove.title = uiCopy('Xóa MCP', 'Remove MCP'); remove.textContent = '×'; remove.addEventListener('click', () => vscode.postMessage({ type: 'removeMcpServer', id: server.id }));
     actions.append(remove);
     row.append(main, actions); list.append(row);
   }
@@ -1323,7 +1422,7 @@ function setRouterLaunchState(state, message) {
   launchingRouter = state !== 'ready' && state !== 'idle';
   $('startRouter').disabled = launchingRouter;
   const providerName = providerMeta[activeProvider]?.label || activeProvider || 'provider';
-  $('startRouter').textContent = launchingRouter ? message : activeProvider === '9router' ? 'Kết nối 9Router' : 'Kết nối ' + providerName;
+  $('startRouter').textContent = launchingRouter ? message : activeProvider === '9router' ? uiCopy('Mở 9Router', 'Open 9Router') : uiCopy('Kết nối ' + providerName, 'Connect ' + providerName);
   $('signalMap').classList.toggle('launching', launchingRouter);
   $('signalMap').classList.toggle('ready', state === 'ready');
   document.querySelector('.launch-panel').classList.toggle('launching', launchingRouter);
@@ -1363,7 +1462,7 @@ function renderHistory(sessions = []) {
   $('clearAllHistory').textContent = activityCopy('Xóa tất cả', 'Clear all');
   const list = $('historyList'); list.replaceChildren();
   if (!sessions.length) {
-    const empty = document.createElement('div'); empty.className = 'history-empty'; empty.textContent = 'Chưa có cuộc trò chuyện nào.'; list.append(empty);
+    const empty = document.createElement('div'); empty.className = 'history-empty'; empty.textContent = uiCopy('Chưa có cuộc trò chuyện nào.', 'No conversations yet.'); list.append(empty);
     $('viewAllHistory').classList.add('hidden');
     return;
   }
@@ -1420,17 +1519,17 @@ function beginMessageEdit(item, body, content, turnIndex) {
   input.rows = 1;
   const hint = document.createElement('span');
   hint.className = 'message-edit-hint';
-  hint.textContent = 'Gửi lại sẽ thay thế các phản hồi phía sau.';
+  hint.textContent = uiCopy('Gửi lại sẽ thay thế các phản hồi phía sau.', 'Resending will replace the responses that follow.');
   const controls = document.createElement('div');
   controls.className = 'message-edit-controls';
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.className = 'message-edit-cancel';
-  cancel.textContent = 'Hủy';
+  cancel.textContent = uiCopy('Hủy', 'Cancel');
   const submit = document.createElement('button');
   submit.type = 'button';
   submit.className = 'message-edit-submit';
-  submit.textContent = 'Gửi lại';
+  submit.textContent = uiCopy('Gửi lại', 'Resend');
   const resize = () => {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 180) + 'px';
@@ -1603,7 +1702,7 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
   copy.type = 'button';
   copy.className = 'message-action copy-message';
   copy.setAttribute('aria-label', 'Sao chép');
-  copy.title = 'Sao chép';
+    copy.title = uiCopy('Sao chép', 'Copy');
   copy.innerHTML = messageActionIcon('copy');
   copy.addEventListener('click', () => void copyMessageText(copy, item.dataset.rawContent || content));
   actions.append(copy);
@@ -1612,7 +1711,7 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
     edit.type = 'button';
     edit.className = 'message-action edit-message';
     edit.setAttribute('aria-label', 'Chỉnh sửa');
-    edit.title = 'Chỉnh sửa';
+    edit.title = uiCopy('Chỉnh sửa', 'Edit');
     edit.innerHTML = messageActionIcon('edit');
     edit.addEventListener('click', () => beginMessageEdit(item, body, content, turnIndex));
     actions.append(edit);
@@ -1717,7 +1816,7 @@ function appendTerminalOutput(data) {
     const summary = document.createElement('summary');
     summary.innerHTML = '<span class="terminal-icon" aria-hidden="true">' + uiIcon('terminalWindow') + '</span><span class="terminal-command"></span><span class="terminal-elapsed"></span><span class="terminal-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
     summary.querySelector('.terminal-command').textContent = data.command || 'Terminal';
-    summary.querySelector('.terminal-elapsed').textContent = 'đang chạy';
+    summary.querySelector('.terminal-elapsed').textContent = uiCopy('đang chạy', 'running');
     const output = document.createElement('pre');
     activeTerminal.append(summary, output);
     activeTerminal.addEventListener('toggle', () => {
@@ -1838,7 +1937,7 @@ function finishTurn(data) {
       && /không phản hồi|không có hoạt động|không phản hồi API|chưa trả kết quả Agent/i.test(data.error)
       && !/HTTP 403|bearer token|invalid token|xác thực|đăng nhập lại/i.test(data.error)) {
       const actions = document.createElement('div'); actions.className = 'error-actions';
-      const restart = document.createElement('button'); restart.type = 'button'; restart.className = 'error-action'; restart.textContent = 'Kiểm tra kết nối';
+      const restart = document.createElement('button'); restart.type = 'button'; restart.className = 'error-action'; restart.textContent = uiCopy('Kiểm tra kết nối', 'Check connection');
       restart.addEventListener('click', () => {
         vscode.postMessage({ type: 'checkRouterConnection' });
       });
@@ -2127,12 +2226,12 @@ function createMenuRow({ glyph, label, description, meta = '', action, selected 
 function renderAddMenu() {
   const menu = $('addMenu');
   menu.replaceChildren();
-  appendMenuSection(menu, 'Thêm');
+  appendMenuSection(menu, uiCopy('Thêm', 'Add'));
   menu.append(
     createMenuRow({
       glyph: 'paperclip',
-      label: 'Tệp và thư mục',
-      description: 'Đính kèm ngữ cảnh từ workspace',
+      label: uiCopy('Tệp và thư mục', 'Files and folders'),
+      description: uiCopy('Đính kèm ngữ cảnh từ workspace', 'Attach context from workspace'),
       action: () => {
         closeAddMenu();
         vscode.postMessage({ type: 'pickFiles', kind: 'resources' });
@@ -2141,7 +2240,7 @@ function renderAddMenu() {
     createMenuRow({
       glyph: 'target',
       label: 'Goal',
-      description: 'Đặt mục tiêu để agent tiếp tục theo đuổi',
+      description: uiCopy('Đặt mục tiêu để agent tiếp tục theo đuổi', 'Set a goal for Agent to keep pursuing'),
       action: () => {
         composerGoalMode = true;
         closeAddMenu();
@@ -2152,7 +2251,7 @@ function renderAddMenu() {
     createMenuRow({
       glyph: 'lightbulb',
       label: 'Plan mode',
-      description: 'Lập kế hoạch trước khi thực hiện',
+      description: uiCopy('Lập kế hoạch trước khi thực hiện', 'Plan before implementation'),
       action: () => {
         closeAddMenu();
         setMode('plan');
@@ -2166,7 +2265,7 @@ function renderAddMenu() {
       menu.append(createMenuRow({
         glyph: 'cube',
         label: composerSkillLabel(skill.name),
-        description: skill.description || 'Thêm skill vào yêu cầu',
+        description: skill.description || uiCopy('Thêm skill vào yêu cầu', 'Add a skill to the request'),
         meta: skill.source === 'workspace' ? 'Workspace' : 'Personal',
         selected: composerSkills.some((item) => item.name === skill.name),
         action: () => {
@@ -2184,30 +2283,30 @@ function renderComposerMenu() {
   const value = $('prompt').value;
   const menu = $('composerMenu');
   const slash = [
-    ['/goal', 'Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Goal', 'target'],
-    ['/new', 'Bắt đầu một cuộc chat mới', 'New chat', 'chatCircle'],
-    ['/compact', 'Rút gọn ngữ cảnh cuộc chat', 'Compact', 'broom'],
-    ['/skills', 'Tìm và chèn skill', 'Skills', 'cube'],
-    ['/model', 'Mở danh sách model', 'Model', 'circlesThree'],
-    ['/plan', 'Chuyển sang chế độ Plan', 'Plan mode', 'lightbulb'],
-    ['/review', 'Xem các file đã thay đổi', 'Code review', 'magnifyingGlass'],
-    ['/diff', 'Mở các thay đổi đang chờ review', 'Diff', 'gitDiff'],
-    ['/ide-context', 'Bật hoặc tắt file đang mở trong ngữ cảnh', 'IDE context', 'selection'],
-    ['/init', 'Tạo khung AGENTS.md cho dự án', 'Init', 'fileMd'],
-    ['/status', 'Xem provider, MCP và skills', 'Status', 'info'],
-    ['/diagnostics', 'Kiểm tra kết nối', 'Diagnostics', 'pulse'],
-    ['/mcp', 'Mở công cụ MCP', 'MCP', 'plugsConnected'],
-    ['/settings', 'Mở cấu hình', 'Settings', 'gear'],
-    ['/logs', 'Mở Output Channel', 'Logs', 'terminalWindow'],
-    ['/export', 'Xuất gói chẩn đoán', 'Export', 'export']
+    ['/goal', uiCopy('Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Run a long task that can be paused and resumed'), 'Goal', 'target'],
+    ['/new', uiCopy('Bắt đầu một cuộc chat mới', 'Start a new chat'), 'New chat', 'chatCircle'],
+    ['/compact', uiCopy('Rút gọn ngữ cảnh cuộc chat', 'Compact this chat context'), 'Compact', 'broom'],
+    ['/skills', uiCopy('Tìm và chèn skill', 'Find and insert a skill'), 'Skills', 'cube'],
+    ['/model', uiCopy('Mở danh sách model', 'Open the model list'), 'Model', 'circlesThree'],
+    ['/plan', uiCopy('Chuyển sang chế độ Plan', 'Switch to Plan mode'), 'Plan mode', 'lightbulb'],
+    ['/review', uiCopy('Xem các file đã thay đổi', 'View changed files'), 'Code review', 'magnifyingGlass'],
+    ['/diff', uiCopy('Mở các thay đổi đang chờ review', 'Open changes awaiting review'), 'Diff', 'gitDiff'],
+    ['/ide-context', uiCopy('Bật hoặc tắt file đang mở trong ngữ cảnh', 'Toggle the open file in context'), 'IDE context', 'selection'],
+    ['/init', uiCopy('Tạo khung AGENTS.md cho dự án', 'Create an AGENTS.md scaffold for the project'), 'Init', 'fileMd'],
+    ['/status', uiCopy('Xem provider, MCP và skills', 'View provider, MCP and skills status'), 'Status', 'info'],
+    ['/diagnostics', uiCopy('Kiểm tra kết nối', 'Check connection'), 'Diagnostics', 'pulse'],
+    ['/mcp', uiCopy('Mở công cụ MCP', 'Open MCP tools'), 'MCP', 'plugsConnected'],
+    ['/settings', uiCopy('Mở cấu hình', 'Open settings'), 'Settings', 'gear'],
+    ['/logs', uiCopy('Mở Output Channel', 'Open Output Channel'), 'Logs', 'terminalWindow'],
+    ['/export', uiCopy('Xuất gói chẩn đoán', 'Export diagnostics package'), 'Export', 'export']
   ];
   const mentions = [
-    ['@selection', 'Đoạn code đang chọn', 'Selection', 'selection'],
-    ['@file:', 'Một file trong workspace', 'File', 'file'],
-    ['@folder:', 'Cây file của thư mục', 'Folder', 'folderOpen'],
-    ['@terminal', 'Output terminal gần nhất', 'Terminal', 'terminalWindow'],
-    ['@git-diff', 'Thay đổi Git hiện tại', 'Git diff', 'gitDiff'],
-    ['@problems', 'Problems của workspace', 'Problems', 'pulse']
+    ['@selection', uiCopy('Đoạn code đang chọn', 'Selected code'), 'Selection', 'selection'],
+    ['@file:', uiCopy('Một file trong workspace', 'A workspace file'), 'File', 'file'],
+    ['@folder:', uiCopy('Cây file của thư mục', 'Folder file tree'), 'Folder', 'folderOpen'],
+    ['@terminal', uiCopy('Output terminal gần nhất', 'Latest terminal output'), 'Terminal', 'terminalWindow'],
+    ['@git-diff', uiCopy('Thay đổi Git hiện tại', 'Current Git changes'), 'Git diff', 'gitDiff'],
+    ['@problems', uiCopy('Problems của workspace', 'Workspace problems'), 'Problems', 'pulse']
   ];
   const trigger = activeComposerTrigger(value);
   const source = trigger?.kind === 'command'
@@ -2321,7 +2420,7 @@ $('connect').addEventListener('click', () => {
 });
 $('startRouter').addEventListener('click', () => {
   showError('');
-  setRouterLaunchState('starting', 'Đang kết nối 9Router');
+  setRouterLaunchState('starting', 'Đang mở 9Router');
   vscode.postMessage({ type: 'startRouter' });
 });
 $('openDashboard').addEventListener('click', () => vscode.postMessage({ type: 'openDashboard' }));
@@ -2350,7 +2449,7 @@ $('metricsToggle').addEventListener('click', (event) => { event.stopPropagation(
 $('closeTelemetry').addEventListener('click', () => $('telemetryPanel').classList.add('hidden'));
 $('telemetryPanel').addEventListener('click', (event) => event.stopPropagation());
 $('clearTelemetry').addEventListener('click', () => vscode.postMessage({ type: 'clearTelemetry' }));
-$('openMcp').addEventListener('click', (event) => { event.stopPropagation(); closeConfigPanel(); openFloatingSurface('mcpPanel'); vscode.postMessage({ type: 'getMcpServers' }); });
+$('openMcp').addEventListener('click', (event) => { event.stopPropagation(); openFloatingSurface('mcpPanel', { preserve: ['configPanel'] }); vscode.postMessage({ type: 'getMcpServers' }); });
 $('closeMcp').addEventListener('click', () => $('mcpPanel').classList.add('hidden'));
 $('mcpPanel').addEventListener('click', (event) => event.stopPropagation());
 function updateMcpForm() {
@@ -2368,7 +2467,7 @@ $('mcpAuth').addEventListener('change', updateMcpForm);
 $('saveMcp').addEventListener('click', () => {
   const transport = $('mcpTransport').value;
   let env = {};
-  try { env = $('mcpEnv').value.trim() ? JSON.parse($('mcpEnv').value) : {}; } catch { $('diagnosticsResult').textContent = 'Env MCP phải là JSON hợp lệ.'; $('diagnosticsResult').className = 'diagnostics-result failure'; return; }
+  try { env = $('mcpEnv').value.trim() ? JSON.parse($('mcpEnv').value) : {}; } catch { $('diagnosticsResult').textContent = uiCopy('Env MCP phải là JSON hợp lệ.', 'MCP environment values must be valid JSON.'); $('diagnosticsResult').className = 'diagnostics-result failure'; return; }
   vscode.postMessage({ type: 'saveMcpServer', token: $('mcpToken').value || undefined, server: { id: '', name: $('mcpName').value, transport, authMode: transport === 'http' ? $('mcpAuth').value : undefined, enabled: true, command: $('mcpCommand').value, args: $('mcpArgs').value.split(/\s+/).filter(Boolean), url: $('mcpUrl').value }, env });
 });
 updateMcpForm();
@@ -2497,12 +2596,12 @@ function runConnectionDiagnostics() {
   $('connectionProviderName').textContent = meta.label;
   $('connectionProviderMark').innerHTML = brandIcon(meta.brand, meta.label);
   $('connectionEndpoint').textContent = $('configEndpoint').value.trim() || 'Chưa có endpoint';
-  $('connectionDialogSubtitle').textContent = 'Đang kiểm tra ' + meta.label;
-  $('connectionHealthBadge').textContent = 'Đang kiểm tra';
+  $('connectionDialogSubtitle').textContent = uiCopy('Đang kiểm tra ', 'Checking ') + meta.label;
+  $('connectionHealthBadge').textContent = uiCopy('Đang kiểm tra', 'Checking');
   $('connectionHealthBadge').className = 'checking';
   $('connectionLatency').textContent = '—';
   $('connectionModels').textContent = '—';
-  $('connectionMessage').textContent = 'Đang gửi yêu cầu kiểm tra provider…';
+  $('connectionMessage').textContent = uiCopy('Đang gửi yêu cầu kiểm tra provider…', 'Sending a provider check request…');
   $('retryDiagnostics').disabled = true;
   vscode.postMessage({ type: 'diagnostics' });
 }
@@ -2618,7 +2717,7 @@ $('saveConfig').addEventListener('click', () => {
   $('configPanel').classList.add('hidden');
 });
 $('runDiagnostics').addEventListener('click', () => {
-  $('diagnosticsResult').textContent = 'Đang kiểm tra…';
+    $('diagnosticsResult').textContent = uiCopy('Đang kiểm tra…', 'Checking…');
   $('diagnosticsResult').className = 'diagnostics-result checking';
   $('runDiagnostics').disabled = true;
   vscode.postMessage({
@@ -2725,7 +2824,11 @@ $('prompt').addEventListener('paste', (event) => {
 });
 
 window.addEventListener('message', ({ data }) => {
-  if (data.type === 'uiDialog') {
+  if (data.type === 'languageChanged') {
+    language = data.language === 'en' ? 'en' : 'vi';
+    $('uiLanguage').value = language;
+    applyLanguageUi();
+  } else if (data.type === 'uiDialog') {
     renderUiDialog(data);
   } else if (data.type === 'cancelPendingInteractions') {
     queuedUiDialogs = [];
@@ -2763,13 +2866,13 @@ window.addEventListener('message', ({ data }) => {
     modelListRecoveryRequested = false;
     scheduleModelListRecovery();
     if (!providerMeta[activeProvider]?.local) {
-      $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
+      $('keyState').textContent = data.hasApiKey ? uiCopy('Đã lưu API key an toàn', 'API key stored securely') : uiCopy('Chưa lưu API key', 'No API key saved');
       $('keyState').classList.toggle('saved', data.hasApiKey);
     }
-    $('apiKey').placeholder = data.hasApiKey ? 'Đã lưu API key, nhập để thay đổi' : 'Nhập API key nếu endpoint yêu cầu';
+    $('apiKey').placeholder = data.hasApiKey ? uiCopy('Đã lưu API key, nhập để thay đổi', 'API key saved, enter to change') : uiCopy('Nhập API key nếu endpoint yêu cầu', 'Enter an API key if the endpoint requires it');
     setMode(data.mode || 'agent');
     setPermissionMode(data.permissionMode || 'ask');
-    if (data.workspaceTrusted === false) appendMessage('assistant', 'Workspace chưa được tin cậy. Agent, terminal và MCP sẽ bị khóa cho đến khi bạn bật Workspace Trust.', true);
+    if (data.workspaceTrusted === false) appendMessage('assistant', uiCopy('Workspace chưa được tin cậy. Agent, terminal và MCP sẽ bị khóa cho đến khi bạn bật Workspace Trust.', 'This workspace is not trusted. Agent, terminal and MCP remain locked until Workspace Trust is enabled.'), true);
     profiles = data.profiles || [];
     favoriteModels = data.favoriteModels || [];
     recentModels = data.recentModels || [];
@@ -2857,13 +2960,17 @@ window.addEventListener('message', ({ data }) => {
      $('disconnectConnection').textContent = uiCopy('Ngắt kết nối', 'Disconnect');
      $('openCockpitCenter').classList.toggle('hidden', activeProvider !== 'cockpit');
      $('openCockpitCenter').textContent = uiCopy('Mở Cockpit', 'Open Cockpit');
-     $('topConnectLabel').textContent = data.connected
-       ? uiCopy('Kết nối', 'Connect')
-       : routerStale
-         ? uiCopy('Khôi phục', 'Recover')
-         : routerReady
-           ? uiCopy('Cấu hình', 'Configure')
-           : uiCopy('Kết nối', 'Connect');
+    $('topConnectLabel').textContent = isRouter
+       ? data.connected
+         ? uiCopy('Cấu hình', 'Configure')
+         : routerStale
+           ? uiCopy('Khôi phục', 'Recover')
+           : routerReady
+             ? uiCopy('Cấu hình', 'Configure')
+             : uiCopy('Mở', 'Open')
+       : data.connected
+         ? uiCopy('Kết nối', 'Connect')
+         : uiCopy('Kết nối', 'Connect');
      $('topConnect').dataset.tooltip = uiCopy($('topConnectLabel').textContent + ' provider', $('topConnectLabel').textContent + ' provider');
     $('topConnect').classList.remove('hidden');
     $('topConnect').classList.toggle('online', Boolean(data.connected));
@@ -2872,9 +2979,9 @@ window.addEventListener('message', ({ data }) => {
     $('setupProviderBadge').textContent = providerName;
     $('setupProviderMark').innerHTML = brandIcon(providerMeta[activeProvider]?.brand || brandKey(providerName, activeProvider), providerName);
     $('setupEndpointLabel').textContent = data.endpoint || $('configEndpoint').value.trim() || 'Chưa có endpoint';
-     $('setupTitle').textContent = isRouter ? uiCopy('Kết nối 9Router.', 'Connect 9Router.') : uiCopy('Kết nối ' + providerName + '.', 'Connect ' + providerName + '.');
+     $('setupTitle').textContent = isRouter ? uiCopy('Mở 9Router.', 'Open 9Router.') : uiCopy('Kết nối ' + providerName + '.', 'Connect ' + providerName + '.');
      $('setupCopy').textContent = isRouter
-       ? uiCopy('Khởi động gateway, kiểm tra API và mở bảng điều khiển mà không cần tự chạy lệnh.', 'Start the gateway, check the API and open the dashboard without running commands manually.')
+       ? uiCopy('Kiểm tra hoặc cài 9Router rồi mở bảng điều khiển. Không cần API key để mở trang quản lý.', 'Check or install 9Router, then open its dashboard. An API key is not required to open the management page.')
        : activeProvider === 'ollama' || activeProvider === 'lm-studio'
          ? uiCopy('Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.', 'A local provider needs no API key, but its app, model and API server must be running.')
          : uiCopy('Mở Cài đặt để kiểm tra endpoint và API key của provider này.', 'Open Settings to check this provider endpoint and API key.');
@@ -2900,7 +3007,7 @@ window.addEventListener('message', ({ data }) => {
       $('openCockpitCenter').classList.toggle('hidden', activeProvider !== 'cockpit');
       $('disconnectConnection').classList.add('hidden');
       $('retryConnection').classList.remove('hidden');
-       if (!launchingRouter) setRouterLaunchState('idle', isRouter ? uiCopy('9Router chưa chạy', '9Router is not running') : uiCopy(providerName + ' chưa kết nối', providerName + ' is not connected'));
+       if (!launchingRouter) setRouterLaunchState('idle', isRouter ? uiCopy('9Router chưa chạy · bấm Mở 9Router', '9Router is not running · click Open 9Router') : uiCopy(providerName + ' chưa kết nối', providerName + ' is not connected'));
     }
     const select = $('model');
     const previous = select.value;
@@ -2941,10 +3048,6 @@ window.addEventListener('message', ({ data }) => {
     meter.title = data.compacted ? 'Context đã được rút gọn: ' + data.original + ' → ' + data.used + ' ký tự' : 'Context: ' + data.used + '/' + data.limit + ' ký tự';
   } else if (data.type === 'notice') {
     appendMessage('assistant', data.message, false, Date.now());
-  } else if (data.type === 'onboarding') {
-    const card = document.createElement('article'); card.className = 'onboarding-card';
-    card.innerHTML = '<strong>Bắt đầu nhanh</strong><span>' + escapeHtml(data.message) + '</span>';
-    $('messages').append(card);
   } else if (data.type === 'recoveredTurn') {
     if (running) return;
     document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
@@ -2953,12 +3056,12 @@ window.addEventListener('message', ({ data }) => {
     const item = document.createElement('article'); item.className = 'recovery-card';
     item.dataset.runId = data.runId || '';
     const lastStatus = data.checkpoint?.lastStatus || 'Tác vụ bị gián đoạn khi IDE reload.';
-    item.innerHTML = '<small>Khôi phục phiên Agent</small><strong>' + escapeHtml(data.prompt) + '</strong><span>' + escapeHtml(lastStatus) + '</span><div>' + (data.checkpoint ? '<button class="recovery-resume">Tiếp tục</button>' : '') + '<button class="recovery-discard">Bỏ phiên</button></div>';
+    item.innerHTML = '<small>' + uiCopy('Khôi phục phiên Agent', 'Recover Agent session') + '</small><strong>' + escapeHtml(data.prompt) + '</strong><span>' + escapeHtml(lastStatus) + '</span><div>' + (data.checkpoint ? '<button class="recovery-resume">' + uiCopy('Tiếp tục', 'Resume') + '</button>' : '') + '<button class="recovery-discard">' + uiCopy('Bỏ phiên', 'Discard session') + '</button></div>';
     item.querySelector('.recovery-resume')?.addEventListener('click', () => {
       setRunning(true);
       vscode.postMessage({ type: 'resumeAgent', model: $('model').value });
       item.querySelector('.recovery-resume').disabled = true;
-      item.querySelector('.recovery-resume').textContent = 'Đang tiếp tục…';
+      item.querySelector('.recovery-resume').textContent = uiCopy('Đang tiếp tục…', 'Resuming…');
     });
     item.querySelector('.recovery-discard').addEventListener('click', () => {
       vscode.postMessage({ type: 'discardAgentRun' });
@@ -2977,7 +3080,7 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'openConfig') {
     openFloatingSurface('configPanel');
   } else if (data.type === 'openMcpPanel') {
-    openFloatingSurface('mcpPanel');
+    openFloatingSurface('mcpPanel', { preserve: ['configPanel'] });
   } else if (data.type === 'openModelPicker') {
     favoriteModelsAtMenuOpen = [...favoriteModels];
     $('modelMenu').classList.remove('hidden');
@@ -2991,16 +3094,16 @@ window.addEventListener('message', ({ data }) => {
     $('configApiKey').value = '';
     if (data.profile) applyProfileUi(data.profile);
     if (!providerMeta[activeProvider]?.local) {
-      $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
+      $('keyState').textContent = data.hasApiKey ? uiCopy('Đã lưu API key an toàn', 'API key stored securely') : uiCopy('Chưa lưu API key', 'No API key saved');
       $('keyState').classList.toggle('saved', data.hasApiKey);
     }
   } else if (data.type === 'providerKeyState') {
     if ((!data.requestId || data.requestId === keyStateRequestId) && data.provider === $('configProvider').value && !providerMeta[data.provider]?.local) {
-      $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
+      $('keyState').textContent = data.hasApiKey ? uiCopy('Đã lưu API key an toàn', 'API key stored securely') : uiCopy('Chưa lưu API key', 'No API key saved');
       $('keyState').classList.toggle('saved', Boolean(data.hasApiKey));
       $('configApiKey').placeholder = data.hasApiKey
-        ? 'Đã lưu key · để trống để giữ nguyên'
-        : 'Nhập API key của provider';
+        ? uiCopy('Đã lưu key · để trống để giữ nguyên', 'Key saved · leave blank to keep it')
+        : uiCopy('Nhập API key của provider', 'Enter the provider API key');
     }
   } else if (data.type === 'diagnosticsResult') {
     $('diagnosticsResult').textContent = data.message;
@@ -3030,7 +3133,7 @@ window.addEventListener('message', ({ data }) => {
     activeProvider = data.profile?.kind || '9router';
     updateConnectionBadge(providerMeta[activeProvider]?.label || activeProvider, 'checking');
     $('configApiKey').value = '';
-    $('keyState').textContent = data.hasApiKey ? 'Đã lưu API key an toàn' : 'Chưa lưu API key';
+    $('keyState').textContent = data.hasApiKey ? uiCopy('Đã lưu API key an toàn', 'API key stored securely') : uiCopy('Chưa lưu API key', 'No API key saved');
     $('keyState').classList.toggle('saved', data.hasApiKey);
   } else if (data.type === 'modelCheckStart') {
     checkingModels = true;
@@ -3059,7 +3162,7 @@ window.addEventListener('message', ({ data }) => {
     renderMcpOutcome(data);
   } else if (data.type === 'checkpoint') {
     const card = document.createElement('article'); card.className = 'checkpoint-card';
-    card.innerHTML = '<span>Git checkpoint đã tạo · ' + data.checkpoint.hash + '</span><button>Khôi phục</button>';
+    card.innerHTML = '<span>' + uiCopy('Git checkpoint đã tạo · ', 'Git checkpoint created · ') + data.checkpoint.hash + '</span><button>' + uiCopy('Khôi phục', 'Restore') + '</button>';
     card.querySelector('button').addEventListener('click', () => vscode.postMessage({ type: 'restoreCheckpoint', id: data.checkpoint.id }));
     $('messages').append(card); $('messages').scrollTop = $('messages').scrollHeight;
   } else if (data.type === 'checkpointRestored') {
@@ -3227,7 +3330,7 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'toolFailure') {
     const item = document.createElement('article'); item.className = 'tool-failure-card';
     item.dataset.toolFailureId = data.id;
-    item.innerHTML = '<small>' + escapeHtml(data.tool) + ' · lần ' + data.attempt + '</small><strong>Tool chưa hoàn thành</strong><span>' + escapeHtml(data.message) + '</span><div><button class="tool-retry">Thử lại</button><button class="tool-change-model">Đổi model</button><button class="tool-skip">Bỏ qua</button></div>';
+    item.innerHTML = '<small>' + escapeHtml(data.tool) + ' · ' + uiCopy('lần ', 'attempt ') + data.attempt + '</small><strong>' + uiCopy('Tool chưa hoàn thành', 'Tool did not complete') + '</strong><span>' + escapeHtml(data.message) + '</span><div><button class="tool-retry">' + uiCopy('Thử lại', 'Retry') + '</button><button class="tool-change-model">' + uiCopy('Đổi model', 'Change model') + '</button><button class="tool-skip">' + uiCopy('Bỏ qua', 'Skip') + '</button></div>';
     const finish = (action, model) => {
       if (pendingToolFailureId === data.id) pendingToolFailureId = '';
       vscode.postMessage({ type: 'resolveToolFailure', id: data.id, action, model });
@@ -3242,7 +3345,7 @@ window.addEventListener('message', ({ data }) => {
       $('modelTrigger').setAttribute('aria-expanded', 'true');
       $('modelSearch').focus();
     });
-    item.querySelector('.tool-change-model').title = 'Chọn model khác rồi tiếp tục từ bước đang dở';
+    item.querySelector('.tool-change-model').title = uiCopy('Chọn model khác rồi tiếp tục từ bước đang dở', 'Choose another model and continue from the interrupted step');
     item.querySelector('.tool-skip').addEventListener('click', () => finish('skip'));
     $('messages').append(item); $('messages').scrollTop = $('messages').scrollHeight;
   } else if (data.type === 'changeOperation') {
@@ -3291,7 +3394,7 @@ window.addEventListener('message', ({ data }) => {
         if (change.taskId && change.taskId !== renderedTask) {
           renderedTask = change.taskId;
           const taskLabel = document.createElement('div'); taskLabel.className = 'task-group-label';
-          const title = document.createElement('span'); title.textContent = 'Tác vụ ' + change.taskId.replace(/^task-/, '').split('-')[0];
+          const title = document.createElement('span'); title.textContent = uiCopy('Tác vụ ', 'Task ') + change.taskId.replace(/^task-/, '').split('-')[0];
           taskLabel.append(title);
           list.append(taskLabel);
         }
@@ -3308,7 +3411,7 @@ window.addEventListener('message', ({ data }) => {
         const more = document.createElement('button');
         more.type = 'button';
         more.className = 'change-list-more';
-        more.textContent = 'Hiện thêm ' + Math.min(60, allChanges.length - renderedChanges) + ' file';
+         more.textContent = uiCopy('Hiện thêm ', 'Show ') + Math.min(60, allChanges.length - renderedChanges) + uiCopy(' file', ' files');
         more.addEventListener('click', renderChangeBatch);
         list.append(more);
       }
@@ -3410,7 +3513,7 @@ window.addEventListener('message', ({ data }) => {
     queuedFollowUps = [];
     renderFollowUpQueue();
     renderGoal(null);
-    $('messages').innerHTML = '<div class="empty"><h2>Nói điều bạn muốn xây.</h2><p>Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.</p></div>';
+     $('messages').innerHTML = '<div class="empty"><h2>' + uiCopy('Nói điều bạn muốn xây.', 'Describe what you want to build.') + '</h2><p>' + uiCopy('Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.', 'Agent can read the project, edit files and run commands in the workspace.') + '</p></div>';
     if (workingTimer) clearInterval(workingTimer);
     workingTimer = null;
     workingLabel = null;

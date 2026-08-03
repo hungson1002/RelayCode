@@ -16,4 +16,15 @@ describe('smartSessionTitle', () => {
     expect(smartSessionTitle('Sửa responsive dropdown. Sau đó chạy test.')).toBe('Sửa responsive dropdown');
     expect(smartSessionTitle('Hãy xây dựng một bảng điều khiển quản trị người dùng có bộ lọc trạng thái và phân trang phía máy chủ').length).toBeLessThanOrEqual(53);
   });
+
+  it('keeps short greetings natural and summarizes question lead-ins', () => {
+    expect(smartSessionTitle('Broooo')).toBe('Broooo');
+    expect(smartSessionTitle('Xin chào!')).toBe('Xin chào');
+    expect(smartSessionTitle('Có cách nào để sửa lỗi đăng nhập không?')).toBe('Cách sửa lỗi đăng nhập');
+    expect(smartSessionTitle('How can I debug this API error?')).toBe('How to debug this API error');
+  });
+
+  it('removes trailing conversational filler', () => {
+    expect(smartSessionTitle('Tạo một bảng usage giúp tôi nhé')).toBe('Tạo một bảng usage');
+  });
 });

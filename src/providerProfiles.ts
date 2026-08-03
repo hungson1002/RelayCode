@@ -11,7 +11,19 @@ const OPENCODE_ZEN_ENDPOINT = 'https://opencode.ai/zen/v1';
 const LEGACY_OPENCODE_ENDPOINTS = new Set([
   'https://console.opencode.ai/inference/openai/v1'
 ]);
+const LEGACY_SHARED_ENDPOINT_HOSTS = new Set(['kiraai.vn']);
 const PROVIDER_KINDS: ProviderKind[] = ['9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio'];
+
+const DEFAULT_PROVIDER_ENDPOINTS: Record<ProviderKind, string> = {
+  '9router': 'http://127.0.0.1:20128/v1',
+  cockpit: 'http://127.0.0.1:1455/v1',
+  opencode: OPENCODE_ZEN_ENDPOINT,
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  'openai-compatible': '',
+  ollama: 'http://localhost:11434/v1',
+  'lm-studio': 'http://localhost:1234/v1'
+};
 
 export interface ProviderProfile {
   id: string;
@@ -40,16 +52,15 @@ export class ProviderProfileStore {
   public async ensure(legacyKind: ProviderKind, legacyEndpoint: string): Promise<ProviderProfile> {
     let profiles = this.list();
     if (!profiles.length) {
-      const endpoint = legacyKind === 'opencode' && LEGACY_OPENCODE_ENDPOINTS.has(legacyEndpoint.replace(/\/+$/, ''))
-        ? OPENCODE_ZEN_ENDPOINT
-        : legacyEndpoint;
+      const endpoint = migrateEndpoint(legacyKind, legacyEndpoint);
       profiles = [{ id: `profile-${Date.now()}`, name: providerLabel(legacyKind), kind: legacyKind, endpoint }];
       await this.context.globalState.update(PROFILES_STATE, profiles);
       await this.context.globalState.update(ACTIVE_PROFILE_STATE, profiles[0]!.id);
     } else {
-      const migrated = profiles.map((profile) => profile.kind === 'opencode' && LEGACY_OPENCODE_ENDPOINTS.has(profile.endpoint.replace(/\/+$/, ''))
-        ? { ...profile, endpoint: OPENCODE_ZEN_ENDPOINT }
-        : profile);
+      const migrated = profiles.map((profile) => {
+        const endpoint = migrateEndpoint(profile.kind, profile.endpoint);
+        return endpoint === profile.endpoint ? profile : { ...profile, endpoint };
+      });
       if (migrated.some((profile, index) => profile !== profiles[index])) {
         profiles = migrated;
         await this.context.globalState.update(PROFILES_STATE, profiles);
@@ -164,6 +175,22 @@ export class ProviderProfileStore {
 
   private scopedKey(profileId: string, kind: ProviderKind): string {
     return `${PROFILE_KEY_PREFIX}${profileId}.${kind}`;
+  }
+}
+
+function migrateEndpoint(kind: ProviderKind, endpoint: string): string {
+  const trimmed = endpoint.trim();
+  if (kind === 'opencode' && LEGACY_OPENCODE_ENDPOINTS.has(trimmed.replace(/\/+$/, ''))) return OPENCODE_ZEN_ENDPOINT;
+  if (!isLegacySharedEndpoint(trimmed)) return endpoint;
+  return DEFAULT_PROVIDER_ENDPOINTS[kind];
+}
+
+function isLegacySharedEndpoint(endpoint: string): boolean {
+  try {
+    const hostname = new URL(endpoint).hostname.toLowerCase();
+    return [...LEGACY_SHARED_ENDPOINT_HOSTS].some((host) => hostname === host || hostname.endsWith(`.${host}`));
+  } catch {
+    return false;
   }
 }
 

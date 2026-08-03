@@ -33,12 +33,23 @@ export class RouterProcessManager implements vscode.Disposable {
   public async isInstalled(command: string): Promise<boolean> {
     const launch = this.resolveCommand(command);
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (installed: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(installed);
+      };
       const child = spawn(launch.executable, [...launch.prefixArgs, '--version'], {
         windowsHide: true,
         stdio: ['ignore', 'ignore', 'ignore']
       });
-      child.once('error', () => resolve(false));
-      child.once('exit', (code) => resolve(code === 0));
+      const timer = setTimeout(() => {
+        child.kill();
+        finish(false);
+      }, 8_000);
+      child.once('error', () => finish(false));
+      child.once('exit', (code) => finish(code === 0));
     });
   }
 
@@ -55,7 +66,12 @@ export class RouterProcessManager implements vscode.Disposable {
       const errors: string[] = [];
       child.stderr.on('data', (chunk: Buffer) => errors.push(chunk.toString()));
       child.once('error', reject);
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`Cài ${packageName} quá thời gian chờ. Hãy kiểm tra npm và mạng rồi thử lại.`));
+      }, 120_000);
       child.once('exit', (code) => {
+        clearTimeout(timer);
         if (code === 0) resolve();
         else reject(new Error(errors.join(' ').trim() || `npm dừng với mã ${code ?? 'unknown'}.`));
       });
