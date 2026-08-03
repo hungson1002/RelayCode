@@ -69,14 +69,33 @@ describe('RouterClient compatible chat responses', () => {
   });
 
   it('reads array content in SSE and rejects a successful but empty stream', async () => {
-    vi.stubGlobal('fetch', vi.fn()
+    const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('data: {"choices":[{"delta":{"content":[{"text":"Xin chào"}]}}]}\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }))
-      .mockResolvedValueOnce(new Response('data: {"choices":[{"delta":{"content":"  "}}]}\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } })));
+      .mockResolvedValueOnce(new Response('data: {"choices":[{"delta":{"content":"  "}}]}\n\ndata: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+    vi.stubGlobal('fetch', fetchMock);
     const client = new RouterClient({ endpoint: 'http://localhost:20128/v1', apiKey: 'key' });
     const chunks: string[] = [];
     await client.streamChat('model', [{ role: 'user', content: 'test' }], (delta) => chunks.push(delta));
     expect(chunks).toEqual(['Xin chào']);
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true });
     await expect(client.streamChat('model', [{ role: 'user', content: 'test' }], () => undefined)).rejects.toThrow(/không trả về nội dung/);
+  });
+
+  it('keeps Agent tool completion on the SSE path and forwards content deltas', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      'data: {"choices":[{"delta":{"content":"Đang làm"}}]}\n\ndata: {"choices":[{"finish_reason":"stop"}]}\n\n',
+      { headers: { 'content-type': 'text/event-stream' } }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const content: string[] = [];
+    const response = await new RouterClient({ endpoint: 'http://localhost:20128/v1', apiKey: 'key' })
+      .completeWithTools('model', [{ role: 'user', content: 'test' }], [], undefined, (progress) => {
+        if (progress.type === 'content' && progress.content) content.push(progress.content);
+      });
+
+    expect(response.content).toBe('Đang làm');
+    expect(content).toEqual(['Đang làm']);
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true });
   });
 });
 

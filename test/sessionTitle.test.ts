@@ -24,6 +24,13 @@ describe('smartSessionTitle', () => {
     expect(smartSessionTitle('How can I debug this API error?')).toBe('How to debug this API error');
   });
 
+  it('uses the subject instead of conversational question filler', () => {
+    expect(smartSessionTitle('Có biết về tool 9Router không')).toBe('9Router');
+    expect(smartSessionTitle('Nhé, bạn có biết 9Router')).toBe('9Router');
+    expect(smartSessionTitle('Biết 9router')).toBe('9Router');
+    expect(smartSessionTitle('Vậy còn cockpit')).toBe('Cockpit');
+  });
+
   it('removes trailing conversational filler', () => {
     expect(smartSessionTitle('Tạo một bảng usage giúp tôi nhé')).toBe('Tạo một bảng usage');
   });

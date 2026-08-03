@@ -9,6 +9,7 @@ const visibleCommands = [
   '/goal',
   '/new',
   '/compact',
+  '/summary',
   '/skills',
   '/model',
   '/plan',

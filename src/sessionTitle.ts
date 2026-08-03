@@ -2,7 +2,7 @@ const ACRONYMS = new Map([
   ['api', 'API'], ['css', 'CSS'], ['html', 'HTML'], ['http', 'HTTP'],
   ['javascript', 'JavaScript'], ['js', 'JS'], ['json', 'JSON'], ['jsx', 'JSX'],
   ['sql', 'SQL'], ['typescript', 'TypeScript'], ['ts', 'TS'], ['tsx', 'TSX'],
-  ['ui', 'UI'], ['url', 'URL'], ['ux', 'UX']
+  ['ui', 'UI'], ['url', 'URL'], ['ux', 'UX'], ['9router', '9Router']
 ]);
 
 const MAX_TITLE_LENGTH = 52;
@@ -22,7 +22,7 @@ function capitalizeFirst(value: string): string {
 }
 
 function normalizeAcronyms(value: string): string {
-  return value.replace(/\b(api|css|html|http|javascript|js|json|jsx|sql|typescript|ts|tsx|ui|url|ux)\b/gi,
+  return value.replace(/\b(api|css|html|http|javascript|js|json|jsx|sql|typescript|ts|tsx|ui|url|ux|9router)\b/gi,
     (word) => ACRONYMS.get(word.toLowerCase()) ?? word);
 }
 
@@ -49,7 +49,7 @@ export function smartSessionTitle(prompt: string): string {
   let title = originalTitle;
   const questionLead = /^(có\s+cách\s+nào(?:\s+để)?|làm\s+sao(?:\s+để)?|how\s+(?:can|do)\s+i)\s+/iu.test(title);
 
-  const conversationalPrefix = /^(?:(?:xin\s+)?chào(?:\s+bạn)?|hello|hi|hey)[,.!?;:\s-]*|^(?:(?:bạn\s+)?có\s+thể\s+|bạn\s+|hãy\s+|vui\s+lòng\s+|làm\s+ơn\s+|tôi\s+muốn\s+|mình\s+muốn\s+|giúp\s+(?:tôi|mình)\s+|cho\s+(?:tôi|mình)\s+)/i;
+  const conversationalPrefix = /^(?:(?:xin\s+)?chào(?:\s+bạn)?|hello|hi|hey|nhé|này|ờ|à|bạn\s+ơi|xin\s+hỏi|cho\s+(?:tôi|mình)\s+hỏi)[,.!?;:\s-]*|^(?:(?:bạn\s+)?có\s+thể\s+|bạn\s+|hãy\s+|vui\s+lòng\s+|làm\s+ơn\s+|tôi\s+muốn\s+|mình\s+muốn\s+|giúp\s+(?:tôi|mình)\s+|cho\s+(?:tôi|mình)\s+)/iu;
   for (let pass = 0; pass < 4; pass += 1) {
     const concise = title.replace(conversationalPrefix, '').trim();
     if (concise === title) break;
@@ -66,6 +66,12 @@ export function smartSessionTitle(prompt: string): string {
     title = concise;
   }
   if (!title) return capitalizeFirst(originalTitle) || NEW_CHAT_TITLE;
+
+  const topicQuestion = /^(?:(?:có\s+)?biết(?:\s+về)?|(?:có\s+)?thông\s+tin\s+(?:gì\s+)?về|do\s+you\s+know(?:\s+about)?|tell\s+me\s+about|what\s+(?:is|'s)|who\s+is|vậy\s+còn|còn)\s+/iu;
+  if (topicQuestion.test(title)) {
+    title = title.replace(topicQuestion, '').trim();
+    title = title.replace(/^(?:tool|repo(?:sitory)?|project|dự\s+án|thư\s+viện|library|package)\s+/iu, '').trim();
+  }
 
   // Question lead-ins are useful to the user but make noisy titles. Turn
   // them into the same compact “Cách …” style used by ChatGPT-like history.

@@ -116,7 +116,10 @@ $('uiLanguage').addEventListener('change', () => {
   applyLanguageUi();
   vscode.postMessage({ type: 'setLanguage', language: $('uiLanguage').value });
 });
-let mode = 'agent';
+let mode = 'chat';
+let defaultMode = 'chat';
+let modelSelectionSource = 'auto';
+let lastAutoModel = '';
 let running = false;
 let messagesPinnedToBottom = true;
 let startupReadyTimer = 0;
@@ -129,7 +132,7 @@ let changeSummaryExpanded = false;
 let pendingCompletedChangesState = null;
 let activeProvider = '9router';
 let pendingAssistantText = '';
-let typingTimer = 0;
+let assistantRenderFrame = 0;
 let assistantRawText = '';
 let assistantActivity = null;
 let activitySteps = new Map();
@@ -470,7 +473,7 @@ document.addEventListener('keydown', (event) => {
 });
 
 function flushAssistantText() {
-  if (typingTimer) { clearTimeout(typingTimer); typingTimer = 0; }
+  if (assistantRenderFrame) { cancelAnimationFrame(assistantRenderFrame); assistantRenderFrame = 0; }
   if (assistantBody && pendingAssistantText) {
     assistantRawText += pendingAssistantText;
     renderMarkdownInto(assistantBody, assistantRawText);
@@ -478,6 +481,33 @@ function flushAssistantText() {
     if (item) item.dataset.rawContent = assistantRawText;
   }
   pendingAssistantText = '';
+}
+
+function renderPendingAssistantText() {
+  assistantRenderFrame = 0;
+  if (!assistantBody || !pendingAssistantText) return;
+  const charsThisFrame = Math.max(3, Math.min(12, Math.ceil(pendingAssistantText.length / 14)));
+  assistantRawText += pendingAssistantText.slice(0, charsThisFrame);
+  pendingAssistantText = pendingAssistantText.slice(charsThisFrame);
+  renderMarkdownInto(assistantBody, assistantRawText);
+  const item = assistantBody.closest('.message');
+  if (item) item.dataset.rawContent = assistantRawText;
+  if (messagesPinnedToBottom) scrollMessagesToBottom();
+  else updateRunningScrollIndicator();
+  if (pendingAssistantText) {
+    scheduleAssistantTextRender();
+    return;
+  }
+  if (pendingTurnEnd) {
+    const data = pendingTurnEnd;
+    pendingTurnEnd = null;
+    settleTurn(data);
+  }
+}
+
+function scheduleAssistantTextRender() {
+  if (assistantRenderFrame) return;
+  assistantRenderFrame = requestAnimationFrame(renderPendingAssistantText);
 }
 
 function scrollMessagesToBottom() {
@@ -517,19 +547,8 @@ $('runningScrollIndicator').addEventListener('click', scrollMessagesToBottom);
 
 function queueAssistantText(delta) {
   if (!assistantBody || !delta) return;
-  if (typingTimer) { clearTimeout(typingTimer); typingTimer = 0; }
-  pendingAssistantText = '';
-  assistantRawText += delta;
-  renderMarkdownInto(assistantBody, assistantRawText);
-  const item = assistantBody.closest('.message');
-  if (item) item.dataset.rawContent = assistantRawText;
-  if (messagesPinnedToBottom) scrollMessagesToBottom();
-  else updateRunningScrollIndicator();
-  if (pendingTurnEnd) {
-    const data = pendingTurnEnd;
-    pendingTurnEnd = null;
-    settleTurn(data);
-  }
+  pendingAssistantText += delta;
+  scheduleAssistantTextRender();
 }
 
 function reconcileFinalAssistantText(content) {
@@ -539,10 +558,10 @@ function reconcileFinalAssistantText(content) {
   if (bufferedText === finalText) return;
   if (finalText.startsWith(assistantRawText)) {
     pendingAssistantText = finalText.slice(assistantRawText.length);
-    if (!typingTimer) queueAssistantText('');
+    if (pendingAssistantText) scheduleAssistantTextRender();
     return;
   }
-  if (typingTimer) { clearTimeout(typingTimer); typingTimer = 0; }
+  if (assistantRenderFrame) { cancelAnimationFrame(assistantRenderFrame); assistantRenderFrame = 0; }
   pendingAssistantText = '';
   assistantRawText = finalText;
   renderMarkdownInto(assistantBody, assistantRawText);
@@ -568,6 +587,35 @@ function setMode(next) {
     button.setAttribute('aria-selected', String(button.dataset.mode === mode));
   });
   updateComposerPlaceholder();
+  applySmartModelForMode();
+}
+
+function smartModelScore(currentMode, option) {
+  const text = (option.value + ' ' + option.text).toLowerCase();
+  let score = 0;
+  if (currentMode !== 'chat' && option.dataset.tools !== 'false') score += 30;
+  if ((currentMode === 'agent' || currentMode === 'plan') && option.dataset.reasoning === 'true') score += 28;
+  if (currentMode === 'chat') {
+    if (/(mini|small|fast|flash|haiku|nano|instant|turbo)/.test(text)) score += 24;
+    if (/(reasoning|thinking|opus|large|pro|max)/.test(text)) score -= 8;
+  } else if (/(agent|coder|coding|reasoning|thinking|opus|sonnet|pro|max|gpt-5|o[134]|r1)/.test(text)) score += 18;
+  if (option.dataset.vision === 'true') score += currentMode === 'chat' ? 2 : 4;
+  return score;
+}
+
+function smartModelForMode(currentMode) {
+  return [...$('model').options]
+    .filter(option => option.value && (currentMode === 'chat' || option.dataset.tools !== 'false'))
+    .sort((left, right) => smartModelScore(currentMode, right) - smartModelScore(currentMode, left) || left.text.localeCompare(right.text))[0]?.value || '';
+}
+
+function applySmartModelForMode() {
+  if (modelSelectionSource !== 'auto') return;
+  const next = smartModelForMode(mode);
+  if (!next || next === $('model').value) return;
+  lastAutoModel = next;
+  $('model').value = next;
+  $('model').dispatchEvent(new Event('change'));
 }
 
 function updateConnectionBadge(providerName, state = 'checking') {
@@ -1230,7 +1278,9 @@ function appendAgentCommentary(content) {
   const block = document.createElement('div');
   block.className = 'agent-commentary';
   renderMarkdownInto(block, text);
-  assistantBody.before(block);
+  const message = assistantBody.closest('.message');
+  const firstActivity = message?.querySelector('.agent-activity');
+  (firstActivity || assistantBody).before(block);
 }
 
 function formatWorkingElapsed(seconds) {
@@ -2286,6 +2336,7 @@ function renderComposerMenu() {
     ['/goal', uiCopy('Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Run a long task that can be paused and resumed'), 'Goal', 'target'],
     ['/new', uiCopy('Bắt đầu một cuộc chat mới', 'Start a new chat'), 'New chat', 'chatCircle'],
     ['/compact', uiCopy('Rút gọn ngữ cảnh cuộc chat', 'Compact this chat context'), 'Compact', 'broom'],
+    ['/summary', uiCopy('Xem mục tiêu, file đổi và việc còn lại', 'View goals, changed files and open issues'), 'Summary', 'info'],
     ['/skills', uiCopy('Tìm và chèn skill', 'Find and insert a skill'), 'Skills', 'cube'],
     ['/model', uiCopy('Mở danh sách model', 'Open the model list'), 'Model', 'circlesThree'],
     ['/plan', uiCopy('Chuyển sang chế độ Plan', 'Switch to Plan mode'), 'Plan mode', 'lightbulb'],
@@ -2391,6 +2442,7 @@ function send() {
     finishTurn(completedTurn);
   }
   vscode.postMessage({ type: 'send', prompt, mode, model, includeSelection: false, ...(isCodexTunableModel(model) ? { reasoningEffort, serviceTier } : {}) });
+  $('prompt').blur();
   if (!standaloneCommand) setRunning(true);
   $('prompt').value = '';
   resetComposerTokens();
@@ -2502,6 +2554,7 @@ $('expandChanges').addEventListener('click', () => {
   if (lastChangeCount) $('changeTray').classList.remove('hidden');
 });
 $('model').addEventListener('change', () => {
+   if ($('model').value !== lastAutoModel) modelSelectionSource = 'manual';
    const selectedLabel = $('model').selectedOptions[0]?.textContent || uiCopy('Chọn model', 'Select model');
   $('modelLabel').textContent = selectedLabel;
   $('modelBrand').innerHTML = $('model').value ? brandIcon(brandKey($('model').value, activeProvider), selectedLabel) : '';
@@ -2870,7 +2923,8 @@ window.addEventListener('message', ({ data }) => {
       $('keyState').classList.toggle('saved', data.hasApiKey);
     }
     $('apiKey').placeholder = data.hasApiKey ? uiCopy('Đã lưu API key, nhập để thay đổi', 'API key saved, enter to change') : uiCopy('Nhập API key nếu endpoint yêu cầu', 'Enter an API key if the endpoint requires it');
-    setMode(data.mode || 'agent');
+    defaultMode = data.mode === 'agent' ? 'agent' : 'chat';
+    setMode(defaultMode);
     setPermissionMode(data.permissionMode || 'ask');
     if (data.workspaceTrusted === false) appendMessage('assistant', uiCopy('Workspace chưa được tin cậy. Agent, terminal và MCP sẽ bị khóa cho đến khi bạn bật Workspace Trust.', 'This workspace is not trusted. Agent, terminal and MCP remain locked until Workspace Trust is enabled.'), true);
     profiles = data.profiles || [];
@@ -2889,7 +2943,7 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'restoreSession') {
     flushAssistantText();
     $('historyPanel').classList.add('hidden');
-    setMode(data.mode || 'agent');
+    setMode(data.mode || defaultMode);
     $('messages').replaceChildren();
     changeSummary = null;
     for (const [index, turn] of (data.turns || []).entries()) {
@@ -2919,7 +2973,7 @@ window.addEventListener('message', ({ data }) => {
     $('prompt').focus();
     $('prompt').setSelectionRange($('prompt').value.length, $('prompt').value.length);
   } else if (data.type === 'setComposerMode') {
-    setMode(data.mode || 'agent');
+    setMode(data.mode || defaultMode);
     $('prompt').focus();
   } else if (data.type === 'planRevision') {
     setMode('plan');
@@ -3011,6 +3065,7 @@ window.addEventListener('message', ({ data }) => {
     }
     const select = $('model');
     const previous = select.value;
+    const previousWasAuto = modelSelectionSource === 'auto' && previous === lastAutoModel;
     modelHealth = {};
      select.replaceChildren(new Option(uiCopy('Chọn model', 'Select model'), ''));
     for (const model of data.models || []) {
@@ -3020,9 +3075,12 @@ window.addEventListener('message', ({ data }) => {
       option.dataset.reasoning = String(model.capabilities?.reasoning === true);
       select.add(option);
     }
-    const preferred = previous;
+    const configuredDefault = data.defaultModel && [...select.options].some((option) => option.value === data.defaultModel) ? data.defaultModel : '';
+    const preferred = previous || configuredDefault || smartModelForMode(mode);
     if ([...select.options].some((option) => option.value === preferred)) select.value = preferred;
     else if (select.options.length > 1) select.selectedIndex = 1;
+    modelSelectionSource = previousWasAuto || (!previous && !configuredDefault) ? 'auto' : 'manual';
+    lastAutoModel = modelSelectionSource === 'auto' ? select.value : '';
     const selectedLabel = select.selectedOptions[0]?.textContent || 'Chọn model';
     $('modelLabel').textContent = selectedLabel;
     $('modelBrand').innerHTML = select.value ? brandIcon(brandKey(select.value, activeProvider), selectedLabel) : '';
@@ -3500,10 +3558,10 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'toolOutput') {
     appendTerminalOutput(data);
   } else if (data.type === 'turnEnd') {
-    // Provider deltas are rendered immediately; only wait if a final
-    // reconciliation still has text queued from an older session.
+    // Provider deltas are batched per animation frame; only wait if the final
+    // reconciliation still has text queued for the current render frame.
     if (!data.cancelled && !data.error) reconcileFinalAssistantText(data.content);
-    if (!data.cancelled && !data.error && assistantBody && pendingAssistantText && typingTimer) {
+    if (!data.cancelled && !data.error && assistantBody && pendingAssistantText && assistantRenderFrame) {
       pendingTurnEnd = data;
     } else settleTurn(data);
   } else if (data.type === 'reset') {
@@ -3513,7 +3571,15 @@ window.addEventListener('message', ({ data }) => {
     queuedFollowUps = [];
     renderFollowUpQueue();
     renderGoal(null);
+    setMode(defaultMode);
+    const emptyDescription = mode === 'agent'
+      ? uiCopy('Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.', 'Agent can read the project, edit files and run commands in the workspace.')
+      : mode === 'plan'
+      ? uiCopy('Agent sẽ đọc workspace và lập kế hoạch trước khi hành động.', 'Agent will inspect the workspace and plan before acting.')
+      : uiCopy('Trò chuyện trực tiếp với model đang chọn.', 'Chat directly with the selected model.');
      $('messages').innerHTML = '<div class="empty"><h2>' + uiCopy('Nói điều bạn muốn xây.', 'Describe what you want to build.') + '</h2><p>' + uiCopy('Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.', 'Agent can read the project, edit files and run commands in the workspace.') + '</p></div>';
+    const emptyState = $('messages').querySelector('.empty p');
+    if (emptyState) emptyState.textContent = emptyDescription;
     if (workingTimer) clearInterval(workingTimer);
     workingTimer = null;
     workingLabel = null;
@@ -3542,6 +3608,7 @@ window.addEventListener('message', ({ data }) => {
   }
 });
 
+setMode('chat');
 setPermissionMode('ask');
 resizePrompt();
 requestBootstrap();

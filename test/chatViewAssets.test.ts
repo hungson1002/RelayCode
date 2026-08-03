@@ -7,6 +7,7 @@ import { CHAT_VIEW_STYLES } from '../src/webview/chatViewStyles';
 
 const providerSource = readFileSync(resolve('src/chatViewProvider.ts'), 'utf8');
 const agentRuntimeSource = readFileSync(resolve('src/agentRuntime.ts'), 'utf8');
+const webSearchSource = readFileSync(resolve('src/webSearch.ts'), 'utf8');
 const projectInstructionsSource = readFileSync(resolve('src/projectInstructions.ts'), 'utf8');
 const extensionManifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
 
@@ -34,6 +35,25 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("$('setupProviderBadge').textContent = meta.label");
     expect(CHAT_VIEW_CONTROLLER).toContain("'Kết nối ' + providerName");
     expect(CHAT_VIEW_CONTROLLER).toContain("'Mở 9Router'");
+  });
+
+  it('starts a fresh thread in the configured default mode', () => {
+    expect(providerSource).toContain("get<'chat' | 'agent'>('defaultMode', 'chat')");
+    expect(providerSource).toContain('mode: defaultMode');
+    expect(extensionManifest.contributes.configuration.properties['nineRouter.defaultMode'].default).toBe('chat');
+    expect(CHAT_VIEW_CONTROLLER).toContain("let mode = 'chat';");
+    expect(CHAT_VIEW_CONTROLLER).toContain('setMode(defaultMode);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('setMode(data.mode || defaultMode);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('Chat directly with the selected model.');
+  });
+
+  it('routes explicit Chat web-search requests and exposes the Agent web_search tool', () => {
+    expect(providerSource).toContain('buildWebSearchQuery(prompt, previousUserPrompt');
+    expect(providerSource).toContain('const webResponse = await searchWebSources(webQuery, turnController.signal)');
+    expect(webSearchSource).toContain("name: 'web_search'");
+    expect(agentRuntimeSource).toContain('WEB_SEARCH_TOOL');
+    expect(agentRuntimeSource).toContain("return searchWeb(String(args.query ?? ''), signal");
+    expect(agentRuntimeSource).toContain('Không được nói đã tìm kiếm nếu chưa nhận được kết quả từ web_search');
   });
 
   it('keeps RelayCode user instructions separate from Codex identity instructions', () => {
@@ -69,8 +89,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.permission-card-v2');
     expect(CHAT_VIEW_CONTROLLER).toContain("permissionText.className = 'permission-text'");
     expect(CHAT_VIEW_STYLES).toContain('.permission-card-v2 .permission-text{display:grid;align-content:center');
-    expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link{position:relative!important;top:0!important;align-items:center!important;line-height:inherit!important;vertical-align:baseline!important}');
-    expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link .file-type-icon{align-self:center!important;vertical-align:middle!important;transform:translateY(2px)!important}');
+    expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link{position:relative!important;top:0!important;display:inline-flex!important;align-items:center!important;gap:5px!important;max-width:min(100%,260px)!important;margin:0 .2em!important;padding:2px 7px!important');
+    expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link .file-type-icon{align-self:center!important;vertical-align:middle!important;transform:none!important}');
     expect(CHAT_VIEW_STYLES).toContain('.running-scroll-indicator');
     expect(CHAT_VIEW_STYLES).toContain('.console>.running-scroll-indicator');
     expect(CHAT_VIEW_STYLES).toContain('bottom:132px');
@@ -275,6 +295,24 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain('.sort((left, right) => right.updatedAt - left.updatedAt)');
   });
 
+  it('keeps normal Chat conversational and scopes RelayCode product context', () => {
+    expect(providerSource).toContain('withEditorContext(prompt, message.includeSelection, message.mode)');
+    expect(providerSource).toContain("const autoIdeContext = mode !== 'chat' && this.context.workspaceState.get<boolean>(IDE_CONTEXT_STATE, false);");
+    expect(providerSource).toContain('9Router là provider/gateway local để định tuyến nhiều model');
+    expect(providerSource).toContain('Cockpit Tools là provider/gateway local hỗ trợ nhiều tài khoản');
+    expect(providerSource).toContain('const ideContext = this.context.workspaceState.get<boolean>(IDE_CONTEXT_STATE, false);');
+  });
+
+  it('adds citations, smart model routing and persistent session summaries', () => {
+    expect(providerSource).toContain('formatWebCitations(webSearchResults)');
+    expect(providerSource).toContain('rankedModelsForMode(message.mode, message.model');
+    expect(providerSource).toContain('sessionSummaryForPrompt(this.sessionSummary)');
+    expect(providerSource).toContain('summary: this.sessionSummary');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function smartModelForMode(currentMode)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('applySmartModelForMode();');
+    expect(CHAT_VIEW_CONTROLLER).toContain("['/summary'");
+  });
+
   it('keeps MCP visible through authentication and reports the connection outcome', () => {
     expect(html).toContain('id="mcpConnectionNotice"');
     expect(CHAT_VIEW_CONTROLLER).toContain('A dialog overlays the active surface');
@@ -292,8 +330,7 @@ describe('Chat webview assets', () => {
   it('always removes the streaming caret when a turn ends', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage?.classList.remove('streaming')");
     expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.message.streaming.complete')");
-    expect(CHAT_VIEW_STYLES).toContain('.message.assistant.streaming:not(.complete)');
-    expect(CHAT_VIEW_STYLES).toContain('.message.assistant.complete .body::after{display:none!important;content:none!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant .body::after{display:none!important;content:none!important}');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('if (assistantBody && turnStartedAt) {');
   });
 
@@ -350,7 +387,7 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.message-editor');
   });
 
-  it('keeps errors single-layered and uses a slow, narrow activity sweep', () => {
+  it('keeps errors single-layered and uses a clear, slow activity sweep', () => {
     expect(CHAT_VIEW_STYLES).toContain('.message.error{margin:10px 0 18px;padding:0!important;border:0!important;border-left:0!important');
     expect(CHAT_VIEW_STYLES).toContain('#setupError{margin:10px 1px 0');
     expect(CHAT_VIEW_STYLES).not.toContain(')}.error{margin:10px 1px 0');
@@ -361,9 +398,11 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("current.classList.remove('sweeping')");
     expect(CHAT_VIEW_CONTROLLER).toContain('delete current.dataset.sweep');
     expect(CHAT_VIEW_STYLES).toContain('.activity-current.sweeping::after{content:attr(data-sweep)');
-    expect(CHAT_VIEW_STYLES).toContain('animation:activityTextSweep 3s cubic-bezier(.22,.7,.25,1) infinite');
-    expect(CHAT_VIEW_STYLES).toContain('@keyframes activityTextSweep{0%,12%{background-position:160% 0}72%,100%{background-position:-60% 0}}');
-    expect(CHAT_VIEW_STYLES).toContain('background:linear-gradient(90deg,transparent 42%,#f2f5f7 49%');
+    expect(CHAT_VIEW_STYLES).toContain('animation:activityTextSweep 3s cubic-bezier(.22,.62,.32,1) infinite');
+    expect(CHAT_VIEW_STYLES).toContain('@keyframes activityTextSweep{0%,8%{background-position:170% 0}86%,100%{background-position:-70% 0}}');
+    expect(CHAT_VIEW_STYLES).toContain('background:linear-gradient(90deg,transparent 28%,rgba(255,255,255,0) 38%');
+    expect(CHAT_VIEW_STYLES).toContain('filter:drop-shadow(0 0 2px rgba(255,255,255,.22))');
+    expect((CHAT_VIEW_STYLES.match(/animation:activityTextSweep 3s/g) || [])).toHaveLength(1);
     expect(CHAT_VIEW_STYLES).not.toContain('will-change:background-position');
     expect(CHAT_VIEW_STYLES).toContain('.agent-activity.archived .activity-current.sweeping::after{display:none;animation:none}');
     expect(CHAT_VIEW_CONTROLLER).toContain('function classifyChatError(raw)');
@@ -407,12 +446,28 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("$('messages').querySelector('.empty')?.remove()");
   });
 
-  it('renders provider deltas immediately without a cosmetic typewriter queue', () => {
+  it('places Agent commentary before thinking and tool activity', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("const firstActivity = message?.querySelector('.agent-activity');");
+    expect(CHAT_VIEW_CONTROLLER).toContain('(firstActivity || assistantBody).before(block);');
+  });
+
+  it('reveals streamed provider deltas smoothly without blocking the provider stream', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('if (!assistantBody || !delta) return;');
-    expect(CHAT_VIEW_CONTROLLER).toContain('assistantRawText += delta;');
+    expect(CHAT_VIEW_CONTROLLER).toContain('pendingAssistantText += delta;');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const charsThisFrame = Math.max(3, Math.min(12, Math.ceil(pendingAssistantText.length / 14)));');
+    expect(CHAT_VIEW_CONTROLLER).toContain('pendingAssistantText = pendingAssistantText.slice(charsThisFrame);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (pendingAssistantText) {\n    scheduleAssistantTextRender();\n    return;\n  }');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantRenderFrame = requestAnimationFrame(renderPendingAssistantText);');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('prompt').blur();");
+    expect(CHAT_VIEW_STYLES).toContain('.composer-shell.is-running textarea{caret-color:transparent!important}');
     expect(CHAT_VIEW_CONTROLLER).toContain('renderMarkdownInto(assistantBody, assistantRawText);');
-    expect(CHAT_VIEW_CONTROLLER).not.toContain('const size = Math.max(6, Math.min(18, Math.ceil(pendingAssistantText.length / 4)))');
-    expect(CHAT_VIEW_CONTROLLER).not.toContain('typingTimer = setTimeout(tick, 16)');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('typingTimer');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('setTimeout(tick, 16)');
+    const renderStart = CHAT_VIEW_CONTROLLER.indexOf('function renderPendingAssistantText()');
+    const renderEnd = CHAT_VIEW_CONTROLLER.indexOf('function scheduleAssistantTextRender()', renderStart);
+    expect(renderStart).toBeGreaterThan(-1);
+    expect(renderEnd).toBeGreaterThan(renderStart);
+    expect(CHAT_VIEW_CONTROLLER.slice(renderStart, renderEnd)).toContain('pendingAssistantText = pendingAssistantText.slice(charsThisFrame);');
   });
 
   it('keeps Agent content deltas on the same live stream', () => {
@@ -574,6 +629,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('body .file-type-icon.fileCss{color:#5aa7e8!important}');
     expect(CHAT_VIEW_CONTROLLER).toContain("row.title = change.path");
     expect(CHAT_VIEW_CONTROLLER).toContain('class="file-link" title="');
+    expect(CHAT_VIEW_STYLES).toContain('margin:0 .2em!important;padding:2px 7px!important;border:1px solid rgba(88,174,232,.3)!important');
+    expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link>span:not(.file-type-icon):not(.file-line)');
     expect(CHAT_VIEW_CONTROLLER).toContain("if (/\\.(?:vue)$/.test(clean)) return 'fileVue'");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (/\\.(?:sql)$/.test(clean)) return 'fileSql'");
   });
@@ -666,10 +723,10 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain("this.post({ type: 'stopAcknowledged', active })");
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'stopAcknowledged'");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (running) settleTurn({ cancelled: true, timestamp: Date.now() });");
-    expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'turnEnd') {\n    // Provider deltas are rendered immediately");
+    expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'turnEnd') {\n    // Provider deltas are batched per animation frame");
     expect(CHAT_VIEW_CONTROLLER).toContain("reconcileFinalAssistantText(data.content)");
     expect(providerSource).toContain("content: finalAnswer");
-    expect(CHAT_VIEW_CONTROLLER).toContain('assistantRawText += delta;');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantRawText += pendingAssistantText;');
     expect(CHAT_VIEW_CONTROLLER).toContain('pendingTurnEnd = data;');
     expect(CHAT_VIEW_CONTROLLER).toContain("settleTurn(data);");
     expect(CHAT_VIEW_CONTROLLER).toContain("function settleTurn(data) {");

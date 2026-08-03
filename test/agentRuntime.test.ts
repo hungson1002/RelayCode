@@ -469,6 +469,43 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     expect(statuses).toContain('Đang đọc trang web: https://example.com/docs');
   });
 
+  it('searches the web and returns bounded results to the Agent', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ id: 'search-1', name: 'web_search', arguments: '{"query":"9router","maxResults":3}' }],
+        metrics
+      })
+      .mockResolvedValueOnce({ content: 'Đây là kết quả tìm kiếm.', toolCalls: [], metrics });
+    const client = {
+      listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools
+    } as unknown as ProviderClient;
+    const fetchMock = vi.fn(async (_input: URL | string) => new Response(
+      '<a class="result__a" href="https://example.com/9router">9Router docs</a><a class="result__snippet">Routing documentation</a>',
+      { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+    const statuses: string[] = [];
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    try {
+      await runtime.run('Tìm 9router trên mạng', 'agent-model', {
+        onDelta: vi.fn(),
+        onStatus: (status) => statuses.push(status)
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const firstTools = completeWithTools.mock.calls[0]?.[2] as Array<{ function?: { name?: string } }>;
+    const secondMessages = completeWithTools.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
+    const searchResult = secondMessages.find((message) => message.role === 'tool' && message.tool_call_id === 'search-1');
+    expect(firstTools.some((item) => item.function?.name === 'web_search')).toBe(true);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('q=9router');
+    expect(searchResult?.content).toContain('URL: https://example.com/9router');
+    expect(statuses).toContain('Đang tìm trên web: 9router');
+  });
+
   it('returns a failed tool to the Agent so it can issue a corrected call', async () => {
     const completeWithTools = vi.fn()
       .mockResolvedValueOnce({
