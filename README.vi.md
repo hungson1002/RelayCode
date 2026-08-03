@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="media/icon-128.png" alt="RelayCode" width="72">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/media/icon-128.png" alt="RelayCode" width="72" style="border-radius: 12px;">
   <h1>RelayCode</h1>
   <p><strong>Workspace lập trình AI ưu tiên review cho các editor tương thích VS Code.</strong></p>
   <p>Hoạt động với VS Code, Cursor, Antigravity và các môi trường tương thích khác.</p>
@@ -15,11 +15,11 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-home.png" alt="Màn hình chính RelayCode với model picker và composer" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-home.png" alt="Màn hình chính RelayCode với model picker và composer" width="580" style="border-radius: 12px;">
 </p>
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-demo.gif" alt="Workflow Agent của RelayCode: hỏi, làm việc và review" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-demo.gif" alt="Workflow Agent của RelayCode: hỏi, làm việc và review" width="580" style="border-radius: 12px;">
 </p>
 
 <p align="center"><em>Đặt câu hỏi, để Agent làm việc, rồi review kết quả trước khi chấp nhận.</em></p>
@@ -61,25 +61,25 @@ Agent gom các chỉnh sửa vào một change set để review. Bạn xem file 
 Giao diện thật tập trung prompt, model, mode, activity và các nút review trong cùng một workflow.
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-agent.png" alt="Chế độ Agent của RelayCode với phân tích workspace và kết quả kiểm tra" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-agent.png" alt="Chế độ Agent của RelayCode với phân tích workspace và kết quả kiểm tra" width="580" style="border-radius: 12px;">
 </p>
 
 Agent hiển thị file đã phân tích, context của project và kết quả validation ngay trong cuộc trò chuyện.
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-review.png" alt="Review card của RelayCode với README thay đổi và nút Accept, Undo" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-review.png" alt="Review card của RelayCode với README thay đổi và nút Accept, Undo" width="580" style="border-radius: 12px;">
 </p>
 
 Change tray cho biết file nào đã thay đổi và cung cấp các thao tác **Review**, **Accept all** và **Undo all**.
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-connection.png" alt="Provider settings của RelayCode với nhiều lựa chọn provider" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-connection.png" alt="Provider settings của RelayCode với nhiều lựa chọn provider" width="580" style="border-radius: 12px;">
 </p>
 
 Provider settings gom active profile, endpoint, model source và thông tin kết nối vào một nơi. Các ảnh giao diện không chứa credential.
 
 <p align="center">
-  <img src="docs/assets/workflow.png" alt="Workflow RelayCode: hỏi, làm việc, review, quyết định" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/workflow.png" alt="Workflow RelayCode: hỏi, làm việc, review, quyết định" width="580" style="border-radius: 12px;">
 </p>
 
 ## Bắt đầu nhanh

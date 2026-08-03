@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="media/icon-128.png" alt="RelayCode" width="72">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/media/icon-128.png" alt="RelayCode" width="72" style="border-radius: 10px;">
   <h1>RelayCode</h1>
   <p><strong>A review-first AI coding workspace for VS Code-compatible editors.</strong></p>
   <p>Works with VS Code, Cursor, Antigravity, and other compatible environments.</p>
@@ -15,11 +15,11 @@
 </div>
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-home.png" alt="RelayCode home with model picker and composer" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-home.png" alt="RelayCode home with model picker and composer" width="580" style="border-radius: 10px;">
 </p>
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-demo.gif" alt="RelayCode Agent workflow: ask, work, and review" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-demo.gif" alt="RelayCode Agent workflow: ask, work, and review" width="580" style="border-radius: 10px;">
 </p>
 
 <p align="center"><em>Ask, let Agent work, then review the result before accepting it.</em></p>
@@ -61,25 +61,25 @@ Agent keeps edits in a reviewable change set. Inspect the changed files and diff
 The real interface keeps the main workflow in one place: prompt, model, mode, activity, and review controls.
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-agent.png" alt="RelayCode Agent response with workspace analysis and validation" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-agent.png" alt="RelayCode Agent response with workspace analysis and validation" width="580" style="border-radius: 10px;">
 </p>
 
 Agent reports analyzed files, project context, and validation results in the conversation.
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-review.png" alt="RelayCode review card with changed README file and Accept and Undo controls" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-review.png" alt="RelayCode review card with changed README file and Accept and Undo controls" width="580" style="border-radius: 10px;">
 </p>
 
 The review tray shows which files changed and exposes **Review**, **Accept all**, and **Undo all** actions.
 
 <p align="center">
-  <img src="docs/assets/marketing/relaycode-connection.png" alt="RelayCode provider settings with multiple provider options" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-connection.png" alt="RelayCode provider settings with multiple provider options" width="580" style="border-radius: 10px;">
 </p>
 
 Provider settings keep the active profile, endpoint configuration, model source, and connection details in one place. Credentials are not included in the interface captures.
 
 <p align="center">
-  <img src="docs/assets/workflow.png" alt="RelayCode workflow: ask, work, review, decide" width="900">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/workflow.png" alt="RelayCode workflow: ask, work, review, decide" width="580" style="border-radius: 10px;">
 </p>
 
 ## Quick start
