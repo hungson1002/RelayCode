@@ -8,7 +8,7 @@ import { buildSessionSummary, sessionSummaryForDisplay, sessionSummaryForPrompt 
 import { detectResponseLanguage, responseLanguageInstruction } from './responseLanguage';
 import { RouterProcessManager, type RouterLaunchProgress, type RouterRuntimeStatus } from './routerProcessManager';
 import type { AgentRunCheckpoint, AgentToolFailureDecision, ChatMessage, ChatMode, ReasoningEffort, RouterModel } from './types';
-import { capabilitiesForModel, createProvider, type ProviderKind } from './provider';
+import { capabilitiesForModel, createProvider, type ProviderClient, type ProviderKind } from './provider';
 import { ProviderProfileStore, TelemetryStore, type ProviderProfile } from './providerProfiles';
 import { MCP_PRESETS, McpManager, type McpServerConfig } from './mcpManager';
 import { GitCheckpointManager } from './gitCheckpoint';
@@ -1540,12 +1540,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
     const config = vscode.workspace.getConfiguration('nineRouter');
     const responseLanguage = detectResponseLanguage(prompt, config.get<'vi' | 'en'>('language', 'vi'));
-    const codexTuning = /(codex|gpt-5|(?:^|[/_-])o[134](?:$|[/_.-]))/i.test(message.model)
+    const tuningForModel = (model: string) => /(codex|gpt-5|(?:^|[/_-])o[134](?:$|[/_.-]))/i.test(model)
       ? {
           reasoningEffort: message.reasoningEffort,
           serviceTier: message.serviceTier
         }
       : undefined;
+    let effectiveModel = message.model;
     const monthlyLimit = config.get<number>('monthlyCostLimit', 0);
     if (monthlyLimit > 0) {
       const monthStart = new Date();
@@ -1717,8 +1718,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           await this.post({ type: 'status', message: 'Đã nhận kết quả web · đang hỏi model' });
         }
         const candidates = rankedModelsForMode(message.mode, message.model, this.models, config.get<string[]>('fallbackModels', []));
+        const skippedFallbackModels = new Set<string>();
         let lastError: unknown;
         for (const candidate of candidates) {
+          if (skippedFallbackModels.has(candidate)) continue;
           const candidateController = new AbortController();
           const abortCandidate = () => candidateController.abort();
           turnController.signal.addEventListener('abort', abortCandidate, { once: true });
@@ -1754,7 +1757,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             const metrics = await providerClient.streamChat(candidate, chatHistory, (delta) => {
               touchActivity();
               onDelta(delta);
-            }, candidateController.signal, codexTuning);
+            }, candidateController.signal, tuningForModel(candidate));
             if (!answer.trim()) throw new Error(`Model ${candidate} đã kết thúc nhưng không trả về nội dung.`);
             await this.recordMetrics(candidate, metrics);
             lastError = undefined;
@@ -1764,9 +1767,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               ? candidateController.signal.reason
               : error;
             if (answer.trim() || candidate === candidates[candidates.length - 1]) throw lastError;
-            const nextModel = candidates[candidates.indexOf(candidate) + 1]!;
+            if (turnController.signal.aborted) throw lastError;
+            const nextModel = await this.findHealthyFallbackModel(candidates, candidate, providerClient, turnController.signal, skippedFallbackModels);
+            if (!nextModel) throw lastError;
             if (!await this.approveFallback(candidate, nextModel)) throw lastError;
+            effectiveModel = nextModel;
+            await this.post({ type: 'modelSwitched', model: nextModel, from: candidate });
             answer = '';
+            await this.persistActiveRun({ ...activeRun, model: effectiveModel, answer: '' }, runGeneration);
             await this.post({ type: 'status', message: `Model ${candidate} lỗi · đang chuyển sang model dự phòng ${nextModel}` });
           } finally {
             if (timeout) clearTimeout(timeout);
@@ -1824,9 +1832,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           : agentContent;
         const runtimePrompt = agentPrompt;
         const candidates = rankedModelsForMode(message.mode, message.model, this.models, config.get<string[]>('fallbackModels', []));
+        const skippedFallbackModels = new Set<string>();
         let latestCheckpoint = resumeCheckpoint;
         const inactivitySeconds = Math.max(60, config.get<number>('agentInactivityTimeoutSeconds', 180));
         for (const candidate of candidates) {
+          if (skippedFallbackModels.has(candidate)) continue;
           let timeout: NodeJS.Timeout | undefined;
           let heartbeat: NodeJS.Timeout | undefined;
           let lastActivityAt = Date.now();
@@ -1887,7 +1897,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                   }
                 : undefined,
               config.get<boolean>('autoValidateChanges', true),
-              codexTuning,
+              tuningForModel(candidate),
               inactivitySeconds * 1_000,
               () => {
                 const steering = this.pendingSteering;
@@ -1943,8 +1953,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           } catch (error) {
             const canRetry = !answer.trim() && candidate !== candidates[candidates.length - 1];
             if (!canRetry) throw error;
-            const nextModel = candidates[candidates.indexOf(candidate) + 1]!;
+            if (turnController.signal.aborted) throw error;
+            const nextModel = await this.findHealthyFallbackModel(candidates, candidate, providerClient, turnController.signal, skippedFallbackModels);
+            if (!nextModel) throw error;
             if (!await this.approveFallback(candidate, nextModel)) throw error;
+            effectiveModel = nextModel;
+            await this.post({ type: 'modelSwitched', model: nextModel, from: candidate });
             answer = '';
             activeRun.model = nextModel;
             activeRun.answer = '';
@@ -1973,7 +1987,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             title: planDocumentTitle(answer, prompt),
             prompt,
             plan: answer,
-            model: message.model,
+            model: effectiveModel,
             reasoningEffort: message.reasoningEffort,
             serviceTier: message.serviceTier,
             createdAt: completedAt
@@ -2010,13 +2024,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         removed: completedChanges.reduce((sum, change) => sum + change.removed, 0)
       });
       this.output.appendLine(`[turn:${runId}] turnEnd posted`);
-      await this.saveSession(message.mode, message.model);
+      await this.saveSession(message.mode, effectiveModel);
       await this.clearActiveRun(runId, runGeneration);
       if (this.context.workspaceState.get<StoredGoal>(GOAL_STATE)?.status === 'running') {
         await this.setGoalStatus('ready', 'Hoàn thành và sẵn sàng để review.');
       }
       if (planArtifact) {
-        this.openPlanDocument(prompt, answer, message.model, message.reasoningEffort, message.serviceTier, completedAt);
+        this.openPlanDocument(prompt, answer, effectiveModel, message.reasoningEffort, message.serviceTier, completedAt);
       }
       if (message.mode === 'agent' && config.get<boolean>('notifyOnComplete', true) && !this.view?.visible) {
         vscode.window.showInformationMessage(`Agent đã kết thúc · ${completedChanges.length} file được thay đổi trong tác vụ này.`);
@@ -2026,7 +2040,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (turnController.signal.aborted) {
         this.transcript.push({ role: 'assistant', content: answer || 'Đã dừng.', timestamp: completedAt });
         await this.post({ type: 'turnEnd', cancelled: true, timestamp: completedAt });
-        await this.saveSession(message.mode, message.model);
+        await this.saveSession(message.mode, effectiveModel);
         const goal = this.context.workspaceState.get<StoredGoal>(GOAL_STATE);
         if (goal?.status === 'running') {
           await this.setGoalStatus('paused', 'Đã tạm dừng. Có thể tiếp tục từ checkpoint gần nhất.');
@@ -2036,11 +2050,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         return;
       }
       const provider = this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');
-      const errorMessage = await this.diagnoseProviderError(error, provider, message.model);
+      const errorMessage = await this.diagnoseProviderError(error, provider, effectiveModel);
       this.output.appendLine(`[error] ${errorMessage}`);
       this.transcript.push({ role: 'assistant', content: errorMessage, timestamp: completedAt, error: true });
       await this.post({ type: 'turnEnd', error: errorMessage, timestamp: completedAt });
-      await this.saveSession(message.mode, message.model);
+      await this.saveSession(message.mode, effectiveModel);
       if (this.context.workspaceState.get<StoredGoal>(GOAL_STATE)?.status === 'running') {
         await this.setGoalStatus('failed', errorMessage);
       }
@@ -2215,6 +2229,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       ]
     });
     return choice === 'switch';
+  }
+
+  private async findHealthyFallbackModel(
+    candidates: string[],
+    current: string,
+    providerClient: ProviderClient,
+    signal: AbortSignal,
+    skipped: Set<string>
+  ): Promise<string | undefined> {
+    const currentIndex = candidates.indexOf(current);
+    for (const candidate of candidates.slice(currentIndex + 1)) {
+      if (skipped.has(candidate)) continue;
+      try {
+        await providerClient.checkModel(candidate, AbortSignal.any([signal, AbortSignal.timeout(8_000)]));
+        return candidate;
+      } catch {
+        if (signal.aborted) return undefined;
+        skipped.add(candidate);
+        await this.post({ type: 'status', message: `Bỏ qua model ${candidate} vì kiểm tra không thành công` });
+      }
+    }
+    return undefined;
   }
 
   private persistActiveRun(activeRun: StoredActiveRun, generation: number): Promise<void> {

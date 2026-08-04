@@ -150,6 +150,7 @@ let assistantBody = null;
 let launchingRouter = false;
 let changeSummary = null;
 let changeSummaryExpanded = false;
+let detachedAssistantResponseActions = null;
 let pendingCompletedChangesState = null;
 let activeProvider = '9router';
 let pendingAssistantText = '';
@@ -192,6 +193,8 @@ let composerLinks = [];
 let turnStartedAt = 0;
 let workingLabel = null;
 let workingTimer = null;
+let workingStatus = '';
+let assistantHasOutput = false;
 let setupDismissed = false;
 let setupOpenRequested = false;
 let queuedFollowUps = [];
@@ -521,6 +524,7 @@ function renderPendingAssistantText() {
   assistantRawText += pendingAssistantText.slice(0, charsThisFrame);
   pendingAssistantText = pendingAssistantText.slice(charsThisFrame);
   renderMarkdownInto(assistantBody, assistantRawText);
+  markAssistantOutput();
   const item = assistantBody.closest('.message');
   if (item) item.dataset.rawContent = assistantRawText;
   if (messagesPinnedToBottom) scrollMessagesToBottom();
@@ -582,6 +586,13 @@ function queueAssistantText(delta) {
   scheduleAssistantTextRender();
 }
 
+function markAssistantOutput() {
+  if (assistantHasOutput) return;
+  assistantHasOutput = true;
+  workingStatus = '';
+  updateWorkingLabel();
+}
+
 function reconcileFinalAssistantText(content) {
   const finalText = typeof content === 'string' ? content : '';
   if (!assistantBody || !finalText) return;
@@ -596,6 +607,7 @@ function reconcileFinalAssistantText(content) {
   pendingAssistantText = '';
   assistantRawText = finalText;
   renderMarkdownInto(assistantBody, assistantRawText);
+  markAssistantOutput();
   const item = assistantBody.closest('.message');
   if (item) item.dataset.rawContent = assistantRawText;
 }
@@ -1003,6 +1015,50 @@ function bindRichContent(container) {
   }));
 }
 
+function updateTaskChoiceButtons() {
+  document.querySelectorAll('.task-continue').forEach((button) => {
+    button.disabled = running;
+    button.setAttribute('aria-disabled', String(running));
+  });
+}
+
+function submitTaskChoices(container) {
+  if (running) return;
+  const choices = [...container.querySelectorAll('.task-checkbox')];
+  if (!choices.length) return;
+  const lines = choices.map((choice) => {
+    const label = choice.getAttribute('aria-label') || '';
+    return '- [' + (choice.checked ? 'x' : ' ') + '] ' + label;
+  });
+  const prompt = uiCopy(
+    'Tôi đã chọn các mục sau:\n' + lines.join('\n') + '\n\nHãy tiếp tục dựa trên các lựa chọn này.',
+    'I selected the following options:\n' + lines.join('\n') + '\n\nPlease continue based on these selections.'
+  );
+  $('prompt').value = prompt;
+  resizePrompt();
+  updateSendState();
+  send();
+}
+
+function bindTaskChoices(container, previousState = new Map()) {
+  const choices = [...container.querySelectorAll('.task-checkbox')];
+  if (!choices.length) return;
+  choices.forEach((choice) => {
+    const key = choice.dataset.taskIndex;
+    if (previousState.has(key)) choice.checked = previousState.get(key);
+  });
+  const actions = document.createElement('div');
+  actions.className = 'task-choice-actions';
+  const continueButton = document.createElement('button');
+  continueButton.type = 'button';
+  continueButton.className = 'task-continue';
+  continueButton.innerHTML = uiIcon('arrowRight') + '<span>' + uiCopy('Tiếp tục với lựa chọn', 'Continue with selections') + '</span>';
+  continueButton.addEventListener('click', () => submitTaskChoices(container));
+  actions.append(continueButton);
+  container.append(actions);
+  updateTaskChoiceButtons();
+}
+
 function splitMarkdownTableRow(source) {
   const text = String(source || '').trim();
   if (!text.includes('|')) return null;
@@ -1067,6 +1123,8 @@ function renderMarkdownInto(container, source) {
   let paragraph = [];
   let code = [];
   let inCode = false;
+  let taskIndex = 0;
+  const previousTaskState = new Map([...container.querySelectorAll('.task-checkbox')].map((choice) => [choice.dataset.taskIndex, choice.checked]));
   const flushParagraph = () => {
     if (!paragraph.length) return;
     html += '<p>' + paragraph.map(inlineMarkdown).join('<br>') + '</p>';
@@ -1114,7 +1172,15 @@ function renderMarkdownInto(container, source) {
       flushParagraph();
       const nextList = bullet ? 'ul' : 'ol';
       if (list !== nextList) { closeList(); list = nextList; html += '<' + list + '>'; }
-      html += '<li>' + inlineMarkdown((bullet || numbered)[1]) + '</li>';
+      const listText = (bullet || numbered)[1];
+      const task = bullet && listText.match(/^\[(x| )\]\s+(.+)$/i);
+      if (task) {
+        const checked = task[1].toLowerCase() === 'x';
+        html += '<li class="task-item"><input type="checkbox" class="task-checkbox" data-task-index="' + taskIndex + '" aria-label="' + escapeHtml(task[2]) + '"' + (checked ? ' checked' : '') + '>' + inlineMarkdown(task[2]) + '</li>';
+        taskIndex++;
+      } else {
+        html += '<li>' + inlineMarkdown(listText) + '</li>';
+      }
       continue;
     }
     closeList();
@@ -1138,6 +1204,7 @@ function renderMarkdownInto(container, source) {
   if (inCode || code.length) html += '<pre><code>' + escapeHtml(code.join('\n')) + '</code></pre>';
   container.innerHTML = html;
   bindRichContent(container);
+  bindTaskChoices(container, previousTaskState);
 }
 
 const activityCopy = (vi, en) => language === 'en' ? en : vi;
@@ -1329,6 +1396,7 @@ function archiveStreamedProgress(content = '') {
     block.className = 'agent-commentary';
     renderMarkdownInto(block, text);
     insertAssistantTimelineNode(block);
+    markAssistantOutput();
     activityReadyAfterCommentary = true;
   }
   // A streamed step is complete. Close its activity group so the next model
@@ -1461,6 +1529,7 @@ function appendAgentCommentary(content) {
   block.className = 'agent-commentary';
   renderMarkdownInto(block, text);
   appendCommentaryBeforePendingActivity(block);
+  markAssistantOutput();
   activityReadyAfterCommentary = true;
   materializePendingActivity();
 }
@@ -1474,10 +1543,51 @@ function formatWorkingElapsed(seconds) {
   return Math.floor(seconds / 60) + ' phút' + (seconds % 60 ? ' ' + (seconds % 60) + ' giây' : '');
 }
 
+function workingStatusLabel(status) {
+  const raw = String(status || '').trim();
+  if (!raw || language !== 'en') return raw;
+  if (/đang kiểm tra provider/i.test(raw)) return 'Checking provider';
+  if (/mất kết nối 9router/i.test(raw)) return 'Reconnecting 9Router';
+  if (/đang kiểm tra 9router/i.test(raw)) return 'Checking 9Router';
+  if (/đang khởi động lại 9router/i.test(raw)) return 'Restarting 9Router';
+  if (/đang chờ 9router sẵn sàng/i.test(raw)) return 'Waiting for 9Router';
+  if (/đã kết nối lại 9router/i.test(raw)) return '9Router reconnected';
+  if (/đang tìm trên web/i.test(raw)) return 'Searching the web';
+  if (/đã nhận kết quả web/i.test(raw)) return 'Web results received';
+  if (/đang chờ model/i.test(raw)) return 'Waiting for the model';
+  if (/đang đọc file/i.test(raw)) return 'Reading files';
+  if (/đang xem thư mục/i.test(raw)) return 'Reading the workspace';
+  if (/đang phân tích file/i.test(raw)) return 'Analyzing files';
+  if (/đang tìm trong dự án/i.test(raw)) return 'Searching the project';
+  if (/đang kiểm tra đường dẫn/i.test(raw)) return 'Checking paths';
+  if (/đang chạy lệnh/i.test(raw)) return 'Running a command';
+  if (/đang chạy kiểm tra/i.test(raw)) return 'Validating changes';
+  if (/đang sửa file/i.test(raw)) return 'Editing files';
+  if (/đang tạo thư mục/i.test(raw)) return 'Creating a directory';
+  if (/đang xóa file/i.test(raw)) return 'Deleting a file';
+  if (/đang dùng/i.test(raw)) return 'Using a connected tool';
+  return raw;
+}
+
+function setWorkingStatus(status) {
+  if (assistantHasOutput) {
+    workingStatus = '';
+    updateWorkingLabel();
+    return;
+  }
+  if (pendingAssistantText.trim()) return;
+  workingStatus = workingStatusLabel(status);
+  updateWorkingLabel();
+}
+
 function updateWorkingLabel(state = 'working') {
   if (!workingLabel || !turnStartedAt) return;
   const seconds = Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000));
   const elapsed = formatWorkingElapsed(seconds);
+  if (state === 'working' && workingStatus && !assistantHasOutput) {
+    workingLabel.textContent = workingStatus + ' · ' + elapsed;
+    return;
+  }
   workingLabel.textContent = language === 'en'
     ? (state === 'cancelled' ? 'Stopped after ' : state === 'error' ? 'Stopped after ' : state === 'complete' ? 'Worked for ' : 'Working for ') + elapsed
     : (state === 'cancelled' ? 'Đã dừng sau ' : state === 'error' ? 'Dừng sau ' : state === 'complete' ? 'Đã làm trong ' : 'Đang làm trong ') + elapsed;
@@ -1957,13 +2067,33 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
     edit.addEventListener('click', () => beginMessageEdit(item, body, content, turnIndex));
     actions.append(edit);
   }
-  meta.append(label, actions);
-  item.append(body, meta);
+  if (role === 'assistant') {
+    detachedAssistantResponseActions = null;
+    const responseActions = document.createElement('div');
+    responseActions.className = 'assistant-response-actions';
+    responseActions.append(copy, label);
+    item.append(body, responseActions);
+  } else {
+    actions.append(copy);
+    meta.append(label, actions);
+    item.append(body, meta);
+  }
   appendMessageAttachments(item, attachments);
   appendPlanArtifact(item, artifact, turnIndex);
   $('messages').append(item);
   scrollMessagesToBottom();
   return body;
+}
+
+function placeAssistantResponseActionsAfterChangeSummary() {
+  if (!changeSummary?.isConnected) return;
+  const messageList = $('messages');
+  messageList.append(changeSummary);
+  const latestAssistant = [...messageList.querySelectorAll('.message.assistant')].at(-1);
+  const responseActions = latestAssistant?.querySelector('.assistant-response-actions') || detachedAssistantResponseActions;
+  if (!responseActions) return;
+  detachedAssistantResponseActions = responseActions;
+  changeSummary.after(responseActions);
 }
 
 function appendPlanArtifact(item, artifact, turnIndex) {
@@ -2049,7 +2179,7 @@ function appendTurnChangeSummary(item, data) {
   copy.addEventListener('click', () => setExpanded(!expanded));
   card.append(header, preview);
   setExpanded(false);
-  item.insertBefore(card, item.querySelector('.message-meta'));
+  item.insertBefore(card, item.querySelector('.assistant-response-actions,.message-meta'));
 }
 
 function appendTerminalOutput(data) {
@@ -2252,6 +2382,7 @@ function setRunning(value, text = '') {
   updateRunningScrollIndicator();
   updateChangeActionState();
   updateSendState();
+  updateTaskChoiceButtons();
 }
 
 function updateChangeActionState() {
@@ -2315,6 +2446,8 @@ function finishTurn(data) {
   pendingTurnEnd = null;
   turnStartedAt = 0;
   workingLabel = null;
+  workingStatus = '';
+  assistantHasOutput = false;
   setRunning(false);
   if (pendingCompletedChangesState) {
     const completedChangesState = pendingCompletedChangesState;
@@ -2348,6 +2481,7 @@ function settleTurn(data) {
     assistantBody = null;
     assistantActivity = null;
     pendingActivityStatus = '';
+    assistantHasOutput = false;
     activityReadyAfterCommentary = false;
     activeTerminal = null;
     activeCommandGroup = null;
@@ -3438,6 +3572,17 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'recentModels') {
     recentModels = data.models || [];
     renderModelMenu($('modelSearch').value);
+  } else if (data.type === 'modelSwitched') {
+    const option = [...$('model').options].find((item) => item.value === data.model);
+    if (option) {
+      $('model').value = data.model;
+      modelSelectionSource = 'manual';
+      lastAutoModel = '';
+      $('modelLabel').textContent = option.textContent || data.model;
+      $('modelBrand').innerHTML = brandIcon(brandKey(data.model, activeProvider), option.textContent || data.model);
+      renderModelMenu($('modelSearch').value);
+      updateCodexTuning();
+    }
   } else if (data.type === 'contextBudget') {
     const meter = $('contextMeter');
     const percent = Math.min(100, Math.round(((data.used || 0) / Math.max(1, data.limit || 1)) * 100));
@@ -3469,9 +3614,11 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'activeTurnState') {
     document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
     turnStartedAt = data.startedAt || Date.now();
+    if (data.status) setWorkingStatus(data.status);
+    else if (!workingStatus) workingStatus = uiCopy('Đang tiếp tục tác vụ', 'Resuming the task');
     if (!workingLabel) startWorkingLabel();
     setRunning(true);
-    updateActivity(data.status || 'Đang tiếp tục tác vụ');
+    updateActivity(data.status || uiCopy('Đang tiếp tục tác vụ', 'Resuming the task'));
   } else if (data.type === 'agentRecoveryDismissed') {
     document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
   } else if (data.type === 'openConfig') {
@@ -3897,6 +4044,7 @@ window.addEventListener('message', ({ data }) => {
         preview.append(row);
       }
       setSummaryExpanded(changeSummaryExpanded);
+      placeAssistantResponseActionsAfterChangeSummary();
       updateChangeActionState();
     }
     if (shouldFollowChanges && !running) messageList.scrollTop = messageList.scrollHeight;
@@ -3905,6 +4053,12 @@ window.addEventListener('message', ({ data }) => {
     mode = data.mode;
     followUpQueueEnabled = true;
     turnStartedAt = data.timestamp || Date.now();
+    assistantHasOutput = false;
+    workingStatus = data.mode === 'chat'
+      ? uiCopy('Đang kết nối model', 'Connecting to model')
+      : data.mode === 'plan'
+        ? uiCopy('Đang lập kế hoạch', 'Planning the next steps')
+        : uiCopy('Đang phân tích yêu cầu', 'Analyzing the request');
     flushAssistantText();
     assistantRawText = '';
     assistantActivity = null;
@@ -3936,6 +4090,8 @@ window.addEventListener('message', ({ data }) => {
     if (workingTimer) clearInterval(workingTimer);
     workingTimer = null;
     workingLabel = null;
+    workingStatus = '';
+    assistantHasOutput = false;
   } else if (data.type === 'commentary') {
     appendAgentCommentary(data.content);
   } else if (data.type === 'intermediateStep') {
@@ -3946,6 +4102,7 @@ window.addEventListener('message', ({ data }) => {
     queueAssistantText(data.delta);
   } else if (data.type === 'status') {
     if (running) {
+      setWorkingStatus(data.message);
       updateActivity(data.message);
       if (activeGoal?.status === 'running') $('goalStatus').textContent = data.message;
     }
@@ -3980,6 +4137,7 @@ window.addEventListener('message', ({ data }) => {
     if (workingTimer) clearInterval(workingTimer);
     workingTimer = null;
     workingLabel = null;
+    workingStatus = '';
     turnStartedAt = 0;
     assistantBody = null;
     pendingTurnEnd = null;
@@ -3997,6 +4155,7 @@ window.addEventListener('message', ({ data }) => {
     if (workingTimer) clearInterval(workingTimer);
     workingTimer = null;
     workingLabel = null;
+    workingStatus = '';
      setRouterLaunchState('idle', uiCopy('9Router chưa chạy', '9Router is not running'));
      $('launchDescription').textContent = uiCopy('Không cần mở terminal hoặc chuyển sang trình duyệt.', 'No terminal or browser switching is required.');
     showError(data.message);

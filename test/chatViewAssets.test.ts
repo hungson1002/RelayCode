@@ -367,6 +367,15 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('@media(max-width:350px){');
   });
 
+  it('shows real startup and provider status while the first stream delta is pending', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("let workingStatus = ''");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function setWorkingStatus(status)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("setWorkingStatus(data.message)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Đang kết nối model', 'Connecting to model')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("workingLabel.textContent = workingStatus + ' · ' + elapsed");
+    expect(CHAT_VIEW_STYLES).toContain('.composer-actions .send{width:28px!important;height:28px!important');
+  });
+
   it('bounds large change sets and keeps bulk review actions visible', () => {
     expect(CHAT_VIEW_STYLES).toContain('grid-template-rows:minmax(0,auto) auto');
     expect(CHAT_VIEW_STYLES).toContain('--change-tray-max:clamp(240px,46vh,500px)');
@@ -409,6 +418,39 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("Gửi lại sẽ thay thế các phản hồi phía sau.");
     expect(CHAT_VIEW_STYLES).toContain('.message:hover .message-actions');
     expect(CHAT_VIEW_STYLES).toContain('.message-editor');
+  });
+
+  it('keeps transcript metadata compact and renders Markdown task lists', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('const task = bullet && listText.match(/^\\[(x| )\\]\\s+(.+)$/i)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('type="checkbox" class="task-checkbox"');
+    expect(CHAT_VIEW_CONTROLLER).toContain("aria-label=\"' + escapeHtml(task[2]) + '\"");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function submitTaskChoices(container)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("Continue with selections");
+    expect(CHAT_VIEW_CONTROLLER).toContain('const previousTaskState = new Map');
+    expect(CHAT_VIEW_STYLES).toContain('.task-checkbox:checked{border-color:#65c8aa;background:#65c8aa}');
+    expect(CHAT_VIEW_STYLES).toContain('.task-continue{display:inline-flex;align-items:center');
+    expect(CHAT_VIEW_STYLES).toContain('.message.user:hover .message-meta');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions{display:flex;align-items:center;justify-content:flex-start');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .label{display:block!important');
+  expect(CHAT_VIEW_STYLES).toContain('.worked-label{font-size:12px!important');
+  });
+
+  it('places the assistant copy control after the response review card', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("responseActions.className = 'assistant-response-actions'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('responseActions.append(copy, label)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("item.insertBefore(card, item.querySelector('.assistant-response-actions,.message-meta'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function placeAssistantResponseActionsAfterChangeSummary()');
+    expect(CHAT_VIEW_CONTROLLER).toContain('placeAssistantResponseActionsAfterChangeSummary();');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions{display:flex;align-items:center;justify-content:flex-start');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions:hover');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .message-action{opacity:0;transform:translateY(2px);pointer-events:none}');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .message-action{visibility:hidden;transition:opacity .14s ease,visibility .14s ease,transform .14s ease}');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant:hover .assistant-response-actions .message-action');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant.streaming .assistant-response-actions{display:none!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions{display:flex;align-items:center;justify-content:flex-start;gap:7px;min-height:26px;margin-top:1px!important;opacity:1');
+    expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .label{display:block!important;visibility:hidden;opacity:0');
+  expect(CHAT_VIEW_STYLES).toContain('.activity-current,.activity-history-copy{font-weight:400!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.chat-change-summary{margin-bottom:3px!important}');
   });
 
   it('keeps errors single-layered and uses a clear, slow activity sweep', () => {
@@ -533,6 +575,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.composer-shell #prompt:focus,.composer-shell #prompt:focus-visible,.composer-shell.is-running #prompt:focus,.composer-shell.is-running #prompt:focus-visible{caret-color:#f2f3f4!important}');
     expect(CHAT_VIEW_STYLES).not.toContain('caret-color:transparent!important');
     expect(CHAT_VIEW_CONTROLLER).toContain('renderMarkdownInto(assistantBody, assistantRawText);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function markAssistantOutput()');
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (state === \'working\' && workingStatus && !assistantHasOutput)');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('typingTimer');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('setTimeout(tick, 16)');
     const renderStart = CHAT_VIEW_CONTROLLER.indexOf('function renderPendingAssistantText()');
@@ -570,9 +614,11 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain('const completedChanges = [...this.changes.entries()]');
     expect(providerSource).toContain('changes: completedChanges');
     expect(CHAT_VIEW_CONTROLLER).toContain('function appendTurnChangeSummary(');
+    expect(CHAT_VIEW_CONTROLLER).toContain("item.querySelector('.turn-change-summary')?.remove()");
+    expect(CHAT_VIEW_CONTROLLER).toContain("item.insertBefore(card, item.querySelector('.assistant-response-actions,.message-meta'))");
     expect(CHAT_VIEW_CONTROLLER).toContain("card.className = 'chat-change-summary turn-change-summary'");
     expect(CHAT_VIEW_CONTROLLER).toContain('appendTurnChangeSummary(turnMessage, data)');
-    expect(CHAT_VIEW_CONTROLLER).toContain("item.insertBefore(card, item.querySelector('.message-meta'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain("item.insertBefore(card, item.querySelector('.assistant-response-actions,.message-meta'))");
     expect(CHAT_VIEW_CONTROLLER).toContain('setExpanded(false)');
     expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.turn-change-file')");
     expect(CHAT_VIEW_CONTROLLER).toContain('!hasInlineChangeSummary');
@@ -841,6 +887,10 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain('let latestCheckpoint = resumeCheckpoint;');
     expect(providerSource).toContain('latestCheckpoint = checkpoint;');
     expect(providerSource).toContain("await this.post({ type: 'intermediateStep', content: '' });");
+    expect(providerSource).toContain('findHealthyFallbackModel(candidates, candidate, providerClient');
+    expect(providerSource).toContain("type: 'modelSwitched', model: nextModel, from: candidate");
+    expect(providerSource).toContain('providerClient.checkModel(candidate');
+    expect(providerSource).toContain('tuningForModel(candidate)');
     expect(providerSource).toContain('đang chuyển sang model dự phòng ${nextModel}');
     expect(providerSource).not.toContain("type: 'notice', message: `Agent đã tự chuyển sang model dự phòng");
   });
@@ -871,7 +921,7 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("function settleTurn(data) {");
     expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.message.streaming').forEach");
     expect(CHAT_VIEW_CONTROLLER).toContain("finally {\n    if (workingTimer) clearInterval(workingTimer);");
-    expect(providerSource.indexOf("type: 'turnEnd',\n        timestamp: completedAt")).toBeLessThan(providerSource.indexOf('await this.saveSession(message.mode, message.model);', providerSource.indexOf("type: 'turnEnd',\n        timestamp: completedAt")));
+    expect(providerSource.indexOf("type: 'turnEnd',\n        timestamp: completedAt")).toBeLessThan(providerSource.indexOf('await this.saveSession(message.mode, effectiveModel);', providerSource.indexOf("type: 'turnEnd',\n        timestamp: completedAt")));
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'activeTurnState'");
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'recoveredTurn') {\n    if (running) return;");
     expect(providerSource.match(/type: 'recoveredTurn'/g)).toHaveLength(1);
