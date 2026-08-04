@@ -31,4 +31,17 @@ describe('chat webview message validation', () => {
     expect(isWebviewMessage({ type: 'approval', id: 'approval-1', decision: 'always' })).toBe(true);
     expect(isWebviewMessage({ type: 'approval', id: 'approval-1', decision: 'forever' })).toBe(false);
   });
+
+  it('validates persisted composer preferences without accepting oversized values', () => {
+    expect(isWebviewMessage({
+      type: 'saveComposerPreferences',
+      mode: 'agent',
+      model: 'cx/gpt-5.6-luna',
+      rememberMode: true,
+      reasoningEffort: 'high',
+      serviceTier: 'fast'
+    })).toBe(true);
+    expect(isWebviewMessage({ type: 'saveComposerPreferences', mode: 'sideways' })).toBe(false);
+    expect(isWebviewMessage({ type: 'saveComposerPreferences', model: 'x'.repeat(301) })).toBe(false);
+  });
 });

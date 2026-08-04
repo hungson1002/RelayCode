@@ -89,10 +89,10 @@ const brandIcons = Object.freeze(${JSON.stringify(BRAND_ICONS)});
 const modelBrandRules = Object.freeze(${JSON.stringify(MODEL_BRAND_RULES)});
 const uiIcons = Object.freeze(${JSON.stringify(UI_ICONS)});
 function uiIcon(name, label = '') {
-  return '<span class="ui-symbol"' + (label ? ' title="' + escapeHtml(label) + '"' : '') + '>' + (uiIcons[name] || uiIcons.cube) + '</span>';
+  return '<span class="ui-symbol"' + (label ? ' aria-label="' + escapeHtml(label) + '"' : '') + '>' + (uiIcons[name] || uiIcons.cube) + '</span>';
 }
 function brandIcon(key, label) {
-  return '<span class="brand-symbol" title="' + escapeHtml(label || key) + '">' + (brandIcons[key] || brandIcons.mcp) + '</span>';
+  return '<span class="brand-symbol" aria-label="' + escapeHtml(label || key) + '">' + (brandIcons[key] || brandIcons.mcp) + '</span>';
 }
 function brandKey(value, provider = '') {
   const id = value.toLowerCase();
@@ -110,6 +110,26 @@ $('settingsIcon').innerHTML = uiIcon('gear');
 $('uiLanguage').value = document.body.dataset.language === 'en' ? 'en' : 'vi';
 let language = $('uiLanguage').value;
 const uiCopy = (vi, en) => language === 'en' ? en : vi;
+function setRelayTooltip(element, label, placement = 'below') {
+  if (!element) return;
+  element.classList.add('relay-tooltip-target');
+  element.setAttribute('data-relay-tooltip', label);
+  element.classList.toggle('relay-tooltip-above', placement === 'above');
+}
+function updateRelayTooltips() {
+  const labels = {
+    topConnect: uiCopy('Kết nối provider', 'Connect provider'),
+    historyToggle: uiCopy('Lịch sử chat', 'Chat history'),
+    metricsToggle: uiCopy('Số liệu sử dụng', 'Usage metrics'),
+    settings: uiCopy('Cài đặt', 'Settings')
+  };
+  Object.entries(labels).forEach(([id, label]) => {
+    const element = $(id);
+    setRelayTooltip(element, label, 'below');
+    element?.setAttribute('aria-label', label);
+  });
+}
+updateRelayTooltips();
 $('uiLanguageLabel').textContent = $('uiLanguage').value === 'en' ? 'English' : 'Tiếng Việt';
 $('uiLanguage').addEventListener('change', () => {
   language = $('uiLanguage').value;
@@ -118,6 +138,7 @@ $('uiLanguage').addEventListener('change', () => {
 });
 let mode = 'chat';
 let defaultMode = 'chat';
+let composerPreferences = { models: {}, reasoningEffort: 'medium', serviceTier: 'default' };
 let modelSelectionSource = 'auto';
 let lastAutoModel = '';
 let running = false;
@@ -135,6 +156,8 @@ let pendingAssistantText = '';
 let assistantRenderFrame = 0;
 let assistantRawText = '';
 let assistantActivity = null;
+let pendingActivityStatus = '';
+let activityReadyAfterCommentary = false;
 let activitySteps = new Map();
 let pendingTurnEnd = null;
 let currentProfileId = '';
@@ -158,6 +181,7 @@ let mcpPresetState = [];
 let keyStateRequestId = 0;
 let pendingToolFailureId = '';
 let activeTerminal = null;
+let activeCommandGroup = null;
 let skills = [];
 let composerMenuIndex = -1;
 let composerGoalMode = false;
@@ -171,6 +195,8 @@ let workingTimer = null;
 let setupDismissed = false;
 let setupOpenRequested = false;
 let queuedFollowUps = [];
+let queuedFollowUpReady = true;
+let followUpQueueEnabled = true;
 let activeGoal = null;
 let reasoningEffort = 'medium';
 let serviceTier = 'default';
@@ -242,8 +268,8 @@ function translateLiveDom(languageValue) {
     const replacement = translations.get(trimmed);
     if (replacement) node.nodeValue = raw.replace(trimmed, replacement);
   }
-  document.querySelectorAll('[placeholder],[title],[aria-label],[data-tooltip]').forEach((element) => {
-    for (const attribute of ['placeholder', 'title', 'aria-label', 'data-tooltip']) {
+  document.querySelectorAll('[placeholder],[aria-label]').forEach((element) => {
+    for (const attribute of ['placeholder', 'aria-label']) {
       const value = element.getAttribute(attribute);
       const replacement = value ? translations.get(value.trim()) : undefined;
       if (replacement) element.setAttribute(attribute, value.replace(value.trim(), replacement));
@@ -254,6 +280,7 @@ function translateLiveDom(languageValue) {
 function applyLanguageUi() {
   document.documentElement.lang = language;
   document.body.dataset.language = language;
+  updateRelayTooltips();
   $('uiLanguageLabel').textContent = language === 'en' ? 'English' : 'Tiếng Việt';
   translateLiveDom(language);
   updateComposerPlaceholder();
@@ -264,6 +291,7 @@ function applyLanguageUi() {
     : uiCopy('Kiểm tra model', 'Check models');
   renderModelMenu($('modelSearch').value);
   if (mcpPresetState.length || mcpServerState.length) renderMcpServers(mcpServerState, mcpPresetState);
+  renderFollowUpQueue();
 }
 
 function comparableEndpoint(value) {
@@ -424,13 +452,16 @@ function renderUiDialog(data) {
 }
 
 function showUiToast(data) {
+  const message = data?.message && typeof data.message === 'object'
+    ? uiCopy(data.message.vi || '', data.message.en || '')
+    : String(data?.message || '');
   const duplicate = [...$('toastStack').querySelectorAll('.ui-toast p')]
-    .find((item) => item.textContent === String(data.message || ''));
+    .find((item) => item.textContent === message);
   if (duplicate) return;
   const toast = document.createElement('article');
   toast.className = 'ui-toast ' + (data.tone || 'neutral');
-  toast.innerHTML = '<span aria-hidden="true">' + uiIcon(data.tone === 'danger' ? 'warning' : data.tone === 'success' ? 'checkCircle' : 'info') + '</span><p></p><button type="button" aria-label="Đóng">' + uiIcon('x') + '</button>';
-  toast.querySelector('p').textContent = data.message || '';
+  toast.innerHTML = '<span aria-hidden="true">' + uiIcon(data.tone === 'danger' ? 'warning' : data.tone === 'success' ? 'checkCircle' : 'info') + '</span><p></p><button type="button" aria-label="' + uiCopy('Đóng', 'Close') + '">' + uiIcon('x') + '</button>';
+  toast.querySelector('p').textContent = message;
   const remove = () => toast.remove();
   toast.addEventListener('click', (event) => event.stopPropagation());
   toast.querySelector('button').addEventListener('click', (event) => {
@@ -438,7 +469,7 @@ function showUiToast(data) {
     remove();
   });
   $('toastStack').append(toast);
-  setTimeout(remove, Math.max(2600, Math.min(7000, String(data.message || '').length * 55)));
+  setTimeout(remove, Math.max(2600, Math.min(7000, message.length * 55)));
 }
 
 $('uiDialogClose').addEventListener('click', () => closeUiDialog(undefined));
@@ -533,10 +564,10 @@ function updateRunningScrollIndicator() {
   const atBottom = messagesPinnedToBottom || messagesAreNearBottom();
   indicator.classList.toggle('hidden', atBottom);
   indicator.classList.toggle('is-running', running);
-  indicator.setAttribute('aria-label', running
-    ? 'Cuộn xuống tác vụ đang chạy'
-    : 'Cuộn xuống cuối cuộc trò chuyện');
-  indicator.title = running ? 'Xuống tác vụ đang chạy' : 'Xuống cuối';
+  const indicatorHint = running
+    ? uiCopy('Xuống tác vụ đang chạy', 'Jump to the running task')
+    : uiCopy('Xuống cuối', 'Jump to the latest message');
+  indicator.setAttribute('aria-label', indicatorHint);
 }
 
 $('messages').addEventListener('scroll', () => {
@@ -574,12 +605,18 @@ function updateComposerPlaceholder() {
     ? uiCopy('Nhấn gửi để chạy ' + composerCommand.key, 'Press send to run ' + composerCommand.key)
     : composerGoalMode
     ? uiCopy('Mô tả mục tiêu dài hạn…', 'Describe a long-term goal…')
+    : running && queuedFollowUps.length
+      ? uiCopy('Nhập yêu cầu tiếp theo…', 'Ask for follow-up changes')
     : mode === 'agent'
       ? uiCopy('Nhập yêu cầu, dùng /, $ hoặc @…', 'Ask anything, use /, $ or @…')
       : mode === 'plan' ? uiCopy('Mô tả mục tiêu để Agent lập kế hoạch…', 'Describe the goal for Agent to plan…') : uiCopy('Hỏi nhanh qua model đang chọn…', 'Ask the selected model…');
 }
 
-function setMode(next) {
+function saveComposerPreferences(preferences) {
+  vscode.postMessage({ type: 'saveComposerPreferences', ...preferences });
+}
+
+function setMode(next, remember = false) {
   mode = next;
   $('modeLabel').textContent = mode === 'agent' ? 'Agent' : mode === 'plan' ? 'Plan' : 'Chat';
   document.querySelectorAll('#modeMenu [data-mode]').forEach((button) => {
@@ -587,7 +624,22 @@ function setMode(next) {
     button.setAttribute('aria-selected', String(button.dataset.mode === mode));
   });
   updateComposerPlaceholder();
-  applySmartModelForMode();
+  const rememberedModel = composerPreferences.models?.[mode];
+  if (rememberedModel && [...$('model').options].some((option) => option.value === rememberedModel)) {
+    modelSelectionSource = 'manual';
+    lastAutoModel = '';
+    if ($('model').value !== rememberedModel) {
+      $('model').value = rememberedModel;
+      $('model').dispatchEvent(new Event('change'));
+    }
+  } else {
+    modelSelectionSource = 'auto';
+    applySmartModelForMode();
+  }
+  if (remember) {
+    composerPreferences.lastMode = mode;
+    saveComposerPreferences({ mode, rememberMode: true });
+  }
 }
 
 function smartModelScore(currentMode, option) {
@@ -625,8 +677,7 @@ function updateConnectionBadge(providerName, state = 'checking') {
   const status = labels[state] || labels.checking;
   const badge = $('connectionBadge');
   badge.dataset.state = state;
-  badge.title = providerName + ' · ' + status;
-  badge.setAttribute('aria-label', badge.title);
+  badge.setAttribute('aria-label', uiCopy('Mở trung tâm kết nối', 'Open connection center'));
   const meta = providerMeta[activeProvider] || providerMeta['9router'];
   $('connectionBrand').innerHTML = brandIcon(meta.brand, meta.label);
   $('connectionLabel').textContent = providerName;
@@ -803,10 +854,10 @@ function renderModelMenu(query = '') {
           ? 'Chat only'
           : (option.dataset.reasoning === 'true' ? uiCopy('Agent · reasoning', 'Agent · reasoning') : 'Agent') + (latency ? ' · ' + latency + ' ms' : '');
     const copy = document.createElement('span'); copy.className = 'model-option-copy'; copy.append(label, meta);
-    const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 4.75A1.75 1.75 0 0 1 8.5 3h7a1.75 1.75 0 0 1 1.75 1.75v16L12 17.5l-5.25 3.25v-16Z"/></svg>'; favorite.title = favoriteModels.includes(option.value) ? uiCopy('Bỏ dấu model', 'Remove model bookmark') : uiCopy('Đánh dấu model', 'Bookmark model'); favorite.setAttribute('aria-label', favorite.title); favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
+    const favorite = document.createElement('span'); favorite.className = 'model-favorite' + (favoriteModels.includes(option.value) ? ' active' : ''); favorite.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 4.75A1.75 1.75 0 0 1 8.5 3h7a1.75 1.75 0 0 1 1.75 1.75v16L12 17.5l-5.25 3.25v-16Z"/></svg>'; const favoriteHint = favoriteModels.includes(option.value) ? uiCopy('Bỏ dấu model', 'Remove model bookmark') : uiCopy('Đánh dấu model', 'Bookmark model'); favorite.setAttribute('aria-label', favoriteHint); favorite.setAttribute('role', 'button'); favorite.tabIndex = 0;
     favorite.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'toggleFavoriteModel', model: option.value }); });
     favorite.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); favorite.click(); } });
-    button.append(icon, copy, health, favorite); button.title = healthMessage;
+    button.append(icon, copy, health, favorite);
     button.classList.toggle('active', option.value === $('model').value);
     button.addEventListener('click', () => {
       $('model').value = option.value;
@@ -828,17 +879,12 @@ function renderProfiles() {
   const list = $('profileList'); list.replaceChildren();
   for (const profile of profiles) {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'profile-chip'; button.textContent = profile.name;
-    button.classList.toggle('active', profile.id === currentProfileId); button.title = profile.endpoint;
+    button.classList.toggle('active', profile.id === currentProfileId);
     button.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'activateProfile', id: profile.id }); });
     list.append(button);
   }
   const selected = profiles.find((profile) => profile.id === currentProfileId);
   $('deleteProfile').disabled = !selected || profiles.length <= 1;
-  $('deleteProfile').title = profiles.length <= 1
-    ? 'Cần giữ lại ít nhất một hồ sơ'
-    : selected
-      ? 'Xóa hồ sơ ' + selected.name
-      : 'Hãy chọn một hồ sơ đã lưu';
 }
 
 function applyProfileUi(profile) {
@@ -906,7 +952,7 @@ function inlineMarkdown(source) {
     }
     const location = target.match(/:(\d+)(?::\d+)?$/);
     const line = location && !/\bline\s+\d+/i.test(label) ? '<span class="file-line">(line ' + location[1] + ')</span>' : '';
-    return reserve('<button type="button" class="file-link" title="' + escapeHtml(target) + '" data-file="' + encodeURIComponent(target) + '">' + fileTypeIcon(target) + '<span>' + label + '</span>' + line + '</button>');
+    return reserve('<button type="button" class="file-link" data-file="' + encodeURIComponent(target) + '">' + fileTypeIcon(target) + '<span>' + label + '</span>' + line + '</button>');
   });
   text = text.replace(/\x60([^\x60\r\n]+)\x60/g, (_, code) => {
     const plain = String(code).replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
@@ -914,7 +960,7 @@ function inlineMarkdown(source) {
     const looksLikeProse = plain.length > 90 && plain.trim().split(/\s+/).length > 14 && !/[{};=]/.test(plain);
     if (looksLikeProse) return code;
     return reserve(looksLikeFile
-      ? '<button type="button" class="file-link" title="' + escapeHtml(plain) + '" data-file="' + encodeURIComponent(plain) + '">' + fileTypeIcon(plain) + '<span>' + code + '</span></button>'
+      ? '<button type="button" class="file-link" data-file="' + encodeURIComponent(plain) + '">' + fileTypeIcon(plain) + '<span>' + code + '</span></button>'
       : '<code class="inline-code">' + code + '</code>');
   });
   text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
@@ -1096,6 +1142,12 @@ function renderMarkdownInto(container, source) {
 
 const activityCopy = (vi, en) => language === 'en' ? en : vi;
 
+function compactActivityText(value, limit = 108) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length <= limit) return text;
+  return text.slice(0, Math.max(1, limit - 1)).trimEnd() + '…';
+}
+
 function activityInfo(status) {
   const detail = status.includes(':') ? status.slice(status.indexOf(':') + 1).trim() : '';
   if (/kiểm tra provider|checking provider/i.test(status)) return { kind: 'provider', key: 'provider', done: activityCopy('Đã kiểm tra provider', 'Provider checked') };
@@ -1115,7 +1167,7 @@ function activityInfo(status) {
   if (/Git diff/i.test(status)) return { kind: 'inspect', key: 'git-diff', done: activityCopy('Đã đọc Git diff', 'Git diff read') };
   if (/đọc tài nguyên skill|reading skill resource/i.test(status)) return { kind: 'inspect', key: 'skill:' + detail, done: detail ? activityCopy('Đã đọc skill: ', 'Read skill: ') + detail : activityCopy('Đã đọc skill', 'Skill read') };
   if (/đọc trang web|reading webpage/i.test(status)) return { kind: 'inspect', key: 'web:' + detail, done: detail ? activityCopy('Đã đọc trang ', 'Read page ') + detail : activityCopy('Đã đọc trang web', 'Webpage read') };
-  if (/phân tích file|analyzing file/i.test(status)) return { kind: 'inspect', key: 'analyze-files', done: detail ? activityCopy('Đã phân tích file gần nhất: ', 'Last analyzed file: ') + detail : activityCopy('Đã phân tích file', 'File analyzed') };
+  if (/phân tích file|analyzing file/i.test(status)) return { kind: 'inspect', key: 'analyze-files', done: detail ? activityCopy('Đã phân tích: ', 'Analyzed: ') + detail : activityCopy('Đã phân tích file', 'File analyzed') };
   if (/đọc file|reading file/i.test(status)) return { kind: 'inspect', key: 'read:' + detail, done: detail ? activityCopy('Đã đọc ', 'Read ') + detail : activityCopy('Đã đọc file', 'File read') };
   if (/cấu trúc dự án|project structure/i.test(status)) return { kind: 'inspect', key: 'list:' + detail, done: detail ? activityCopy('Đã xem file: ', 'Inspected files: ') + detail : activityCopy('Đã xem cấu trúc dự án', 'Project structure inspected') };
   if (/tìm trong dự án|searching project/i.test(status)) return { kind: 'inspect', key: 'search:' + detail, done: detail ? activityCopy('Đã tìm: ', 'Searched: ') + detail : activityCopy('Đã tìm trong dự án', 'Project searched') };
@@ -1194,14 +1246,124 @@ function cueActivitySweep(element) {
   element.classList.add('sweeping');
 }
 
+function isAssistantTimelineNode(child) {
+  return child?.classList.contains('agent-commentary')
+    || child?.classList.contains('agent-activity')
+    || child?.classList.contains('activity-history-summary')
+    || child?.classList.contains('terminal-card');
+}
+
+function assistantStreamHasText() {
+  return Boolean((assistantRawText + pendingAssistantText).trim() || assistantBody?.textContent?.trim());
+}
+
+function moveAssistantBodyAfterTimeline() {
+  const message = assistantBody?.closest('.message');
+  if (!message || !assistantBody) return;
+  const timelineNodes = [...message.children].filter(isAssistantTimelineNode);
+  const last = timelineNodes.at(-1);
+  if (last && last.nextElementSibling !== assistantBody) last.after(assistantBody);
+}
+
+function insertAssistantTimelineNode(node) {
+  const message = assistantBody?.closest('.message');
+  if (!message || !node) return;
+  const timelineNodes = [...message.children].filter(isAssistantTimelineNode);
+  const last = timelineNodes.at(-1);
+  if (last) last.after(node);
+  else message.insertBefore(node, assistantBody);
+  moveAssistantBodyAfterTimeline();
+}
+
+function archiveAssistantStreamBeforeTimeline() {
+  if (!assistantBody || !assistantStreamHasText()) return;
+  flushAssistantText();
+  const text = (assistantRawText || assistantBody.textContent || '').trim();
+  if (!text) return;
+  const block = document.createElement('div');
+  block.className = 'agent-commentary';
+  renderMarkdownInto(block, text);
+  insertAssistantTimelineNode(block);
+  assistantRawText = '';
+  pendingAssistantText = '';
+  assistantBody.replaceChildren();
+  const item = assistantBody.closest('.message');
+  if (item) item.dataset.rawContent = '';
+}
+
+function appendAssistantTimelineNode(node) {
+  if (!node) return;
+  if (node !== activeCommandGroup && !node.classList.contains('terminal-card')) {
+    activeCommandGroup = null;
+    activeTerminal = null;
+  }
+  // The body is the live stream slot. Archive its current phase before the
+  // next activity so a later Thinking/Edited row can never land underneath it.
+  archiveAssistantStreamBeforeTimeline();
+  insertAssistantTimelineNode(node);
+}
+
+function materializePendingActivity() {
+  const status = String(pendingActivityStatus || '').trim();
+  if (!status || !assistantBody || pendingTurnEnd) return;
+  if (!activityReadyAfterCommentary) return;
+  pendingActivityStatus = '';
+  updateActivity(status);
+}
+
+function appendCommentaryBeforePendingActivity(block) {
+  if (!block) return;
+  // Keep commentary in the same chronological stream as status and tool rows.
+  // The old pending-activity special case moved a later activity below the
+  // response body when a second model step started.
+  appendAssistantTimelineNode(block);
+}
+
+function archiveStreamedProgress(content = '') {
+  if (!assistantBody) return;
+  flushAssistantText();
+  const text = String(content || assistantRawText || '').trim();
+  const currentActivity = assistantActivity?.isConnected ? assistantActivity : null;
+  if (text) {
+    const block = document.createElement('div');
+    block.className = 'agent-commentary';
+    renderMarkdownInto(block, text);
+    insertAssistantTimelineNode(block);
+    activityReadyAfterCommentary = true;
+  }
+  // A streamed step is complete. Close its activity group so the next model
+  // step creates a new Ran/Edited/Analyzed phase instead of reusing this one.
+  if (currentActivity) finalizeLiveActivity();
+  assistantRawText = '';
+  pendingAssistantText = '';
+  assistantBody.replaceChildren();
+  const item = assistantBody.closest('.message');
+  if (item) item.dataset.rawContent = '';
+  moveAssistantBodyAfterTimeline();
+  materializePendingActivity();
+}
+
 function updateActivity(status) {
   const messageList = $('messages');
   const previousScrollTop = messageList.scrollTop;
+  if (!assistantActivity && !activityReadyAfterCommentary) {
+    // Never put an activity above the first assistant paragraph. Providers
+    // commonly emit status before commentary, so hold it until the paragraph
+    // is in the transcript and then place the activity below that paragraph.
+    pendingActivityStatus = String(status || '');
+    return;
+  }
   if (!assistantBody || !status || status === 'Hoàn tất') return;
   const info = activityInfo(status);
+  if (info.kind !== 'command' && info.kind !== 'test') {
+    activeCommandGroup = null;
+    activeTerminal = null;
+  }
   if (!assistantActivity) {
     assistantActivity = document.createElement('div');
     assistantActivity.className = 'agent-activity';
+    activityReadyAfterCommentary = false;
+    pendingActivityStatus = '';
     const phase = assistantActivity;
     const toggle = document.createElement('button');
     toggle.type = 'button';
@@ -1213,8 +1375,9 @@ function updateActivity(status) {
     const trace = document.createElement('div');
     trace.className = 'activity-trace';
     assistantActivity.append(toggle, trace);
-    assistantBody.closest('.message')?.insertBefore(assistantActivity, assistantBody);
+    appendAssistantTimelineNode(assistantActivity);
   }
+  const iconName = activityIconName(info, status);
   assistantActivity.querySelectorAll('.activity-row.active').forEach((activeRow) => {
     if (activeRow.dataset.key === info.key) return;
     activeRow.classList.remove('active');
@@ -1235,14 +1398,17 @@ function updateActivity(status) {
   row.dataset.kind = info.kind;
   row.dataset.key = info.key;
   row.dataset.done = info.done;
-  row.querySelector('.activity-icon').innerHTML = uiIcon(activityIconName(info, status));
-  row.querySelector('.activity-copy').textContent = status;
+  row.dataset.icon = iconName;
+  row.querySelector('.activity-icon').innerHTML = uiIcon(iconName);
+  row.querySelector('.activity-copy').textContent = compactActivityText(status, 108);
   row.classList.remove('done', 'stopped');
   row.classList.add('active');
   assistantActivity.querySelector('.activity-trace')?.append(row);
-  assistantActivity.querySelector('.activity-current-icon').innerHTML = uiIcon(activityIconName(info, status));
+  const currentIcon = assistantActivity.querySelector('.activity-current-icon');
+  currentIcon.dataset.icon = iconName;
+  currentIcon.innerHTML = uiIcon(iconName);
   const currentActivity = assistantActivity.querySelector('.activity-current');
-  currentActivity.textContent = status;
+  currentActivity.textContent = compactActivityText(status, 108);
   currentActivity.dataset.sweep = status;
   cueActivitySweep(currentActivity);
   messageList.scrollTop = previousScrollTop;
@@ -1273,14 +1439,30 @@ function finalizeLiveActivity() {
 function appendAgentCommentary(content) {
   const text = String(content || '').trim();
   if (!assistantBody || !text) return;
+  flushAssistantText();
+  const liveText = String(assistantRawText || assistantBody.textContent || '').trim();
+  const duplicateOpening = liveText.length > 0
+    && liveText.length <= 80
+    && text.startsWith(liveText);
+  if (duplicateOpening) {
+    // Some providers emit the first delta (for example "M") and then send
+    // the complete commentary paragraph beginning with that same character.
+    // Do not preserve the prefix as a stray message above the activity row.
+    assistantRawText = '';
+    pendingAssistantText = '';
+    assistantBody.replaceChildren();
+    const item = assistantBody.closest('.message');
+    if (item) item.dataset.rawContent = '';
+  }
   finalizeLiveActivity();
   activeTerminal = null;
+  activeCommandGroup = null;
   const block = document.createElement('div');
   block.className = 'agent-commentary';
   renderMarkdownInto(block, text);
-  const message = assistantBody.closest('.message');
-  const firstActivity = message?.querySelector('.agent-activity');
-  (firstActivity || assistantBody).before(block);
+  appendCommentaryBeforePendingActivity(block);
+  activityReadyAfterCommentary = true;
+  materializePendingActivity();
 }
 
 function formatWorkingElapsed(seconds) {
@@ -1360,7 +1542,6 @@ function renderMcpCatalog(presets = [], servers = []) {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'mcp-card' + (server?.connected ? ' connected' : server?.authPending ? ' pending' : server?.error ? ' failed' : '');
-    card.title = server?.error || (server?.connected ? preset.name + ' ' + uiCopy('đã kết nối', 'connected') : preset.authMode === 'api-key' ? uiCopy('Mở trang tạo API key', 'Open API key page') : uiCopy('Đăng nhập ', 'Sign in to ') + preset.name);
     const cardStatus = server?.connected
       ? (server.toolCount || 0) + uiCopy(' công cụ sẵn sàng', ' tools ready')
       : server?.authPending
@@ -1430,7 +1611,6 @@ function renderMcpServers(servers = [], presets = []) {
           ? uiCopy('Cần kết nối lại', 'Reconnect required')
           : server.authMode === 'oauth' ? uiCopy('Chưa đăng nhập', 'Not signed in') : uiCopy('Ngoại tuyến', 'Offline');
     info.innerHTML = '<strong>' + escapeHtml(server.name) + '</strong><small>' + escapeHtml(stateText) + '</small>';
-    info.title = server.error || '';
     main.append(icon, info);
 
     const actions = document.createElement('div'); actions.className = 'mcp-row-actions';
@@ -1452,7 +1632,7 @@ function renderMcpServers(servers = [], presets = []) {
       reconnect.addEventListener('click', () => vscode.postMessage({ type: 'reconnectMcp', id: server.id }));
       actions.append(reconnect);
     }
-    const remove = document.createElement('button'); remove.className = 'mcp-remove'; remove.type = 'button'; remove.title = uiCopy('Xóa MCP', 'Remove MCP'); remove.textContent = '×'; remove.addEventListener('click', () => vscode.postMessage({ type: 'removeMcpServer', id: server.id }));
+    const remove = document.createElement('button'); remove.className = 'mcp-remove'; remove.type = 'button'; remove.setAttribute('aria-label', uiCopy('Xóa MCP', 'Remove MCP')); remove.textContent = '×'; remove.addEventListener('click', () => vscode.postMessage({ type: 'removeMcpServer', id: server.id }));
     actions.append(remove);
     row.append(main, actions); list.append(row);
   }
@@ -1493,9 +1673,22 @@ function appendMessageAttachments(item, attachments) {
   if (!attachments?.length) return;
   const gallery = document.createElement('div'); gallery.className = 'user-attachments';
   for (const attachment of attachments) {
-    if (attachment.preview) {
-      const img = document.createElement('img'); img.src = attachment.preview; img.alt = attachment.name;
-      img.addEventListener('click', () => openImage(attachment.preview));
+    const initialPreview = attachment.preview || attachment.modelPreview;
+    if (initialPreview) {
+      const img = document.createElement('img'); img.src = initialPreview; img.alt = attachment.name;
+      img.addEventListener('click', () => openImage(img.currentSrc || initialPreview));
+      let triedModelPreview = false;
+      const handleImageError = () => {
+        if (!triedModelPreview && attachment.modelPreview && attachment.modelPreview !== img.src) {
+          triedModelPreview = true;
+          img.src = attachment.modelPreview;
+          return;
+        }
+        img.removeEventListener('error', handleImageError);
+        const fallback = document.createElement('span'); fallback.className = 'user-file'; fallback.textContent = attachment.name;
+        img.replaceWith(fallback);
+      };
+      img.addEventListener('error', handleImageError);
       gallery.append(img);
     } else {
       const file = document.createElement('span'); file.className = 'user-file'; file.textContent = attachment.name; gallery.append(file);
@@ -1524,7 +1717,7 @@ function renderHistory(sessions = []) {
     const time = document.createElement('time'); time.textContent = new Date(session.updatedAt).toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     button.append(title, time);
     button.addEventListener('click', () => { $('historyPanel').classList.add('hidden'); vscode.postMessage({ type: 'loadSession', id: session.id }); });
-    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'history-delete'; remove.title = 'Xóa cuộc trò chuyện'; remove.setAttribute('aria-label', 'Xóa cuộc trò chuyện');
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'history-delete'; remove.setAttribute('aria-label', uiCopy('Xóa cuộc trò chuyện', 'Delete conversation'));
     remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2m-8 0 1 12h8l1-12M10 10v6m4-6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     remove.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'deleteSession', id: session.id }); });
     row.append(button, remove);
@@ -1752,7 +1945,6 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
   copy.type = 'button';
   copy.className = 'message-action copy-message';
   copy.setAttribute('aria-label', 'Sao chép');
-    copy.title = uiCopy('Sao chép', 'Copy');
   copy.innerHTML = messageActionIcon('copy');
   copy.addEventListener('click', () => void copyMessageText(copy, item.dataset.rawContent || content));
   actions.append(copy);
@@ -1761,7 +1953,6 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
     edit.type = 'button';
     edit.className = 'message-action edit-message';
     edit.setAttribute('aria-label', 'Chỉnh sửa');
-    edit.title = uiCopy('Chỉnh sửa', 'Edit');
     edit.innerHTML = messageActionIcon('edit');
     edit.addEventListener('click', () => beginMessageEdit(item, body, content, turnIndex));
     actions.append(edit);
@@ -1824,10 +2015,18 @@ function appendTurnChangeSummary(item, data) {
   copy.append(title, stats);
   const actions = document.createElement('span');
   actions.className = 'change-summary-actions';
+  const undo = document.createElement('button');
+  undo.type = 'button';
+  undo.className = 'summary-undo';
+  undo.textContent = activityCopy('Hoàn tác', 'Undo');
+  undo.addEventListener('click', (event) => {
+    event.stopPropagation();
+    vscode.postMessage({ type: 'undoAllChanges' });
+  });
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.className = 'summary-review';
-  actions.append(toggle);
+  actions.append(undo, toggle);
   header.append(icon, copy, actions);
   const preview = document.createElement('div');
   preview.className = 'change-summary-preview';
@@ -1836,7 +2035,6 @@ function appendTurnChangeSummary(item, data) {
     row.type = 'button';
     row.className = 'change-summary-file turn-change-file';
     row.dataset.changeId = change.id;
-    row.title = change.path;
     row.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + Number(change.added || 0) + '</b> <b class="diff-remove">-' + Number(change.removed || 0) + '</b></small>';
     row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
     preview.append(row);
@@ -1858,26 +2056,46 @@ function appendTerminalOutput(data) {
   if (!assistantBody) return;
   const messageList = $('messages');
   const previousScrollTop = messageList.scrollTop;
-  if (!activeTerminal || activeTerminal.dataset.command !== (data.command || '')) {
+  const command = String(data.command || 'PowerShell').replace(/\s+/g, ' ').trim() || 'PowerShell';
+  if (!activeCommandGroup || !activeCommandGroup.isConnected) {
+    activeCommandGroup = document.createElement('details');
+    activeCommandGroup.className = 'activity-history-summary command-history';
+    activeCommandGroup.open = false;
+    const groupSummary = document.createElement('summary');
+    groupSummary.innerHTML = '<span class="activity-history-icon" aria-hidden="true">' + uiIcon('terminalWindow') + '</span><span class="activity-history-copy"></span><span class="activity-history-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
+    groupSummary.querySelector('.activity-history-copy').textContent = activityCopy('Đã chạy lệnh', 'Ran commands');
+    const commandDetails = document.createElement('div');
+    commandDetails.className = 'activity-history-details';
+    activeCommandGroup.append(groupSummary, commandDetails);
+    const commandGroup = activeCommandGroup;
+    commandGroup.addEventListener('toggle', () => {
+      const caret = commandGroup.querySelector('.activity-history-caret');
+      if (caret) caret.innerHTML = uiIcon(commandGroup.open ? 'caretDown' : 'caretRight');
+    });
+    appendAssistantTimelineNode(activeCommandGroup);
+  }
+  const commandDetails = activeCommandGroup.querySelector('.activity-history-details');
+  if (!activeTerminal || activeTerminal.dataset.command !== command) {
     activeTerminal = document.createElement('details');
     activeTerminal.className = 'terminal-card';
     activeTerminal.open = false;
-    activeTerminal.dataset.command = data.command || '';
+    activeTerminal.dataset.command = command;
     const summary = document.createElement('summary');
     summary.innerHTML = '<span class="terminal-icon" aria-hidden="true">' + uiIcon('terminalWindow') + '</span><span class="terminal-command"></span><span class="terminal-elapsed"></span><span class="terminal-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
-    summary.querySelector('.terminal-command').textContent = data.command || 'Terminal';
+    summary.querySelector('.terminal-command').textContent = compactActivityText(command, 92);
     summary.querySelector('.terminal-elapsed').textContent = uiCopy('đang chạy', 'running');
     const output = document.createElement('pre');
     activeTerminal.append(summary, output);
-    activeTerminal.addEventListener('toggle', () => {
-      const caret = activeTerminal?.querySelector('.terminal-caret');
-      if (caret) caret.innerHTML = uiIcon(activeTerminal.open ? 'caretDown' : 'caretRight');
+    const terminal = activeTerminal;
+    terminal.addEventListener('toggle', () => {
+      const caret = terminal.querySelector('.terminal-caret');
+      if (caret) caret.innerHTML = uiIcon(terminal.open ? 'caretDown' : 'caretRight');
     });
-    assistantBody.before(activeTerminal);
+    commandDetails.append(activeTerminal);
   }
   const output = activeTerminal.querySelector('pre');
   output.textContent = (output.textContent + data.chunk).slice(-20000);
-  activeTerminal.querySelector('.terminal-command').textContent = data.command || 'Terminal';
+  activeTerminal.querySelector('.terminal-command').textContent = compactActivityText(command, 92);
   activeTerminal.querySelector('.terminal-elapsed').textContent = Math.max(1, Math.round((data.elapsedMs || 0) / 1000)) + 's';
   output.scrollTop = output.scrollHeight;
   messageList.scrollTop = previousScrollTop;
@@ -1902,29 +2120,106 @@ function renderGoal(goal) {
 function renderFollowUpQueue() {
   const queue = $('followUpQueue');
   const list = $('queueList');
-  queue.classList.toggle('hidden', !queuedFollowUps.length);
-  $('queueCount').textContent = queuedFollowUps.length + ' tin nhắn đang chờ';
+  const composer = document.querySelector('.composer-shell');
+  const attachmentList = $('attachmentList');
+  if (composer && queue.parentElement !== composer) composer.insertBefore(queue, attachmentList || composer.firstChild);
+  const shouldFollowQueue = messagesPinnedToBottom;
+  queue.classList.toggle('hidden', !queuedFollowUps.length && followUpQueueEnabled);
+  queue.classList.toggle('queue-disabled', !followUpQueueEnabled);
+  $('queueCount').textContent = queuedFollowUps.length === 1
+    ? uiCopy('1 tin nhắn đang chờ', '1 message queued')
+    : uiCopy(queuedFollowUps.length + ' tin nhắn đang chờ', queuedFollowUps.length + ' messages queued');
+  $('clearQueue').textContent = followUpQueueEnabled ? uiCopy('Xóa hàng đợi', 'Clear queue') : uiCopy('Bật xếp hàng', 'Turn on queueing');
+  $('clearQueue').setAttribute('aria-label', followUpQueueEnabled ? uiCopy('Xóa hàng đợi', 'Clear queue') : uiCopy('Bật lại chế độ xếp hàng', 'Turn on queueing'));
   list.replaceChildren();
   queuedFollowUps.forEach((item, index) => {
     const row = document.createElement('div');
     row.className = 'queue-row';
+    const icon = document.createElement('span');
+    icon.className = 'queue-row-icon';
+    icon.innerHTML = uiIcon('arrowsClockwise');
     const copy = document.createElement('span');
+    copy.className = 'queue-row-copy';
     copy.textContent = item.prompt;
+    const steer = document.createElement('button');
+    steer.type = 'button';
+    steer.className = 'queue-steer';
+    steer.innerHTML = '<span aria-hidden="true">↳</span><span>' + uiCopy('Điều hướng', 'Steer') + '</span>';
+    const canSteer = running && item.mode === 'agent';
+    steer.disabled = !canSteer;
+  const steerHint = canSteer
+    ? uiCopy('Dùng tin nhắn này để điều hướng Agent đang chạy', 'Use this message to steer the active Agent')
+    : uiCopy('Chỉ có thể điều hướng Agent đang chạy', 'Steer is available only while Agent is running');
+  steer.setAttribute('aria-label', steerHint);
+  setRelayTooltip(steer, steerHint, 'above');
+    steer.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (!canSteer) return;
+      const [selected] = queuedFollowUps.splice(index, 1);
+      if (selected) {
+        vscode.postMessage({ type: 'steerTurn', prompt: selected.prompt });
+        renderFollowUpQueue();
+      }
+    });
     const remove = document.createElement('button');
     remove.type = 'button';
-    remove.setAttribute('aria-label', 'Bỏ tin nhắn khỏi hàng đợi');
-    remove.textContent = '×';
-    remove.addEventListener('click', () => {
+    remove.className = 'queue-icon-button';
+    remove.setAttribute('aria-label', uiCopy('Bỏ tin nhắn khỏi hàng đợi', 'Remove message from queue'));
+    remove.innerHTML = uiIcon('trash');
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
       queuedFollowUps.splice(index, 1);
       renderFollowUpQueue();
     });
-    row.append(copy, remove);
+    const menuTrigger = document.createElement('button');
+    menuTrigger.type = 'button';
+    menuTrigger.className = 'queue-icon-button queue-menu-trigger';
+    menuTrigger.setAttribute('aria-label', uiCopy('Tùy chọn hàng đợi', 'Queue options'));
+    menuTrigger.innerHTML = '<span aria-hidden="true">•••</span>';
+    const menu = document.createElement('div');
+    menu.className = 'queue-row-menu hidden';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.innerHTML = uiIcon('pencilSimple') + '<span>' + uiCopy('Sửa tin nhắn', 'Edit message') + '</span>';
+    edit.addEventListener('click', (event) => {
+      event.stopPropagation();
+      queuedFollowUps.splice(index, 1);
+      $('prompt').value = item.prompt;
+      setMode(item.mode);
+      if ([...$('model').options].some((option) => option.value === item.model)) $('model').value = item.model;
+      menu.classList.add('hidden');
+      renderFollowUpQueue();
+      resizePrompt();
+      updateSendState();
+      $('prompt').focus();
+    });
+    const toggleQueue = document.createElement('button');
+    toggleQueue.type = 'button';
+    toggleQueue.innerHTML = uiIcon(followUpQueueEnabled ? 'arrowCounterClockwise' : 'arrowsClockwise') + '<span>' + uiCopy(followUpQueueEnabled ? 'Tắt xếp hàng' : 'Bật xếp hàng', followUpQueueEnabled ? 'Turn off queueing' : 'Turn on queueing') + '</span>';
+    toggleQueue.addEventListener('click', (event) => {
+      event.stopPropagation();
+      followUpQueueEnabled = !followUpQueueEnabled;
+      menu.classList.add('hidden');
+      renderFollowUpQueue();
+      updateSendState();
+      if (followUpQueueEnabled && !running && queuedFollowUps.length) runNextQueuedFollowUp();
+    });
+    menu.append(edit, toggleQueue);
+    menuTrigger.addEventListener('click', (event) => {
+      event.stopPropagation();
+      document.querySelectorAll('.queue-row-menu').forEach((item) => { if (item !== menu) item.classList.add('hidden'); });
+      menu.classList.toggle('hidden');
+    });
+    row.append(icon, copy, steer, remove, menuTrigger, menu);
     list.append(row);
   });
+  if (queuedFollowUps.length && shouldFollowQueue) requestAnimationFrame(scrollMessagesToBottom);
 }
 
 function queueFollowUp(prompt, selectedMode, model) {
+  if (!followUpQueueEnabled) return;
   queuedFollowUps.push({ prompt, mode: selectedMode, model });
+  queuedFollowUpReady = false;
   renderFollowUpQueue();
   $('prompt').value = '';
   resetComposerTokens();
@@ -1933,14 +2228,16 @@ function queueFollowUp(prompt, selectedMode, model) {
 }
 
 function runNextQueuedFollowUp() {
-  if (running || !queuedFollowUps.length) return;
+  if (!followUpQueueEnabled || running || !queuedFollowUps.length || !queuedFollowUpReady) return;
   const next = queuedFollowUps.shift();
+  queuedFollowUpReady = false;
   renderFollowUpQueue();
   setMode(next.mode);
   if ([...$('model').options].some((option) => option.value === next.model)) {
     $('model').value = next.model;
     $('model').dispatchEvent(new Event('change'));
   }
+  setRunning(true);
   vscode.postMessage({ type: 'send', prompt: next.prompt, mode: next.mode, model: next.model, includeSelection: false, ...(isCodexTunableModel(next.model) ? { reasoningEffort, serviceTier } : {}) });
 }
 
@@ -1949,8 +2246,8 @@ function setRunning(value, text = '') {
   const button = $('send');
   button.classList.toggle('running', value);
   button.classList.remove('stopping');
-  button.setAttribute('aria-label', value ? 'Dừng phản hồi' : 'Gửi');
-  button.title = value ? 'Dừng' : 'Gửi';
+  const buttonHint = value ? uiCopy('Dừng', 'Stop') : uiCopy('Gửi', 'Send');
+  button.setAttribute('aria-label', value ? uiCopy('Dừng phản hồi', 'Stop response') : uiCopy('Gửi', 'Send'));
   document.querySelector('.composer-shell')?.classList.toggle('is-running', value);
   updateRunningScrollIndicator();
   updateChangeActionState();
@@ -1980,6 +2277,7 @@ function finishTurn(data) {
   if (data.cancelled) discardTechnicalHistory(turnMessage);
   else compactTechnicalHistory(turnMessage);
   activeTerminal = null;
+  activeCommandGroup = null;
   if (data.error) {
     if (assistantBody && !assistantRawText && !turnMessage?.querySelector('.agent-commentary,.activity-history-summary')) assistantBody.closest('.message')?.remove();
     const errorBody = appendMessage('assistant', data.error, true, data.timestamp);
@@ -2009,7 +2307,10 @@ function finishTurn(data) {
   assistantBody = null;
   assistantRawText = '';
   assistantActivity = null;
+  pendingActivityStatus = '';
+  activityReadyAfterCommentary = false;
   activeTerminal = null;
+  activeCommandGroup = null;
   activitySteps = new Map();
   pendingTurnEnd = null;
   turnStartedAt = 0;
@@ -2021,7 +2322,7 @@ function finishTurn(data) {
     window.dispatchEvent(new MessageEvent('message', { data: completedChangesState }));
   }
   $('prompt').focus();
-  setTimeout(runNextQueuedFollowUp, 0);
+  if (queuedFollowUpReady) runNextQueuedFollowUp();
 }
 
 function settleTurn(data) {
@@ -2046,7 +2347,10 @@ function settleTurn(data) {
     turnStartedAt = 0;
     assistantBody = null;
     assistantActivity = null;
+    pendingActivityStatus = '';
+    activityReadyAfterCommentary = false;
     activeTerminal = null;
+    activeCommandGroup = null;
     activitySteps = new Map();
     setRunning(false);
     if (messagesPinnedToBottom) scrollMessagesToBottom();
@@ -2057,9 +2361,20 @@ function settleTurn(data) {
 function updateSendState() {
   const hasPrompt = Boolean($('prompt').value.trim() || composerLinks.length || composerSkills.length || composerContexts.length || composerGoalMode || composerCommand);
   $('send').disabled = running ? false : !hasPrompt;
-  $('send').classList.remove('queue-ready');
-  $('send').setAttribute('aria-label', running ? 'Dừng phản hồi' : 'Gửi');
-  $('send').title = running ? 'Dừng' : 'Gửi';
+  $('send').classList.toggle('queue-ready', running && hasPrompt && followUpQueueEnabled);
+  $('send').setAttribute('aria-label', running ? (hasPrompt && followUpQueueEnabled ? 'Gửi vào hàng chờ' : 'Dừng phản hồi') : 'Gửi');
+}
+
+function closeFollowUpMenus() {
+  document.querySelectorAll('.queue-row-menu').forEach((menu) => menu.classList.add('hidden'));
+}
+
+function stopCurrentTurn() {
+  $('send').classList.add('stopping');
+  vscode.postMessage({ type: 'stopTurn' });
+  // Release the composer immediately. The host acknowledgement remains
+  // idempotent and will reconcile any late provider event.
+  settleTurn({ cancelled: true, timestamp: Date.now() });
 }
 
 function resizePrompt() {
@@ -2104,7 +2419,6 @@ function createComposerLinkToken(link) {
   const open = document.createElement('button');
   open.type = 'button';
   open.className = 'composer-link-open';
-  open.title = link.url;
   open.setAttribute('aria-label', 'Mở ' + link.label);
   const mark = document.createElement('i');
   mark.setAttribute('aria-hidden', 'true');
@@ -2432,6 +2746,10 @@ function send() {
   const selected = $('model').selectedOptions[0];
   if (mode === 'agent' && selected?.dataset.tools === 'false') { showUiToast({ message: 'Model này không hỗ trợ tools nên không thể chạy Agent mode. Hãy chuyển sang Chat hoặc chọn model khác.', tone: 'danger' }); return; }
   if (running) {
+    if (!followUpQueueEnabled) {
+      stopCurrentTurn();
+      return;
+    }
     queueFollowUp(prompt, mode, model);
     return;
   }
@@ -2452,7 +2770,7 @@ function send() {
 
 document.querySelectorAll('#modeMenu [data-mode]').forEach((button) => button.addEventListener('click', (event) => {
   event.stopPropagation();
-  setMode(button.dataset.mode);
+  setMode(button.dataset.mode, true);
   $('modeMenu').classList.add('hidden');
   $('modePicker').classList.remove('open');
   $('modeTrigger').setAttribute('aria-expanded', 'false');
@@ -2554,11 +2872,13 @@ $('expandChanges').addEventListener('click', () => {
   if (lastChangeCount) $('changeTray').classList.remove('hidden');
 });
 $('model').addEventListener('change', () => {
-   if ($('model').value !== lastAutoModel) modelSelectionSource = 'manual';
+   if ($('model').value !== lastAutoModel) {
+     modelSelectionSource = 'manual';
+     if ($('model').value) saveComposerPreferences({ mode, model: $('model').value });
+   }
    const selectedLabel = $('model').selectedOptions[0]?.textContent || uiCopy('Chọn model', 'Select model');
   $('modelLabel').textContent = selectedLabel;
   $('modelBrand').innerHTML = $('model').value ? brandIcon(brandKey($('model').value, activeProvider), selectedLabel) : '';
-  $('modelTrigger').title = selectedLabel;
   updateCodexTuning();
 });
 $('modelTrigger').addEventListener('click', (event) => {
@@ -2611,11 +2931,13 @@ document.querySelectorAll('#reasoningMenu [data-effort]').forEach((option) => op
   $('reasoningPicker').classList.remove('open');
   $('reasoningTrigger').setAttribute('aria-expanded', 'false');
   updateCodexTuning();
+  saveComposerPreferences({ mode, model: $('model').value || undefined, reasoningEffort });
 }));
 $('fastMode').addEventListener('click', (event) => {
   event.stopPropagation();
   serviceTier = serviceTier === 'fast' ? 'default' : 'fast';
   updateCodexTuning();
+  saveComposerPreferences({ mode, model: $('model').value || undefined, serviceTier });
 });
 $('quotaReset').addEventListener('click', () => vscode.postMessage({ type: 'openTelemetryDashboard' }));
 $('languageTrigger').addEventListener('click', (event) => {
@@ -2733,6 +3055,7 @@ $('configPanel').addEventListener('click', (event) => {
 document.addEventListener('click', () => {
   closeDropdowns();
   closeFloatingSurfaces();
+  closeFollowUpMenus();
 });
 $('settings').addEventListener('click', (event) => {
   event.stopPropagation();
@@ -2787,11 +3110,11 @@ $('openCockpit').addEventListener('click', () => vscode.postMessage({ type: 'ope
 $('exportDiagnostics').addEventListener('click', () => vscode.postMessage({ type: 'exportDiagnostics' }));
 $('send').addEventListener('click', () => {
   if (running) {
-    $('send').classList.add('stopping');
-    vscode.postMessage({ type: 'stopTurn' });
-    // The user explicitly stopped the turn. Do not leave the composer hostage
-    // to a delayed provider abort or a delayed extension-host acknowledgement.
-    settleTurn({ cancelled: true, timestamp: Date.now() });
+    if (effectiveComposerPrompt() && followUpQueueEnabled) {
+      send();
+      return;
+    }
+    stopCurrentTurn();
     return;
   }
   send();
@@ -2803,6 +3126,13 @@ $('goalResume').addEventListener('click', () => {
 });
 $('goalClear').addEventListener('click', () => vscode.postMessage({ type: 'clearGoal' }));
 $('clearQueue').addEventListener('click', () => {
+  if (!followUpQueueEnabled) {
+    followUpQueueEnabled = true;
+    renderFollowUpQueue();
+    updateSendState();
+    if (!running && queuedFollowUps.length) runNextQueuedFollowUp();
+    return;
+  }
   queuedFollowUps = [];
   renderFollowUpQueue();
 });
@@ -2923,8 +3253,12 @@ window.addEventListener('message', ({ data }) => {
       $('keyState').classList.toggle('saved', data.hasApiKey);
     }
     $('apiKey').placeholder = data.hasApiKey ? uiCopy('Đã lưu API key, nhập để thay đổi', 'API key saved, enter to change') : uiCopy('Nhập API key nếu endpoint yêu cầu', 'Enter an API key if the endpoint requires it');
+    composerPreferences = data.composerPreferences || { models: {}, reasoningEffort: 'medium', serviceTier: 'default' };
+    reasoningEffort = composerPreferences.reasoningEffort || 'medium';
+    serviceTier = composerPreferences.serviceTier || 'default';
     defaultMode = data.mode === 'agent' ? 'agent' : 'chat';
-    setMode(defaultMode);
+    if (composerPreferences.lastMode) setMode(composerPreferences.lastMode);
+    else setMode(defaultMode);
     setPermissionMode(data.permissionMode || 'ask');
     if (data.workspaceTrusted === false) appendMessage('assistant', uiCopy('Workspace chưa được tin cậy. Agent, terminal và MCP sẽ bị khóa cho đến khi bạn bật Workspace Trust.', 'This workspace is not trusted. Agent, terminal and MCP remain locked until Workspace Trust is enabled.'), true);
     profiles = data.profiles || [];
@@ -2936,6 +3270,11 @@ window.addEventListener('message', ({ data }) => {
     const initialProfile = profiles.find((item) => item.id === currentProfileId);
     if (initialProfile) applyProfileUi(initialProfile);
     renderHistory(data.sessions || []);
+  } else if (data.type === 'composerPreferences') {
+    composerPreferences = data.preferences || composerPreferences;
+    reasoningEffort = composerPreferences.reasoningEffort || reasoningEffort;
+    serviceTier = composerPreferences.serviceTier || serviceTier;
+    updateCodexTuning();
   } else if (data.type === 'goalState') {
     renderGoal(data.goal);
   } else if (data.type === 'sessions') {
@@ -3025,7 +3364,6 @@ window.addEventListener('message', ({ data }) => {
        : data.connected
          ? uiCopy('Kết nối', 'Connect')
          : uiCopy('Kết nối', 'Connect');
-     $('topConnect').dataset.tooltip = uiCopy($('topConnectLabel').textContent + ' provider', $('topConnectLabel').textContent + ' provider');
     $('topConnect').classList.remove('hidden');
     $('topConnect').classList.toggle('online', Boolean(data.connected));
     $('topConnect').classList.toggle('attention', !data.connected && !routerReady);
@@ -3076,15 +3414,17 @@ window.addEventListener('message', ({ data }) => {
       select.add(option);
     }
     const configuredDefault = data.defaultModel && [...select.options].some((option) => option.value === data.defaultModel) ? data.defaultModel : '';
-    const preferred = previous || configuredDefault || smartModelForMode(mode);
+    const rememberedModel = composerPreferences.models?.[mode] && [...select.options].some((option) => option.value === composerPreferences.models[mode])
+      ? composerPreferences.models[mode]
+      : '';
+    const preferred = previous || rememberedModel || configuredDefault || smartModelForMode(mode);
     if ([...select.options].some((option) => option.value === preferred)) select.value = preferred;
     else if (select.options.length > 1) select.selectedIndex = 1;
-    modelSelectionSource = previousWasAuto || (!previous && !configuredDefault) ? 'auto' : 'manual';
+    modelSelectionSource = previousWasAuto || (!previous && !rememberedModel && !configuredDefault) ? 'auto' : 'manual';
     lastAutoModel = modelSelectionSource === 'auto' ? select.value : '';
     const selectedLabel = select.selectedOptions[0]?.textContent || 'Chọn model';
     $('modelLabel').textContent = selectedLabel;
     $('modelBrand').innerHTML = select.value ? brandIcon(brandKey(select.value, activeProvider), selectedLabel) : '';
-    $('modelTrigger').title = selectedLabel;
     renderModelMenu();
     updateCodexTuning();
     if (data.connected && select.options.length <= 2) scheduleModelListRecovery();
@@ -3103,7 +3443,6 @@ window.addEventListener('message', ({ data }) => {
     const percent = Math.min(100, Math.round(((data.used || 0) / Math.max(1, data.limit || 1)) * 100));
     meter.querySelector('i').style.width = percent + '%';
     meter.classList.toggle('compacted', Boolean(data.compacted));
-    meter.title = data.compacted ? 'Context đã được rút gọn: ' + data.original + ' → ' + data.used + ' ký tự' : 'Context: ' + data.used + '/' + data.limit + ' ký tự';
   } else if (data.type === 'notice') {
     appendMessage('assistant', data.message, false, Date.now());
   } else if (data.type === 'recoveredTurn') {
@@ -3256,10 +3595,29 @@ window.addEventListener('message', ({ data }) => {
     const list = $('attachmentList');
     list.replaceChildren();
     for (const [index, item] of (data.attachments || []).entries()) {
-      if (item.preview) {
+      const initialPreview = item.preview || item.modelPreview;
+      if (initialPreview) {
         const preview = document.createElement('div'); preview.className = 'attachment-preview';
-        const image = document.createElement('img'); image.src = item.preview; image.alt = item.name;
-        image.addEventListener('click', () => openImage(item.preview));
+        const image = document.createElement('img'); image.src = initialPreview; image.alt = item.name;
+        image.addEventListener('click', () => openImage(image.currentSrc || initialPreview));
+        let triedModelPreview = false;
+        const handleImageError = () => {
+          if (!triedModelPreview && item.modelPreview && item.modelPreview !== image.src) {
+            triedModelPreview = true;
+            image.src = item.modelPreview;
+            return;
+          }
+          image.removeEventListener('error', handleImageError);
+          preview.replaceChildren();
+          const chip = document.createElement('span'); chip.className = 'attachment-chip';
+          chip.innerHTML = fileTypeIcon(item.name) + '<span>' + escapeHtml(item.name) + '</span>';
+          preview.classList.add('attachment-preview-fallback');
+          preview.append(chip);
+          const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', 'Bỏ ảnh đính kèm');
+          remove.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'removeAttachment', index }); });
+          preview.append(remove);
+        };
+        image.addEventListener('error', handleImageError);
         const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', 'Bỏ ảnh đính kèm');
         remove.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'removeAttachment', index }); });
         preview.append(image, remove); list.append(preview); continue;
@@ -3272,6 +3630,9 @@ window.addEventListener('message', ({ data }) => {
       remove.addEventListener('click', () => vscode.postMessage({ type: 'removeAttachment', index }));
       chip.append(remove); list.append(chip);
     }
+  } else if (data.type === 'turnReady') {
+    queuedFollowUpReady = true;
+    if (!running && queuedFollowUps.length) runNextQueuedFollowUp();
   } else if (data.type === 'approval') {
     const item = document.createElement('article');
     item.className = 'permission-card permission-card-v2';
@@ -3347,9 +3708,6 @@ window.addEventListener('message', ({ data }) => {
         const similarInfo = document.createElement('span');
         similarInfo.innerHTML = uiIcon('info');
         similar.append(similarLabel, similarInfo);
-        similar.title = language === 'en'
-          ? 'Allow commands with the same executable and subcommand for this chat session'
-          : 'Cho phép các lệnh cùng loại trong cuộc trò chuyện này';
         allowMenu.append(similar);
         similar.addEventListener('click', () => finishApproval('similar'));
       }
@@ -3363,7 +3721,6 @@ window.addEventListener('message', ({ data }) => {
         const alwaysInfo = document.createElement('span');
         alwaysInfo.innerHTML = uiIcon('check');
         always.append(alwaysLabel, alwaysInfo);
-        always.title = language === 'en' ? 'Allow file edits without asking again' : 'Cho phép sửa file mà không hỏi lại';
         allowMenu.append(always);
         always.addEventListener('click', () => finishApproval('always'));
       }
@@ -3403,7 +3760,6 @@ window.addEventListener('message', ({ data }) => {
       $('modelTrigger').setAttribute('aria-expanded', 'true');
       $('modelSearch').focus();
     });
-    item.querySelector('.tool-change-model').title = uiCopy('Chọn model khác rồi tiếp tục từ bước đang dở', 'Choose another model and continue from the interrupted step');
     item.querySelector('.tool-skip').addEventListener('click', () => finish('skip'));
     $('messages').append(item); $('messages').scrollTop = $('messages').scrollHeight;
   } else if (data.type === 'changeOperation') {
@@ -3457,11 +3813,42 @@ window.addEventListener('message', ({ data }) => {
           list.append(taskLabel);
         }
         const resolved = Boolean(change.resolution);
-        const row = document.createElement('button'); row.type = 'button'; row.className = 'change-row change-row-review' + (resolved ? ' is-resolved' : '');
-        row.title = change.path;
-        row.innerHTML = '<span class="change-file">' + fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span></span><span class="change-row-stats"><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b>' + (resolved ? '<em>' + escapeHtml(change.resolution === 'accepted' ? activityCopy('Đã chấp nhận', 'Accepted') : activityCopy('Đã hoàn tác', 'Undone')) + '</em>' : '') + '</span>';
-        if (resolved) row.disabled = true;
-        else row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
+        const row = document.createElement('div');
+        row.className = 'change-row change-row-review' + (resolved ? ' is-resolved' : '');
+        row.dataset.changeId = change.id;
+        const file = document.createElement('button');
+        file.type = 'button';
+        file.className = 'change-file';
+        file.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span>';
+        const stats = document.createElement('span');
+        stats.className = 'change-row-stats';
+        stats.innerHTML = '<b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b>' + (resolved ? '<em>' + escapeHtml(change.resolution === 'accepted' ? activityCopy('Đã chấp nhận', 'Accepted') : activityCopy('Đã hoàn tác', 'Undone')) + '</em>' : '');
+        const actions = document.createElement('span');
+        actions.className = 'change-row-actions';
+        const undo = document.createElement('button');
+        undo.type = 'button';
+        undo.className = 'tray-undo';
+        undo.textContent = activityCopy('Hoàn tác', 'Undo');
+        const accept = document.createElement('button');
+        accept.type = 'button';
+        accept.className = 'tray-accept';
+        accept.textContent = activityCopy('Chấp nhận', 'Accept');
+        actions.append(undo, accept);
+        file.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
+        undo.addEventListener('click', (event) => {
+          event.stopPropagation();
+          vscode.postMessage({ type: 'undoChange', id: change.id });
+        });
+        accept.addEventListener('click', (event) => {
+          event.stopPropagation();
+          vscode.postMessage({ type: 'acceptChange', id: change.id });
+        });
+        if (resolved) {
+          file.disabled = true;
+          undo.disabled = true;
+          accept.disabled = true;
+        }
+        row.append(file, stats, actions);
         list.append(row);
       }
       renderedChanges += nextChanges.length;
@@ -3484,13 +3871,13 @@ window.addEventListener('message', ({ data }) => {
       if (!changeSummary) {
         changeSummary = document.createElement('article');
         changeSummary.className = 'chat-change-summary collapsed';
-        changeSummary.innerHTML = '<header><span class="change-summary-icon" aria-hidden="true">' + uiIcon('files') + '</span><span class="change-summary-copy"><strong><span class="change-summary-files"></span></strong><small class="change-summary-stats"><b class="diff-add"></b><b class="diff-remove"></b></small></span><span class="change-summary-actions"><button class="summary-undo" type="button">Undo</button><button class="summary-review" type="button">Review</button></span></header><div class="change-summary-preview"></div>';
+        changeSummary.innerHTML = '<header><span class="change-summary-icon" aria-hidden="true">' + uiIcon('files') + '</span><span class="change-summary-copy"><strong><span class="change-summary-files"></span></strong><small class="change-summary-stats"><b class="diff-add"></b><b class="diff-remove"></b></small></span><span class="change-summary-actions"><button class="summary-undo" type="button">Undo</button><button class="summary-review" type="button">Show files</button></span></header><div class="change-summary-preview"></div>';
         $('messages').append(changeSummary);
       }
       const setSummaryExpanded = (expanded) => {
         changeSummaryExpanded = expanded;
         changeSummary.classList.toggle('collapsed', !expanded);
-        changeSummary.querySelector('.summary-review').textContent = expanded ? activityCopy('Ẩn', 'Hide') : activityCopy('Xem', 'Review');
+        changeSummary.querySelector('.summary-review').textContent = expanded ? activityCopy('Ẩn file', 'Hide files') : activityCopy('Xem file', 'Show files');
       };
       const reviewButton = changeSummary.querySelector('.summary-review');
       reviewButton.onclick = () => setSummaryExpanded(!changeSummaryExpanded);
@@ -3505,7 +3892,6 @@ window.addEventListener('message', ({ data }) => {
         const row = document.createElement('button');
         row.type = 'button';
         row.className = 'change-summary-file';
-        row.title = change.path;
         row.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b></small>';
         row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
         preview.append(row);
@@ -3517,11 +3903,15 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'turnStart') {
     document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
     mode = data.mode;
+    followUpQueueEnabled = true;
     turnStartedAt = data.timestamp || Date.now();
     flushAssistantText();
     assistantRawText = '';
     assistantActivity = null;
+    pendingActivityStatus = '';
+    activityReadyAfterCommentary = false;
     activeTerminal = null;
+    activeCommandGroup = null;
     activitySteps = new Map();
     pendingTurnEnd = null;
     pendingCompletedChangesState = null;
@@ -3539,6 +3929,8 @@ window.addEventListener('message', ({ data }) => {
     assistantBody = null;
     assistantRawText = '';
     assistantActivity = null;
+    pendingActivityStatus = '';
+    activityReadyAfterCommentary = false;
     activeTerminal = null;
     activitySteps = new Map();
     if (workingTimer) clearInterval(workingTimer);
@@ -3546,6 +3938,8 @@ window.addEventListener('message', ({ data }) => {
     workingLabel = null;
   } else if (data.type === 'commentary') {
     appendAgentCommentary(data.content);
+  } else if (data.type === 'intermediateStep') {
+    archiveStreamedProgress(data.content);
   } else if (data.type === 'activityComplete') {
     finalizeLiveActivity();
   } else if (data.type === 'delta') {
@@ -3569,9 +3963,12 @@ window.addEventListener('message', ({ data }) => {
     queuedUiDialogs = [];
     if (activeUiDialog) closeUiDialog(undefined);
     queuedFollowUps = [];
+    followUpQueueEnabled = true;
+    activeTerminal = null;
+    activeCommandGroup = null;
     renderFollowUpQueue();
     renderGoal(null);
-    setMode(defaultMode);
+    setMode(composerPreferences.lastMode || defaultMode);
     const emptyDescription = mode === 'agent'
       ? uiCopy('Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.', 'Agent can read the project, edit files and run commands in the workspace.')
       : mode === 'plan'

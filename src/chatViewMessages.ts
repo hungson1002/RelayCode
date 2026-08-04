@@ -24,6 +24,7 @@ export type WebviewMessage =
   | { type: 'acceptTaskChanges'; taskId: string }
   | { type: 'undoTaskChanges'; taskId: string }
   | { type: 'setPermissionMode'; mode: 'ask' | 'edit' | 'full' }
+  | { type: 'saveComposerPreferences'; mode?: ChatMode; model?: string; rememberMode?: boolean; reasoningEffort?: ReasoningEffort; serviceTier?: 'default' | 'fast' }
   | { type: 'toggleFavoriteModel'; model: string }
   | { type: 'exportDiagnostics' }
   | { type: 'showLogs' }
@@ -50,6 +51,7 @@ export type WebviewMessage =
   | { type: 'setupLocalProvider' }
   | { type: 'diagnostics'; draft?: boolean; endpoint?: string; apiKey?: string; provider?: ProviderKind; profileId?: string }
   | { type: 'stopTurn' }
+  | { type: 'steerTurn'; prompt: string }
   | { type: 'startRouter' }
   | { type: 'retryConnection' }
   | { type: 'checkRouterConnection' }
@@ -137,6 +139,12 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
       return isString(value.taskId, 300);
     case 'setPermissionMode':
       return isOneOf(value.mode, ['ask', 'edit', 'full']);
+    case 'saveComposerPreferences':
+      return (value.mode === undefined || isOneOf(value.mode, ['chat', 'agent', 'plan']))
+        && optionalString(value.model, 300)
+        && (value.rememberMode === undefined || typeof value.rememberMode === 'boolean')
+        && (value.reasoningEffort === undefined || isOneOf(value.reasoningEffort, ['minimal', 'low', 'medium', 'high', 'xhigh']))
+        && (value.serviceTier === undefined || isOneOf(value.serviceTier, ['default', 'fast']));
     case 'connect':
       return isString(value.endpoint, 4_000)
         && optionalString(value.apiKey, 20_000)
@@ -189,6 +197,8 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
         && typeof value.includeSelection === 'boolean'
         && (value.reasoningEffort === undefined || isOneOf(value.reasoningEffort, ['minimal', 'low', 'medium', 'high', 'xhigh']))
         && (value.serviceTier === undefined || isOneOf(value.serviceTier, ['default', 'fast']));
+    case 'steerTurn':
+      return isString(value.prompt, 2_000_000) && value.prompt.trim().length > 0;
     default:
       return false;
   }

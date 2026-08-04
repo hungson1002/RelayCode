@@ -153,5 +153,5 @@ export function brandKeyFor(value: string, provider = ''): string {
 
 export function brandMarkup(key: string, label: string, className = 'brand-symbol'): string {
   const safeLabel = label.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
-  return `<span class="${className}" title="${safeLabel}" aria-label="${safeLabel}">${BRAND_ICONS[key] ?? BRAND_ICONS.mcp}</span>`;
+  return `<span class="${className}" aria-label="${safeLabel}">${BRAND_ICONS[key] ?? BRAND_ICONS.mcp}</span>`;
 }

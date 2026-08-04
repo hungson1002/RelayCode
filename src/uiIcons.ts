@@ -15,38 +15,32 @@ import cube from '@phosphor-icons/core/regular/cube.svg';
 import database from '@phosphor-icons/core/regular/database.svg';
 import downloadSimple from '@phosphor-icons/core/regular/download-simple.svg';
 import exportIcon from '@phosphor-icons/core/regular/export.svg';
-import file from '@phosphor-icons/core/regular/file.svg';
-import fileAudio from '@phosphor-icons/core/regular/file-audio.svg';
-import fileC from '@phosphor-icons/core/regular/file-c.svg';
-import fileCpp from '@phosphor-icons/core/regular/file-cpp.svg';
-import fileCSharp from '@phosphor-icons/core/regular/file-c-sharp.svg';
-import fileCode from '@phosphor-icons/core/regular/file-code.svg';
-import fileCss from '@phosphor-icons/core/regular/file-css.svg';
-import fileCsv from '@phosphor-icons/core/regular/file-csv.svg';
-import fileDoc from '@phosphor-icons/core/regular/file-doc.svg';
-import fileHtml from '@phosphor-icons/core/regular/file-html.svg';
-import fileImage from '@phosphor-icons/core/regular/file-image.svg';
-import fileIni from '@phosphor-icons/core/regular/file-ini.svg';
-import fileJpg from '@phosphor-icons/core/regular/file-jpg.svg';
-import fileJs from '@phosphor-icons/core/regular/file-js.svg';
-import fileJsx from '@phosphor-icons/core/regular/file-jsx.svg';
-import fileMd from '@phosphor-icons/core/regular/file-md.svg';
-import filePdf from '@phosphor-icons/core/regular/file-pdf.svg';
-import filePng from '@phosphor-icons/core/regular/file-png.svg';
-import filePpt from '@phosphor-icons/core/regular/file-ppt.svg';
-import filePy from '@phosphor-icons/core/regular/file-py.svg';
-import fileRs from '@phosphor-icons/core/regular/file-rs.svg';
-import fileSql from '@phosphor-icons/core/regular/file-sql.svg';
-import fileSvg from '@phosphor-icons/core/regular/file-svg.svg';
-import fileText from '@phosphor-icons/core/regular/file-text.svg';
+import file from '@phosphor-icons/core/fill/file-fill.svg';
+import fileAudio from '@phosphor-icons/core/fill/file-audio-fill.svg';
+import fileC from '@phosphor-icons/core/fill/file-c-fill.svg';
+import fileCpp from '@phosphor-icons/core/fill/file-cpp-fill.svg';
+import fileCSharp from '@phosphor-icons/core/fill/file-c-sharp-fill.svg';
+import fileCode from '@phosphor-icons/core/fill/file-code-fill.svg';
+import fileCsv from '@phosphor-icons/core/fill/file-csv-fill.svg';
+import fileDoc from '@phosphor-icons/core/fill/file-doc-fill.svg';
+import fileImage from '@phosphor-icons/core/fill/file-image-fill.svg';
+import fileIni from '@phosphor-icons/core/fill/file-ini-fill.svg';
+import fileJpg from '@phosphor-icons/core/fill/file-jpg-fill.svg';
+import fileMd from '@phosphor-icons/core/fill/file-md-fill.svg';
+import filePdf from '@phosphor-icons/core/fill/file-pdf-fill.svg';
+import filePng from '@phosphor-icons/core/fill/file-png-fill.svg';
+import filePpt from '@phosphor-icons/core/fill/file-ppt-fill.svg';
+import filePy from '@phosphor-icons/core/fill/file-py-fill.svg';
+import fileRs from '@phosphor-icons/core/fill/file-rs-fill.svg';
+import fileSql from '@phosphor-icons/core/fill/file-sql-fill.svg';
+import fileSvg from '@phosphor-icons/core/fill/file-svg-fill.svg';
+import fileText from '@phosphor-icons/core/fill/file-text-fill.svg';
 import files from '@phosphor-icons/core/regular/files.svg';
-import fileTs from '@phosphor-icons/core/regular/file-ts.svg';
-import fileTsx from '@phosphor-icons/core/regular/file-tsx.svg';
-import fileTxt from '@phosphor-icons/core/regular/file-txt.svg';
-import fileVideo from '@phosphor-icons/core/regular/file-video.svg';
-import fileVue from '@phosphor-icons/core/regular/file-vue.svg';
-import fileXls from '@phosphor-icons/core/regular/file-xls.svg';
-import fileZip from '@phosphor-icons/core/regular/file-zip.svg';
+import fileTxt from '@phosphor-icons/core/fill/file-txt-fill.svg';
+import fileVideo from '@phosphor-icons/core/fill/file-video-fill.svg';
+import fileVue from '@phosphor-icons/core/fill/file-vue-fill.svg';
+import fileXls from '@phosphor-icons/core/fill/file-xls-fill.svg';
+import fileZip from '@phosphor-icons/core/fill/file-zip-fill.svg';
 import folderOpen from '@phosphor-icons/core/regular/folder-open.svg';
 import gear from '@phosphor-icons/core/regular/gear.svg';
 import gitDiff from '@phosphor-icons/core/regular/git-diff.svg';
@@ -70,6 +64,7 @@ import trash from '@phosphor-icons/core/regular/trash.svg';
 import warning from '@phosphor-icons/core/regular/warning.svg';
 import wrench from '@phosphor-icons/core/regular/wrench.svg';
 import x from '@phosphor-icons/core/regular/x.svg';
+import { materialCss, materialHtml, materialJavascript, materialTypescript } from './materialFileIcons';
 
 export const UI_ICONS = {
   arrowCounterClockwise,
@@ -95,15 +90,15 @@ export const UI_ICONS = {
   fileCpp,
   fileCSharp,
   fileCode,
-  fileCss,
+  fileCss: materialCss,
   fileCsv,
   fileDoc,
-  fileHtml,
+  fileHtml: materialHtml,
   fileImage,
   fileIni,
   fileJpg,
-  fileJs,
-  fileJsx,
+  fileJs: materialJavascript,
+  fileJsx: materialJavascript,
   fileMd,
   filePdf,
   filePng,
@@ -114,8 +109,8 @@ export const UI_ICONS = {
   fileSvg,
   fileText,
   files,
-  fileTs,
-  fileTsx,
+  fileTs: materialTypescript,
+  fileTsx: materialTypescript,
   fileTxt,
   fileVideo,
   fileVue,

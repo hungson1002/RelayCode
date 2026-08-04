@@ -52,6 +52,57 @@ function clientWithResponses(contents: string[]): ProviderClient {
   } as unknown as ProviderClient;
 }
 
+describe('AgentRuntime live steering', () => {
+  it('applies a steering instruction at the next model boundary', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({ content: 'I will inspect the project first.', toolCalls: [], metrics })
+      .mockResolvedValueOnce({ content: 'I followed the new direction.', toolCalls: [], metrics });
+    const client = {
+      listModels: vi.fn(),
+      streamChat: vi.fn(),
+      checkModel: vi.fn(),
+      completeWithTools
+    } as unknown as ProviderClient;
+    let steeringTaken = false;
+    const onCommentary = vi.fn();
+    const runtime = new AgentRuntime(
+      client,
+      WORKSPACE_ROOT,
+      async () => true,
+      () => undefined,
+      false,
+      [],
+      { allow: [], deny: [] },
+      undefined,
+      '',
+      [],
+      undefined,
+      [],
+      undefined,
+      true,
+      undefined,
+      180_000,
+      () => {
+        if (steeringTaken || completeWithTools.mock.calls.length < 1) return [];
+        steeringTaken = true;
+        return ['Only update the backend.'];
+      }
+    );
+
+    await runtime.run('Explain the project', 'test-model', {
+      onDelta: vi.fn(),
+      onStatus: vi.fn(),
+      onCommentary
+    });
+
+    const secondMessages = completeWithTools.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
+    expect(secondMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'user', content: expect.stringContaining('Only update the backend.') })
+    ]));
+    expect(onCommentary).toHaveBeenCalledWith(expect.stringContaining('Đã nhận chỉ dẫn điều hướng'));
+  });
+});
+
 describe('AgentRuntime completion verification', () => {
   it('normalizes function-call turns for strict Gemini-compatible gateways', () => {
     const messages: Array<Record<string, unknown>> = [
@@ -219,6 +270,28 @@ describe('AgentRuntime completion verification', () => {
     await runtime.run('Trả lời ngay trong chat', 'test-model', { onDelta: (delta) => deltas.push(delta), onStatus: vi.fn() });
 
     expect(deltas).toEqual(['Đoạn đầu ', 'đoạn sau.']);
+  });
+
+  it('does not duplicate streamed tool-step narration as separate commentary', async () => {
+    const streamedNarration = 'Mình đã kiểm tra cấu trúc workspace và sẽ cập nhật đúng file cần thiết, sau đó kiểm tra lại kết quả để bảo đảm thay đổi hoàn tất.';
+    const completeWithTools = vi.fn().mockImplementation(async (_model, _messages, _tools, _signal, onProgress) => {
+      if (completeWithTools.mock.calls.length === 1) {
+        onProgress?.({ type: 'content', content: streamedNarration });
+        return { content: streamedNarration, toolCalls: [{ id: 'inspect-1', name: 'made_up_tool', arguments: '{}' }], metrics };
+      }
+      return { content: 'Đã kiểm tra xong.', toolCalls: [], metrics };
+    });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const onCommentary = vi.fn();
+    const onIntermediateStep = vi.fn();
+    const onDelta = vi.fn();
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Inspect this workspace', 'test-model', { onDelta, onStatus: vi.fn(), onCommentary, onIntermediateStep });
+
+    expect(onCommentary).not.toHaveBeenCalled();
+    expect(onIntermediateStep).toHaveBeenCalledWith(streamedNarration);
+    expect(onDelta).toHaveBeenCalledWith(streamedNarration);
   });
 
   it('bounds verbose model narration and keeps the final outcome', () => {

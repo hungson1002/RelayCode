@@ -273,7 +273,7 @@ function accountCard(account: QuotaAccount): string {
   }, Number.MAX_SAFE_INTEGER);
   const rows = account.quotas.map((item) => quotaRow(item, account.provider)).join('');
   return `<article class="account" data-account="${safe(account.id)}" data-provider="${safe(account.provider)}" data-name="${safe(account.name.toLowerCase())}" data-remaining="${minimum}" data-reset="${reset}">
-  <header class="account-head">${brandMarkup(brandKeyFor(account.provider), providerName(account.provider), 'account-brand')}<div class="account-name"><strong>${safe(providerName(account.provider))}</strong><span title="${safe(account.email || account.name)}">${safe(account.email || account.name)}</span></div>${account.plan ? `<span class="plan">${safe(account.plan)}</span>` : '<span></span>'}<span class="state${account.active ? '' : ' off'}">${account.active ? 'Đang bật' : 'Đã tắt'}</span></header>
+  <header class="account-head">${brandMarkup(brandKeyFor(account.provider), providerName(account.provider), 'account-brand')}<div class="account-name"><strong>${safe(providerName(account.provider))}</strong><span>${safe(account.email || account.name)}</span></div>${account.plan ? `<span class="plan">${safe(account.plan)}</span>` : '<span></span>'}<span class="state${account.active ? '' : ' off'}">${account.active ? 'Đang bật' : 'Đã tắt'}</span></header>
   ${rows ? '<div class="quota-columns"><span>Model</span><span>Hạn mức còn lại</span><span>Chu kỳ</span></div><div class="quota-list">' + rows + '</div>' : `<div class="account-error">${safe(account.error || 'Tài khoản chưa trả dữ liệu hạn mức.')}</div>`}
   ${rows && account.error ? `<div class="account-error">${safe(account.error)}</div>` : ''}</article>`;
 }
@@ -289,7 +289,7 @@ function quotaRow(item: QuotaItem, provider: string): string {
   const modelKey = brandKeyFor(`${item.id} ${item.name}`, provider);
   const level = !known ? 'unknown' : percent <= 15 ? 'critical' : percent <= 40 ? 'low' : 'healthy';
   const gaugeValue = item.unlimited ? 100 : known ? percent : 0;
-  return `<div class="quota-row" data-model="${safe(item.id)}"><div class="model">${brandMarkup(modelKey, item.name, 'model-brand')}<div class="model-copy"><strong title="${safe(item.name)}">${safe(item.name)}</strong><span>${safe(providerName(provider))}</span></div></div><div class="quota-meter"><div class="quota-numbers"><span>${safe(detail)}</span><b>${item.unlimited ? 'Không giới hạn' : known ? `${percent}% còn lại` : item.used !== undefined ? 'Đã ghi nhận sử dụng' : 'Chưa có dữ liệu'}</b></div><progress class="quota-gauge ${level}" max="100" value="${gaugeValue}" aria-label="${known ? `${percent}% hạn mức còn lại` : 'Chưa có dữ liệu hạn mức'}">${gaugeValue}%</progress></div><div class="reset"><span>Reset</span><strong>${item.resetAt ? safe(relativeTime(Date.parse(item.resetAt))) : 'Không có lịch'}</strong></div></div>`;
+  return `<div class="quota-row" data-model="${safe(item.id)}"><div class="model">${brandMarkup(modelKey, item.name, 'model-brand')}<div class="model-copy"><strong>${safe(item.name)}</strong><span>${safe(providerName(provider))}</span></div></div><div class="quota-meter"><div class="quota-numbers"><span>${safe(detail)}</span><b>${item.unlimited ? 'Không giới hạn' : known ? `${percent}% còn lại` : item.used !== undefined ? 'Đã ghi nhận sử dụng' : 'Chưa có dữ liệu'}</b></div><progress class="quota-gauge ${level}" max="100" value="${gaugeValue}" aria-label="${known ? `${percent}% hạn mức còn lại` : 'Chưa có dữ liệu hạn mức'}">${gaugeValue}%</progress></div><div class="reset"><span>Reset</span><strong>${item.resetAt ? safe(relativeTime(Date.parse(item.resetAt))) : 'Không có lịch'}</strong></div></div>`;
 }
 
 function stateNotice(quota: QuotaSnapshot, provider: string): string {
@@ -362,7 +362,7 @@ function aggregate(records: TelemetryRecord[]): ModelStats[] {
 function requestRow(item: ModelStats): string {
   const average = item.calls ? Math.round(item.latency / item.calls) : 0;
   const key = brandKeyFor(item.model, item.provider);
-  return `<div class="request-row"><div class="request-model">${brandMarkup(key, item.model, 'request-brand')}<span><strong title="${safe(item.model)}">${safe(item.model)}</strong><small>${number(item.calls)} request · ${safe(providerName(item.provider))}</small></span></div><span>${safe(item.profile)}</span><b>${compact(item.tokens)} tok</b><em>${number(average)} ms</em></div>`;
+  return `<div class="request-row"><div class="request-model">${brandMarkup(key, item.model, 'request-brand')}<span><strong>${safe(item.model)}</strong><small>${number(item.calls)} request · ${safe(providerName(item.provider))}</small></span></div><span>${safe(item.profile)}</span><b>${compact(item.tokens)} tok</b><em>${number(average)} ms</em></div>`;
 }
 
 function metric(value: string, label: string, className = '', icon: UiIconName = 'pulse'): string {

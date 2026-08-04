@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { relative, resolve } from 'node:path';
-import { AgentRuntime } from './agentRuntime';
+import { AgentRuntime, compactProgressCommentary } from './agentRuntime';
 import { normalizeEndpoint } from './routerClient';
 import { localizeProviderError } from './providerErrorMessages';
 import { smartSessionTitle } from './sessionTitle';
@@ -33,6 +33,7 @@ const API_KEY_SECRET = 'nineRouter.apiKey';
 const DISCONNECTED_STATE = 'nineRouter.manuallyDisconnected';
 const DEFAULT_MODEL_STATE = 'nineRouter.defaultModel';
 const PERMISSION_MODE_STATE = 'nineRouter.permissionMode';
+const COMPOSER_PREFERENCES_STATE = 'nineRouter.composerPreferences';
 const CHAT_SESSIONS_STATE = 'nineRouter.chatSessions';
 const PROVIDER_KIND_STATE = 'nineRouter.providerKind';
 const PENDING_CHANGES_STATE = 'nineRouter.pendingChanges';
@@ -78,6 +79,13 @@ interface StoredSession {
   turns: StoredTurn[];
   activeSkills?: string[];
   summary?: string;
+}
+
+interface StoredComposerPreferences {
+  lastMode?: ChatMode;
+  models?: Partial<Record<ChatMode, string>>;
+  reasoningEffort?: ReasoningEffort;
+  serviceTier?: 'default' | 'fast';
 }
 
 function textOnlyContent(content: ChatMessage['content']): string {
@@ -147,6 +155,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private models: RouterModel[] = [];
   private history: ChatMessage[] = [];
   private abortController: AbortController | undefined;
+  private activeRunMode: ChatMode | undefined;
+  private pendingSteering: string[] = [];
   private stopGeneration = 0;
   private routerProcess = new RouterProcessManager();
   private pendingAttachments: Array<{ path: string; name: string; mimeType: string; size: number }> = [];
@@ -224,7 +234,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.view = view;
     this.webviewInitialized = false;
     if (this.webviewStartupTimer) clearTimeout(this.webviewStartupTimer);
-    view.webview.options = { enableScripts: true };
+    view.webview.options = { enableScripts: true, localResourceRoots: [this.context.globalStorageUri] };
     // Register the bridge before assigning HTML. Antigravity can execute a
     // webview immediately, so installing the listener afterwards may lose the
     // one-shot `ready` message and leave provider/model state uninitialized.
@@ -361,6 +371,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           hasApiKey: Boolean(await this.profileStore.apiKey(profile))
           ,defaultModel: this.context.globalState.get(DEFAULT_MODEL_STATE, '')
           ,permissionMode: this.context.globalState.get(PERMISSION_MODE_STATE, 'ask')
+          ,composerPreferences: this.composerPreferences()
           ,provider: this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router')
           ,profiles: this.profileStore.list()
           ,activeProfileId: profile.id
@@ -536,6 +547,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       } else if (message.type === 'setPermissionMode') {
         await this.context.globalState.update(PERMISSION_MODE_STATE, message.mode);
         await this.post({ type: 'permissionMode', mode: message.mode });
+      } else if (message.type === 'saveComposerPreferences') {
+        const preferences = this.composerPreferences();
+        if (message.rememberMode && message.mode) preferences.lastMode = message.mode;
+        if (message.mode && message.model?.trim()) {
+          preferences.models = { ...(preferences.models ?? {}), [message.mode]: message.model.trim() };
+        }
+        if (message.reasoningEffort) preferences.reasoningEffort = message.reasoningEffort;
+        if (message.serviceTier) preferences.serviceTier = message.serviceTier;
+        await this.context.globalState.update(COMPOSER_PREFERENCES_STATE, preferences);
+        await this.post({ type: 'composerPreferences', preferences });
       } else if (message.type === 'setLanguage') {
         await vscode.workspace.getConfiguration('nineRouter').update('language', message.language, vscode.ConfigurationTarget.Global);
         // Keep the current webview mounted. Reassigning `.html` here drops the
@@ -555,6 +576,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.connect(message.endpoint, message.apiKey, message.model, message.provider, message.profileId, message.profileName, message.inputPricePerMillion, message.outputPricePerMillion);
       } else if (message.type === 'diagnostics') {
         await this.diagnostics(message);
+      } else if (message.type === 'steerTurn') {
+        if (!this.abortController || this.activeRunMode !== 'agent') {
+          await this.post({
+            type: 'uiToast',
+            message: {
+              vi: 'Không có Agent đang chạy để điều hướng.',
+              en: 'No Agent is currently running to steer.'
+            },
+            tone: 'warning'
+          });
+          return;
+        }
+        this.pendingSteering.push(message.prompt.trim());
+        await this.post({
+          type: 'uiToast',
+          message: {
+            vi: 'Đã nhận chỉ dẫn điều hướng; Agent sẽ áp dụng ở bước an toàn tiếp theo.',
+            en: 'Steering instruction received; Agent will apply it at the next safe step.'
+          },
+          tone: 'success'
+        });
       } else if (message.type === 'stopTurn') {
         this.stopActiveTurn();
       } else if (message.type === 'startRouter') {
@@ -725,6 +767,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private async refreshSkills(): Promise<void> {
     this.skills = await discoverSkills(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
     await this.post({ type: 'skills', skills: this.skills.map(({ name, description, source }) => ({ name, description, source })) });
+  }
+
+  private composerPreferences(): StoredComposerPreferences {
+    const stored = this.context.globalState.get<StoredComposerPreferences>(COMPOSER_PREFERENCES_STATE, {});
+    const models: Partial<Record<ChatMode, string>> = {};
+    for (const candidate of ['chat', 'agent', 'plan'] as const) {
+      const model = stored?.models?.[candidate];
+      if (typeof model === 'string' && model.length <= 300) models[candidate] = model;
+    }
+    return {
+      ...(stored?.lastMode && ['chat', 'agent', 'plan'].includes(stored.lastMode) ? { lastMode: stored.lastMode } : {}),
+      ...(Object.keys(models).length ? { models } : {}),
+      ...(stored?.reasoningEffort && ['minimal', 'low', 'medium', 'high', 'xhigh'].includes(stored.reasoningEffort) ? { reasoningEffort: stored.reasoningEffort } : {}),
+      ...(stored?.serviceTier && ['default', 'fast'].includes(stored.serviceTier) ? { serviceTier: stored.serviceTier } : {})
+    };
   }
 
   private async refreshSkillsInBackground(): Promise<void> {
@@ -1507,6 +1564,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     const turnController = new AbortController();
     this.abortController = turnController;
+    this.activeRunMode = message.mode;
+    this.pendingSteering = [];
     this.currentTaskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const recent = this.context.globalState.get<string[]>(RECENT_MODELS_STATE, []);
     const nextRecent = [message.model, ...recent.filter((item) => item !== message.model)].slice(0, 8);
@@ -1523,10 +1582,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       + (message.mode === 'chat' && selectedSkillInstructions ? `\n\n${selectedSkillInstructions}` : '');
     const attachmentViews = await this.attachmentViews(attachments);
     const selectedModelSupportsVision = this.models.find((item) => item.id === message.model)?.capabilities?.vision === true;
-    const requestContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.preview)
+    const requestContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.modelPreview)
       ? [
           { type: 'text', text: enrichedPrompt },
-          ...attachmentViews.flatMap((item) => item.preview ? [{ type: 'image_url' as const, image_url: { url: item.preview } }] : [])
+          ...attachmentViews.flatMap((item) => item.modelPreview ? [{ type: 'image_url' as const, image_url: { url: item.modelPreview } }] : [])
         ]
       : enrichedPrompt;
     const startedAt = Date.now();
@@ -1658,7 +1717,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           await this.post({ type: 'status', message: 'Đã nhận kết quả web · đang hỏi model' });
         }
         const candidates = rankedModelsForMode(message.mode, message.model, this.models, config.get<string[]>('fallbackModels', []));
-        let usedModel = message.model;
         let lastError: unknown;
         for (const candidate of candidates) {
           const candidateController = new AbortController();
@@ -1674,7 +1732,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             timeout = setTimeout(() => candidateController.abort(new Error(`Provider không phản hồi trong ${inactivitySeconds} giây.`)), inactivitySeconds * 1_000);
           };
           try {
-            usedModel = candidate;
             touchActivity();
             heartbeat = setInterval(() => {
               const waitingSeconds = Math.floor((Date.now() - lastActivityAt) / 1_000);
@@ -1707,10 +1764,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               ? candidateController.signal.reason
               : error;
             if (answer.trim() || candidate === candidates[candidates.length - 1]) throw lastError;
-            answer = '';
             const nextModel = candidates[candidates.indexOf(candidate) + 1]!;
             if (!await this.approveFallback(candidate, nextModel)) throw lastError;
-            await this.post({ type: 'status', message: `Model ${candidate} lỗi · đang chuyển sang model dự phòng` });
+            answer = '';
+            await this.post({ type: 'status', message: `Model ${candidate} lỗi · đang chuyển sang model dự phòng ${nextModel}` });
           } finally {
             if (timeout) clearTimeout(timeout);
             if (heartbeat) clearInterval(heartbeat);
@@ -1718,7 +1775,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           }
         }
         if (lastError) throw lastError;
-        if (usedModel !== message.model) await this.post({ type: 'notice', message: `Đã tự chuyển sang model dự phòng \`${usedModel}\`.` });
         const citations = formatWebCitations(webSearchResults);
         if (citations) onDelta(citations);
         answer = answer.trim();
@@ -1755,10 +1811,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           selectedSkillInstructions,
           sessionSummaryForPrompt(this.sessionSummary)
         ].filter(Boolean).join('\n\n');
-        const agentContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.preview)
+        const agentContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.modelPreview)
           ? [
               { type: 'text', text: contextualPrompt },
-              ...attachmentViews.flatMap((item) => item.preview ? [{ type: 'image_url' as const, image_url: { url: item.preview } }] : [])
+              ...attachmentViews.flatMap((item) => item.modelPreview ? [{ type: 'image_url' as const, image_url: { url: item.modelPreview } }] : [])
             ]
           : contextualPrompt;
         const agentPrompt = config.get<boolean>('planBeforeRun', false) && message.mode === 'agent'
@@ -1768,7 +1824,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           : agentContent;
         const runtimePrompt = agentPrompt;
         const candidates = rankedModelsForMode(message.mode, message.model, this.models, config.get<string[]>('fallbackModels', []));
-        const changeCountBeforeRun = this.changes.size;
+        let latestCheckpoint = resumeCheckpoint;
         const inactivitySeconds = Math.max(60, config.get<number>('agentInactivityTimeoutSeconds', 180));
         for (const candidate of candidates) {
           let timeout: NodeJS.Timeout | undefined;
@@ -1832,7 +1888,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 : undefined,
               config.get<boolean>('autoValidateChanges', true),
               codexTuning,
-              inactivitySeconds * 1_000
+              inactivitySeconds * 1_000,
+              () => {
+                const steering = this.pendingSteering;
+                this.pendingSteering = [];
+                return steering;
+              }
             ).run(runtimePrompt, candidate, {
               onDelta: (delta) => {
                 touchActivity();
@@ -1841,6 +1902,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               onCommentary: (content) => {
                 touchActivity();
                 if (message.mode !== 'plan') void this.post({ type: 'commentary', content });
+              },
+              onIntermediateStep: (content) => {
+                touchActivity();
+                answer = '';
+                void this.persistActiveRun({ ...activeRun, answer: '' }, runGeneration);
+                if (message.mode !== 'plan') void this.post({ type: 'intermediateStep', content: compactProgressCommentary(content || '') });
               },
               onActivityComplete: () => {
                 if (message.mode !== 'plan') void this.post({ type: 'activityComplete' });
@@ -1864,21 +1931,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               },
               onCheckpoint: async (checkpoint) => {
                 touchActivity();
+                latestCheckpoint = checkpoint;
                 activeRun.checkpoint = checkpoint;
                 activeRun.model = checkpoint.model;
                 activeRun.answer = answer;
                 await this.persistActiveRun({ ...activeRun }, runGeneration);
               }
-            }, candidateController.signal, resumeCheckpoint);
+            }, candidateController.signal, latestCheckpoint);
             await Promise.race([run, inactivityTimeout]);
-            if (candidate !== message.model) await this.post({ type: 'notice', message: `Agent đã tự chuyển sang model dự phòng \`${candidate}\`.` });
             break;
           } catch (error) {
-            const canRetry = !answer && this.changes.size === changeCountBeforeRun && candidate !== candidates[candidates.length - 1];
+            const canRetry = !answer.trim() && candidate !== candidates[candidates.length - 1];
             if (!canRetry) throw error;
             const nextModel = candidates[candidates.indexOf(candidate) + 1]!;
             if (!await this.approveFallback(candidate, nextModel)) throw error;
-            await this.post({ type: 'status', message: `Model ${candidate} lỗi · đang chuyển sang model dự phòng` });
+            answer = '';
+            activeRun.model = nextModel;
+            activeRun.answer = '';
+            activeRun.checkpoint = latestCheckpoint;
+            if (message.mode !== 'plan') await this.post({ type: 'intermediateStep', content: '' });
+            await this.persistActiveRun({ ...activeRun }, runGeneration);
+            await this.post({ type: 'status', message: `Model ${candidate} lỗi · đang chuyển sang model dự phòng ${nextModel}` });
           } finally {
             if (timeout) clearTimeout(timeout);
             if (heartbeat) clearInterval(heartbeat);
@@ -1978,6 +2051,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }
     } finally {
       if (this.abortController === turnController) this.abortController = undefined;
+      if (this.activeRunMode === message.mode) this.activeRunMode = undefined;
+      this.pendingSteering = [];
+      // The webview receives turnEnd before this cleanup finishes. Signal the
+      // queue only after the provider is ready to accept the next request.
+      void this.post({ type: 'turnReady' });
     }
   }
 
@@ -2838,16 +2916,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     await this.post({ type: 'sessions', sessions: [] });
   }
 
-  private async attachmentViews(attachments: Array<{ path: string; name: string; mimeType: string; size: number }>): Promise<Array<{ name: string; preview?: string }>> {
+  private async attachmentViews(attachments: Array<{ path: string; name: string; mimeType: string; size: number }>): Promise<Array<{ name: string; preview?: string; modelPreview?: string }>> {
     return Promise.all(attachments.map(async (item) => {
       const extension = item.path.split('.').pop()?.toLowerCase() ?? '';
-      const mime = item.mimeType.startsWith('image/')
-        ? item.mimeType
-        : extension === 'png' ? 'image/png' : ['jpg', 'jpeg'].includes(extension) ? 'image/jpeg' : extension === 'webp' ? 'image/webp' : extension === 'gif' ? 'image/gif' : '';
+      const extensionMime = extension === 'png'
+        ? 'image/png'
+        : ['jpg', 'jpeg'].includes(extension)
+          ? 'image/jpeg'
+          : extension === 'webp'
+            ? 'image/webp'
+            : extension === 'gif'
+              ? 'image/gif'
+              : '';
+      // `pickFiles()` uses image/* as a broad hint. It is not a valid
+      // image media type in a data URL, so prefer the concrete extension.
+      const declaredMime = String(item.mimeType || '').toLowerCase();
+      const mime = declaredMime.startsWith('image/') && declaredMime !== 'image/*'
+        ? declaredMime
+        : extensionMime;
       if (!mime || !item.path || item.size > 5 * 1024 * 1024) return { name: item.name };
       try {
-        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(item.path));
-        return { name: item.name, preview: `data:${mime};base64,${Buffer.from(bytes).toString('base64')}` };
+        const fileUri = vscode.Uri.file(item.path);
+        const bytes = await vscode.workspace.fs.readFile(fileUri);
+        const modelPreview = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
+        // Keep the preview self-contained. A workspace or pasted image can
+        // live outside the webview's localResourceRoots, while data: URLs are
+        // explicitly allowed by the chat CSP and also survive transcript restore.
+        return { name: item.name, preview: modelPreview, modelPreview };
       } catch {
         return { name: item.name };
       }

@@ -307,12 +307,28 @@ export class AgentRuntime {
     private readonly recoverProvider?: () => Promise<void>,
     private readonly autoValidateChanges = true,
     private readonly requestTuning?: RequestTuning,
-    private readonly modelInactivityTimeoutMs = 180_000
+    private readonly modelInactivityTimeoutMs = 180_000,
+    private readonly consumeSteering?: () => string[]
   ) {}
   private mutationPreparation: Promise<void> | undefined;
   private readonly mutatedPaths = new Set<string>();
   private commandMutationCount = 0;
   private currentStepStreamed = false;
+
+  private takeSteeringInstructions(): string[] {
+    return (this.consumeSteering?.() ?? [])
+      .map((instruction) => instruction.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+
+  private steeringMessage(instructions: string[]): string {
+    return [
+      'The user sent live steering instructions for the current Agent task.',
+      'Keep the same task and workspace context, apply these instructions from the next safe step, and do not start a separate task.',
+      ...instructions.map((instruction) => `- ${instruction}`)
+    ].join('\n');
+  }
 
   public async run(
     prompt: unknown,
@@ -389,6 +405,13 @@ export class AgentRuntime {
     };
     for (let step = resume?.step ?? 0; ; step++) {
       if (!pendingToolCalls.length) {
+        const steering = this.takeSteeringInstructions();
+        if (steering.length) {
+          messages.push({ role: 'user', content: this.steeringMessage(steering) });
+          callbacks.onStatus('Đã nhận chỉ dẫn điều hướng · Agent sẽ áp dụng ở bước tiếp theo');
+          callbacks.onCommentary?.(`Đã nhận chỉ dẫn điều hướng cho tác vụ hiện tại: ${steering.join(' · ')}`);
+          await checkpoint(step, 'Đã nhận chỉ dẫn điều hướng');
+        }
         this.compactMessages(messages);
         normalizeCompletedToolHistory(messages);
         const thinkingStatus = step ? 'Đang suy nghĩ bước tiếp theo' : 'Đang phân tích yêu cầu';
@@ -411,7 +434,8 @@ export class AgentRuntime {
         ) {
           const commands = await this.detectValidationCommands();
           if (commands.length) {
-            emitProgressCommentary(response.content);
+            if (this.currentStepStreamed) callbacks.onIntermediateStep?.(response.content);
+            else emitProgressCommentary(response.content);
             const validationResults: string[] = [];
             let validationFailed = false;
             for (const validation of commands) {
@@ -446,12 +470,22 @@ export class AgentRuntime {
             await checkpoint(step + 1, validationFailed ? 'Kiểm tra tự động thất bại · Agent đang sửa lỗi' : 'Kiểm tra tự động đã hoàn thành');
             continue;
           }
-        }
-        if (mutationRequired && successfulMutations === 0) {
+          }
+          const steering = this.takeSteeringInstructions();
+          if (steering.length) {
+            messages.push({ role: 'assistant', content: response.content || null });
+            messages.push({ role: 'user', content: this.steeringMessage(steering) });
+            callbacks.onStatus('Đã nhận chỉ dẫn điều hướng · Agent sẽ áp dụng ở bước tiếp theo');
+            callbacks.onCommentary?.(`Đã nhận chỉ dẫn điều hướng cho tác vụ hiện tại: ${steering.join(' · ')}`);
+            await checkpoint(step + 1, 'Đã nhận chỉ dẫn điều hướng');
+            continue;
+          }
+          if (mutationRequired && successfulMutations === 0) {
           completionWithoutActionCount++;
           if (completionWithoutActionCount >= 3) {
             throw new Error('Agent chưa tạo hoặc sửa file nào sau 3 lần yêu cầu thực hiện. Model hiện tại có thể không hỗ trợ tool calling ổn định; hãy thử model Agent/agentic khác.');
           }
+          if (this.currentStepStreamed) callbacks.onIntermediateStep?.(response.content);
           messages.push({ role: 'assistant', content: response.content || null });
           messages.push({
             role: 'user',
@@ -468,7 +502,8 @@ export class AgentRuntime {
         callbacks.onStatus('Hoàn tất');
         return;
         }
-        emitProgressCommentary(response.content);
+        if (this.currentStepStreamed) callbacks.onIntermediateStep?.(response.content);
+        else emitProgressCommentary(response.content);
         messages.push({
           role: 'assistant',
           content: response.content || null,

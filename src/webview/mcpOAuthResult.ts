@@ -59,7 +59,6 @@ export function renderMcpOAuthResult(options: McpOAuthResultOptions): string {
     button svg{width:15px;height:15px}
     .foot{margin:15px 2px 0;color:#606a66;font:10px/1.5 "Cascadia Code","SFMono-Regular",monospace;text-align:center}
     @media(max-width:560px){body{place-items:end center;padding:16px}.secure{display:none}.brand{margin-bottom:12px}.card{border-radius:20px}.bridge{padding:22px 22px 20px}.content{padding:25px 24px 26px}.endpoint{width:43px;height:43px;border-radius:13px}}
-    @media(prefers-reduced-motion:reduce){button{transition:none}}
   </style>
 </head>
 <body class="${tone}">
@@ -75,7 +74,7 @@ export function renderMcpOAuthResult(options: McpOAuthResultOptions): string {
       <div class="bridge" aria-label="RelayCode to ${name}">
         <div class="endpoint">RC</div>
         <div class="route"><span>MCP</span></div>
-        <div class="endpoint service" title="${name}">${serviceIcon}</div>
+        <div class="endpoint service" aria-label="${name}">${serviceIcon}</div>
       </div>
       <div class="content">
         <div class="status"><span class="status-mark">${options.ok ? '✓' : '!'}</span><span>${escapeHtml(copy.eyebrow)}</span></div>

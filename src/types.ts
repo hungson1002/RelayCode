@@ -33,6 +33,7 @@ export interface ChatMessage {
 
 export interface StreamCallbacks {
   onDelta(delta: string): void;
+  onIntermediateStep?(content?: string): void;
   onStatus(status: string): void;
   onCommentary?(content: string): void;
   onActivityComplete?(): void;
