@@ -1,4 +1,4 @@
-import type { ChatMessage, ConnectionConfig, RequestMetrics, RequestTuning, RouterModel } from './types';
+import type { ChatMessage, ChatMode, ConnectionConfig, RequestMetrics, RequestTuning, RouterModel } from './types';
 import type { ToolCompletionProgress } from './provider';
 import { sanitizeModelText } from './modelText';
 
@@ -250,7 +250,29 @@ export class RouterClient {
     return requestMetrics(startedAt, response.headers, usage?.prompt_tokens ?? estimateTokens(messages), usage?.completion_tokens ?? estimateTokens(output), !usage);
   }
 
-  public async checkModel(model: string, signal?: AbortSignal): Promise<RequestMetrics> {
+  public async checkModel(model: string, signal?: AbortSignal, mode?: ChatMode): Promise<RequestMetrics> {
+    if (mode === 'chat' || mode === 'plan') {
+      let output = '';
+      return this.streamChat(
+        model,
+        [{ role: 'user', content: 'Reply with OK only.' }],
+        (delta) => { output += delta; },
+        signal
+      ).then((metrics) => {
+        if (!output.trim()) throw new Error('Model kết thúc luồng nhưng không trả về nội dung.');
+        return metrics;
+      });
+    }
+    if (mode === 'agent') {
+      const result = await this.completeWithTools(
+        model,
+        [{ role: 'user', content: 'Call the relaycode_probe tool exactly once with an empty object. Do not answer with text.' }],
+        [{ type: 'function', function: { name: 'relaycode_probe', description: 'A harmless RelayCode capability probe.', parameters: { type: 'object', properties: {} } } }],
+        signal
+      );
+      if (!result.toolCalls.length) throw new Error('Model phản hồi Chat nhưng không trả về tool-call cho Agent.');
+      return result.metrics;
+    }
     const startedAt = Date.now();
     const messages = [{ role: 'user', content: 'hi' }];
     const completionLimit = /^(gpt-5|o[1-4])/.test(model) && this.config.endpoint.includes('api.openai.com')

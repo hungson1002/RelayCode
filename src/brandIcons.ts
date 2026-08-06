@@ -52,6 +52,7 @@ function simpleIcon(icon: { title: string; path: string; hex: string }, color = 
 }
 
 export const BRAND_ICONS: Record<string, string> = {
+  omniroute: `<svg role="img" aria-label="OmniRoute" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="6" cy="6" r="2.25" fill="currentColor"/><circle cx="18" cy="6" r="2.25" fill="currentColor"/><circle cx="12" cy="18" r="2.25" fill="currentColor"/><path d="M8.2 7.1 10.8 16M15.8 7.1 13.2 16M8.3 6h7.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`,
   '9router': nineRouterSvg,
   antigravity: antigravitySvg,
   anthropic: anthropicSvg,

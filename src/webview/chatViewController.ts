@@ -165,6 +165,7 @@ let currentProfileId = '';
 let savedProfileId = '';
 let profiles = [];
 let modelHealth = {};
+let modelHealthMode = '';
 let allSessions = [];
 let historyExpanded = false;
 let changesHidden = false;
@@ -204,7 +205,9 @@ let activeGoal = null;
 let reasoningEffort = 'medium';
 let serviceTier = 'default';
 let latestTelemetryRecords = [];
+let modelsProvider = '';
 const providerMeta = {
+  omniroute: { brand: 'omniroute', label: 'OmniRoute', hint: 'Gateway local · tự động định tuyến', endpoint: 'http://127.0.0.1:20128/v1', keyLabel: 'OmniRoute API key (optional)', local: false },
   '9router': { brand: '9router', label: '9Router', hint: 'Gateway local, nhiều model', endpoint: 'http://127.0.0.1:20128/v1', keyLabel: '9Router API key', local: false },
   cockpit: { brand: 'cockpit', label: 'Cockpit Tools', hint: 'Gateway local · nhiều tài khoản', endpoint: 'http://127.0.0.1:1455/v1', keyLabel: 'Cockpit Client Key', local: false },
   opencode: { brand: 'opencode', label: 'OpenCode', hint: 'OpenCode Zen · OpenAI-compatible', endpoint: 'https://opencode.ai/zen/v1', keyLabel: 'OpenCode API key', local: false },
@@ -218,6 +221,7 @@ const providerMeta = {
 // Static shell labels are translated in place so changing language never
 // requires replacing the webview document.
 const liveLanguagePairs = [
+  ['Gateway local · tự động định tuyến', 'Local gateway · automatic routing'],
   ['Kết nối provider', 'Connect provider'], ['Kết nối', 'Connect'], ['Lịch sử chat', 'Chat history'],
   ['Lịch sử', 'History'], ['Số liệu sử dụng', 'Usage metrics'], ['Số liệu', 'Usage'], ['Cài đặt', 'Settings'],
   ['Đóng', 'Close'], ['Xóa tất cả', 'Clear all'], ['Hoạt động provider', 'Provider activity'],
@@ -292,6 +296,12 @@ function applyLanguageUi() {
   $('checkModels').textContent = checkingModels
     ? uiCopy('Đang kiểm tra · Bấm để hủy', 'Checking · Click to cancel')
     : uiCopy('Kiểm tra model', 'Check models');
+  $('imageLightbox').setAttribute('aria-label', uiCopy('Xem ảnh', 'Image viewer'));
+  $('imageLightbox').querySelector('[role="toolbar"]')?.setAttribute('aria-label', uiCopy('Điều khiển ảnh', 'Image controls'));
+  $('zoomOut').setAttribute('aria-label', uiCopy('Thu nhỏ', 'Zoom out'));
+  $('zoomIn').setAttribute('aria-label', uiCopy('Phóng to', 'Zoom in'));
+  $('resetZoom').textContent = uiCopy('Đặt lại', 'Reset');
+  $('closeImage').setAttribute('aria-label', uiCopy('Đóng ảnh', 'Close image'));
   renderModelMenu($('modelSearch').value);
   if (mcpPresetState.length || mcpServerState.length) renderMcpServers(mcpServerState, mcpPresetState);
   renderFollowUpQueue();
@@ -317,6 +327,20 @@ const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configP
 let activeUiDialog = null;
 let dialogReturnFocus = null;
 let queuedUiDialogs = [];
+if (!document.querySelector('#providerMenu [data-provider="omniroute"]')) {
+  const omniProviderOption = document.createElement('button');
+  omniProviderOption.type = 'button';
+  omniProviderOption.className = 'provider-option';
+  omniProviderOption.dataset.provider = 'omniroute';
+  omniProviderOption.innerHTML = '<span><strong>OmniRoute</strong><small>Gateway local · tự động định tuyến</small></span>';
+  $('providerMenu').prepend(omniProviderOption);
+}
+if (!document.querySelector('#configProvider option[value="omniroute"]')) {
+  const omniProviderSelectOption = document.createElement('option');
+  omniProviderSelectOption.value = 'omniroute';
+  omniProviderSelectOption.textContent = 'OmniRoute';
+  $('configProvider').prepend(omniProviderSelectOption);
+}
 document.querySelectorAll('#providerMenu .provider-option').forEach((option) => {
   const meta = providerMeta[option.dataset.provider] || providerMeta['9router'];
   const slot = document.createElement('span');
@@ -347,6 +371,7 @@ function closeDropdowns(except = null) {
     ['modeMenu', 'modePicker', 'modeTrigger'],
     ['modelMenu', 'modelPicker', 'modelTrigger'],
     ['providerMenu', 'providerPicker', 'providerTrigger'],
+    ['profileMenu', 'profilePicker', 'profileTrigger'],
     ['languageMenu', 'languagePicker', 'languageTrigger'],
     ['reasoningMenu', 'reasoningPicker', 'reasoningTrigger'],
     ['permMenu', 'permDropdown', 'permissionMode']
@@ -629,7 +654,13 @@ function saveComposerPreferences(preferences) {
 }
 
 function setMode(next, remember = false) {
+  const modeChanged = mode !== next;
   mode = next;
+  if (modeChanged) {
+    modelHealth = {};
+    modelHealthMode = next;
+    renderModelMenu($('modelSearch')?.value || '');
+  }
   $('modeLabel').textContent = mode === 'agent' ? 'Agent' : mode === 'plan' ? 'Plan' : 'Chat';
   document.querySelectorAll('#modeMenu [data-mode]').forEach((button) => {
     button.classList.toggle('active', button.dataset.mode === mode);
@@ -682,6 +713,19 @@ function applySmartModelForMode() {
   $('model').dispatchEvent(new Event('change'));
 }
 
+function clearModelSelectionForProviderSwitch() {
+  modelHealth = {};
+  modelHealthMode = '';
+  modelSelectionSource = 'auto';
+  lastAutoModel = '';
+  const select = $('model');
+  select.replaceChildren(new Option(uiCopy('Đang tải model…', 'Loading models…'), ''));
+  $('modelLabel').textContent = uiCopy('Đang tải model…', 'Loading models…');
+  $('modelBrand').innerHTML = '';
+  renderModelMenu('');
+  updateCodexTuning();
+}
+
 function updateConnectionBadge(providerName, state = 'checking') {
   const labels = language === 'en'
     ? { ready: 'Ready', running: 'Running', setup: 'Needs setup', recovering: 'Needs recovery', offline: 'Offline', checking: 'Checking' }
@@ -714,6 +758,7 @@ function requestBootstrap() {
 
 function providerHintCopy(kind, fallback) {
   const english = {
+    omniroute: 'Local gateway · automatic routing',
     '9router': 'Local gateway, many models',
     cockpit: 'Local gateway · multiple accounts',
     opencode: 'OpenCode Zen · OpenAI-compatible',
@@ -740,12 +785,14 @@ function setProvider(next, changeEndpoint = true, updateBadge = true) {
   $('providerLabel').textContent = meta.label;
   $('providerHint').textContent = providerHintCopy(next, meta.hint);
   $('setupProviderBadge').textContent = meta.label;
-  $('setupTitle').textContent = next === '9router' ? uiCopy('Mở 9Router.', 'Open 9Router.') : uiCopy('Kết nối ' + meta.label + '.', 'Connect ' + meta.label + '.');
+  $('setupTitle').textContent = next === '9router' || next === 'omniroute' ? uiCopy('Mở ' + meta.label + '.', 'Open ' + meta.label + '.') : uiCopy('Kết nối ' + meta.label + '.', 'Connect ' + meta.label + '.');
   $('setupCopy').textContent = next === '9router'
     ? uiCopy('Kiểm tra hoặc cài 9Router rồi mở bảng điều khiển. Không cần API key để mở trang quản lý.', 'Check or install 9Router, then open its dashboard. An API key is not required to open the management page.')
     : next === 'ollama' || next === 'lm-studio'
       ? uiCopy('Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.', 'A local provider needs no API key, but its app, model and API server must be running.')
-      : uiCopy('Mở Cài đặt để kiểm tra endpoint và API key của provider này.', 'Open Settings to check this provider endpoint and API key.');
+      : next === 'omniroute'
+        ? uiCopy('Mở dashboard OmniRoute để quản lý provider và model. OmniRoute phải đang chạy ở cổng 20128.', 'Open the OmniRoute dashboard to manage providers and models. OmniRoute must be running on port 20128.')
+        : uiCopy('Mở Cài đặt để kiểm tra endpoint và API key của provider này.', 'Open Settings to check this provider endpoint and API key.');
   $('setupEndpointLabel').textContent = $('configEndpoint').value.trim() || meta.endpoint || 'Chưa có endpoint';
   $('apiKeyLabel').textContent = meta.keyLabel;
   document.querySelectorAll('#providerMenu .provider-option').forEach(option => option.classList.toggle('active', option.dataset.provider === next));
@@ -754,6 +801,8 @@ function setProvider(next, changeEndpoint = true, updateBadge = true) {
    keyInput.placeholder = meta.local ? uiCopy('Provider local không dùng API key', 'Local providers do not use an API key') : uiCopy('Nhập key mới hoặc để trống để giữ key đã lưu', 'Enter a new key or leave blank to keep the saved key');
   $('apiKeyField').classList.toggle('local', meta.local);
   $('openCockpit').classList.toggle('hidden', next !== 'cockpit');
+  $('openOmniRoute').classList.toggle('hidden', next !== 'omniroute');
+  $('openOmniRoute').textContent = uiCopy('Mở OmniRoute', 'Open OmniRoute');
   if (previous !== next) {
     keyInput.value = '';
     $('diagnosticsResult').textContent = '';
@@ -780,7 +829,7 @@ function setProvider(next, changeEndpoint = true, updateBadge = true) {
     if (!current || !currentProfileId || previous !== next || isKnownProviderEndpoint(current)) $('configEndpoint').value = meta.endpoint;
   }
   $('setupEndpointLabel').textContent = $('configEndpoint').value.trim() || meta.endpoint || 'Chưa có endpoint';
-  $('startRouter').textContent = next === '9router' ? uiCopy('Mở 9Router', 'Open 9Router') : uiCopy('Kết nối ' + meta.label, 'Connect ' + meta.label);
+  $('startRouter').textContent = next === '9router' ? uiCopy('Mở 9Router', 'Open 9Router') : next === 'omniroute' ? uiCopy('Mở OmniRoute', 'Open OmniRoute') : uiCopy('Kết nối ' + meta.label, 'Connect ' + meta.label);
 }
 
 function isCodexTunableModel(model) {
@@ -838,7 +887,53 @@ function setPermissionMode(next) {
   });
 }
 
+let modelHealthTooltip = null;
+let modelHealthTooltipTarget = null;
+
+function hideModelHealthTooltip() {
+  modelHealthTooltip?.classList.remove('visible');
+  modelHealthTooltipTarget = null;
+}
+
+function positionModelHealthTooltip() {
+  if (!modelHealthTooltip || !modelHealthTooltipTarget || !modelHealthTooltip.classList.contains('visible')) return;
+  const targetRect = modelHealthTooltipTarget.getBoundingClientRect();
+  const tooltipRect = modelHealthTooltip.getBoundingClientRect();
+  const edge = 8;
+  const left = Math.max(edge, Math.min(window.innerWidth - tooltipRect.width - edge, targetRect.left + targetRect.width / 2 - tooltipRect.width / 2));
+  const above = targetRect.top - tooltipRect.height - edge >= edge;
+  const top = above ? targetRect.top - tooltipRect.height - edge : Math.min(window.innerHeight - tooltipRect.height - edge, targetRect.bottom + edge);
+  modelHealthTooltip.style.left = Math.round(left) + 'px';
+  modelHealthTooltip.style.top = Math.round(Math.max(edge, top)) + 'px';
+}
+
+function showModelHealthTooltip(target, message) {
+  if (!modelHealthTooltip) {
+    modelHealthTooltip = document.createElement('div');
+    modelHealthTooltip.className = 'model-health-tooltip';
+    modelHealthTooltip.setAttribute('role', 'tooltip');
+    document.body.append(modelHealthTooltip);
+  }
+  modelHealthTooltipTarget = target;
+  modelHealthTooltip.textContent = message;
+  modelHealthTooltip.classList.add('visible');
+  positionModelHealthTooltip();
+}
+
+window.addEventListener('resize', positionModelHealthTooltip);
+
+function scrollSelectedModelIntoView() {
+  const selected = $('modelOptions').querySelector('.model-option.active');
+  if (!selected) return;
+  window.requestAnimationFrame(() => {
+    if (!$('modelMenu').classList.contains('hidden')) {
+      selected.scrollIntoView({ block: 'center', behavior: 'auto' });
+    }
+  });
+}
+
 function renderModelMenu(query = '') {
+  hideModelHealthTooltip();
   const list = $('modelOptions'); list.replaceChildren();
   const needle = query.trim().toLowerCase();
   const rankingFavorites = $('modelMenu').classList.contains('hidden') ? favoriteModels : favoriteModelsAtMenuOpen;
@@ -850,10 +945,30 @@ function renderModelMenu(query = '') {
       return leftRank - rightRank || left.text.localeCompare(right.text);
     });
   for (const option of options) {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option'; button.setAttribute('role', 'option');
+    const selected = option.value === $('model').value;
     const healthStatus = modelHealth[option.value]?.status || '';
     const icon = document.createElement('span'); icon.className = 'model-brand'; icon.innerHTML = brandIcon(brandKey(option.value, activeProvider), option.text);
-    const health = document.createElement('span'); health.className = 'model-health ' + healthStatus; health.setAttribute('aria-label', healthStatus === 'ok' ? uiCopy('Model hoạt động', 'Model available') : healthStatus === 'limited' ? uiCopy('Model đang bị giới hạn tạm thời', 'Model temporarily rate-limited') : healthStatus === 'error' ? uiCopy('Model không khả dụng', 'Model unavailable') : healthStatus === 'checking' ? uiCopy('Đang kiểm tra model', 'Checking model') : uiCopy('Chưa kiểm tra', 'Not checked'));
+    const healthHint = healthStatus === 'ok'
+      ? uiCopy('Model đã phản hồi đúng theo chế độ hiện tại.', 'The model responded correctly for the current mode.')
+      : healthStatus === 'limited'
+        ? uiCopy('! Model bị timeout hoặc rate limit tạm thời; không có nghĩa là model hỏng. Hãy thử lại sau.', '! The model timed out or was rate-limited temporarily; this does not necessarily mean it is broken. Try again later.')
+        : healthStatus === 'error'
+          ? mode === 'agent'
+            ? uiCopy('Model không trả về tool-call Agent. Model có thể vẫn dùng được ở Chat.', 'No Agent tool-call was returned. This model may still work in Chat mode.')
+            : uiCopy('Model không phản hồi đúng theo chế độ hiện tại.', 'The model did not respond correctly for the current mode.')
+          : healthStatus === 'checking'
+            ? uiCopy('Đang kiểm tra model…', 'Checking model…')
+            : uiCopy('Chưa kiểm tra model.', 'Model has not been checked.');
+    const health = document.createElement('span'); health.className = 'model-health has-glyph';
+    const healthGlyph = document.createElement('span'); healthGlyph.className = 'model-health-glyph ' + healthStatus;
+    healthGlyph.textContent = healthStatus === 'ok' ? '✓' : healthStatus === 'error' ? '×' : healthStatus === 'limited' ? '!' : '';
+    healthGlyph.setAttribute('aria-label', healthHint); healthGlyph.tabIndex = 0;
+    healthGlyph.addEventListener('mouseenter', () => showModelHealthTooltip(healthGlyph, healthHint));
+    healthGlyph.addEventListener('mouseleave', hideModelHealthTooltip);
+    healthGlyph.addEventListener('focus', () => showModelHealthTooltip(healthGlyph, healthHint));
+    healthGlyph.addEventListener('blur', hideModelHealthTooltip);
+    health.append(healthGlyph);
     const label = document.createElement('span'); label.className = 'model-option-label'; label.textContent = option.text;
     const meta = document.createElement('small'); meta.className = 'model-option-meta';
     const healthMessage = modelHealth[option.value]?.message || '';
@@ -861,7 +976,9 @@ function renderModelMenu(query = '') {
     meta.textContent = healthStatus === 'limited'
       ? uiCopy('Tạm giới hạn · thử lại sau', 'Temporarily limited · retry later')
       : healthStatus === 'error'
-        ? uiCopy('Kiểm tra không thành công', 'Check failed')
+        ? mode === 'agent'
+          ? uiCopy('Agent tool-call không thành công', 'Agent tool-call failed')
+          : uiCopy('Kiểm tra không thành công', 'Check failed')
         : option.dataset.tools === 'false'
           ? 'Chat only'
           : (option.dataset.reasoning === 'true' ? uiCopy('Agent · reasoning', 'Agent · reasoning') : 'Agent') + (latency ? ' · ' + latency + ' ms' : '');
@@ -870,7 +987,8 @@ function renderModelMenu(query = '') {
     favorite.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'toggleFavoriteModel', model: option.value }); });
     favorite.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); favorite.click(); } });
     button.append(icon, copy, health, favorite);
-    button.classList.toggle('active', option.value === $('model').value);
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-selected', String(selected));
     button.addEventListener('click', () => {
       $('model').value = option.value;
       $('model').dispatchEvent(new Event('change'));
@@ -888,14 +1006,18 @@ function renderModelMenu(query = '') {
 }
 
 function renderProfiles() {
-  const list = $('profileList'); list.replaceChildren();
+  const list = $('profileMenu'); list.replaceChildren();
+  const selected = profiles.find((profile) => profile.id === currentProfileId);
+  $('activeProfileLabel').textContent = selected?.name || uiCopy('Chưa chọn hồ sơ', 'No profile selected');
   for (const profile of profiles) {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'profile-chip'; button.textContent = profile.name;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'profile-option'; button.setAttribute('role', 'option'); button.setAttribute('aria-selected', String(profile.id === currentProfileId));
+    const name = document.createElement('strong'); name.textContent = profile.name;
+    const detail = document.createElement('small'); detail.textContent = providerMeta[profile.kind]?.label || profile.kind;
+    button.append(name, detail);
     button.classList.toggle('active', profile.id === currentProfileId);
-    button.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'activateProfile', id: profile.id }); });
+    button.addEventListener('click', (event) => { event.stopPropagation(); closeDropdowns(); vscode.postMessage({ type: 'activateProfile', id: profile.id }); });
     list.append(button);
   }
-  const selected = profiles.find((profile) => profile.id === currentProfileId);
   $('deleteProfile').disabled = !selected || profiles.length <= 1;
 }
 
@@ -1762,7 +1884,7 @@ function setRouterLaunchState(state, message) {
   launchingRouter = state !== 'ready' && state !== 'idle';
   $('startRouter').disabled = launchingRouter;
   const providerName = providerMeta[activeProvider]?.label || activeProvider || 'provider';
-  $('startRouter').textContent = launchingRouter ? message : activeProvider === '9router' ? uiCopy('Mở 9Router', 'Open 9Router') : uiCopy('Kết nối ' + providerName, 'Connect ' + providerName);
+  $('startRouter').textContent = launchingRouter ? message : activeProvider === '9router' ? uiCopy('Mở 9Router', 'Open 9Router') : activeProvider === 'omniroute' ? uiCopy('Mở OmniRoute', 'Open OmniRoute') : uiCopy('Kết nối ' + providerName, 'Connect ' + providerName);
   $('signalMap').classList.toggle('launching', launchingRouter);
   $('signalMap').classList.toggle('ready', state === 'ready');
   document.querySelector('.launch-panel').classList.toggle('launching', launchingRouter);
@@ -1774,9 +1896,66 @@ function formatTime(value = Date.now()) {
   return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
 }
 
+let lightboxZoom = 1;
+let lightboxPanX = 0;
+let lightboxPanY = 0;
+let lightboxDragging = false;
+let lightboxPointerId = null;
+let lightboxDragOffsetX = 0;
+let lightboxDragOffsetY = 0;
+
+function clampLightboxZoom(value) {
+  return Math.min(4, Math.max(0.5, Math.round(value * 4) / 4));
+}
+
+function updateLightboxTransform() {
+  const image = $('lightboxImage');
+  image.style.transform = 'translate(' + lightboxPanX + 'px, ' + lightboxPanY + 'px) scale(' + lightboxZoom + ')';
+  $('zoomLabel').textContent = Math.round(lightboxZoom * 100) + '%';
+  $('zoomOut').disabled = lightboxZoom <= 0.5;
+  $('zoomIn').disabled = lightboxZoom >= 4;
+  $('resetZoom').disabled = lightboxZoom === 1 && lightboxPanX === 0 && lightboxPanY === 0;
+  $('lightboxViewport').classList.toggle('can-pan', lightboxZoom > 1);
+}
+
+function resetLightboxView() {
+  lightboxZoom = 1;
+  lightboxPanX = 0;
+  lightboxPanY = 0;
+  updateLightboxTransform();
+}
+
+function setLightboxZoom(value) {
+  const nextZoom = clampLightboxZoom(value);
+  if (nextZoom === lightboxZoom) return;
+  lightboxZoom = nextZoom;
+  if (lightboxZoom <= 1) {
+    lightboxPanX = 0;
+    lightboxPanY = 0;
+  }
+  updateLightboxTransform();
+}
+
 function openImage(source) {
   $('lightboxImage').src = source;
+  resetLightboxView();
   $('imageLightbox').classList.remove('hidden');
+  requestAnimationFrame(() => $('zoomIn').focus());
+}
+
+function stopLightboxDrag() {
+  lightboxDragging = false;
+  $('lightboxViewport').classList.remove('dragging');
+  if (lightboxPointerId !== null) {
+    try { $('lightboxViewport').releasePointerCapture(lightboxPointerId); } catch { /* pointer may already be released */ }
+    lightboxPointerId = null;
+  }
+}
+
+function closeImageLightbox() {
+  stopLightboxDrag();
+  $('imageLightbox').classList.add('hidden');
+  resetLightboxView();
 }
 
 function appendMessageAttachments(item, attachments) {
@@ -2879,6 +3058,10 @@ function send() {
   if (!model && !standaloneCommand) { showUiToast({ message: 'Hãy chọn một model trước khi gửi.', tone: 'danger' }); return; }
   const selected = $('model').selectedOptions[0];
   if (mode === 'agent' && selected?.dataset.tools === 'false') { showUiToast({ message: 'Model này không hỗ trợ tools nên không thể chạy Agent mode. Hãy chuyển sang Chat hoặc chọn model khác.', tone: 'danger' }); return; }
+  if (mode === 'agent' && ['error', 'limited'].includes(modelHealth[model]?.status)) {
+    showUiToast({ message: uiCopy('Model này đã thất bại khi kiểm tra tool-call của Agent. Hãy chọn model có dấu ✓ hoặc kiểm tra lại sau.', 'This model failed the Agent tool-call check. Choose a model with ✓ or check again later.'), tone: 'danger' });
+    return;
+  }
   if (running) {
     if (!followUpQueueEnabled) {
       stopCurrentTurn();
@@ -2924,10 +3107,16 @@ $('connect').addEventListener('click', () => {
 });
 $('startRouter').addEventListener('click', () => {
   showError('');
+  if (activeProvider === 'omniroute') {
+    vscode.postMessage({ type: 'openOmniRoute' });
+    return;
+  }
   setRouterLaunchState('starting', 'Đang mở 9Router');
   vscode.postMessage({ type: 'startRouter' });
 });
 $('openDashboard').addEventListener('click', () => vscode.postMessage({ type: 'openDashboard' }));
+$('openOmniRoute').addEventListener('click', () => vscode.postMessage({ type: 'openOmniRoute' }));
+$('openOmniRouteCenter').addEventListener('click', () => vscode.postMessage({ type: 'openOmniRoute' }));
 $('openCockpitCenter').addEventListener('click', () => vscode.postMessage({ type: 'openCockpit' }));
 $('disconnectConnection').addEventListener('click', () => vscode.postMessage({ type: 'disconnectProvider' }));
 $('backToChat').addEventListener('click', () => {
@@ -2975,8 +3164,42 @@ $('saveMcp').addEventListener('click', () => {
   vscode.postMessage({ type: 'saveMcpServer', token: $('mcpToken').value || undefined, server: { id: '', name: $('mcpName').value, transport, authMode: transport === 'http' ? $('mcpAuth').value : undefined, enabled: true, command: $('mcpCommand').value, args: $('mcpArgs').value.split(/\s+/).filter(Boolean), url: $('mcpUrl').value }, env });
 });
 updateMcpForm();
-$('closeImage').addEventListener('click', () => $('imageLightbox').classList.add('hidden'));
-$('imageLightbox').addEventListener('click', (event) => { if (event.target === $('imageLightbox')) $('imageLightbox').classList.add('hidden'); });
+$('zoomOut').addEventListener('click', () => setLightboxZoom(lightboxZoom - 0.25));
+$('zoomIn').addEventListener('click', () => setLightboxZoom(lightboxZoom + 0.25));
+$('resetZoom').addEventListener('click', resetLightboxView);
+$('closeImage').addEventListener('click', closeImageLightbox);
+$('imageLightbox').addEventListener('click', (event) => { if (event.target === $('imageLightbox')) closeImageLightbox(); });
+$('lightboxViewport').addEventListener('pointerdown', (event) => {
+  if (lightboxZoom <= 1 || event.button !== 0) return;
+  lightboxDragging = true;
+  lightboxPointerId = event.pointerId;
+  lightboxDragOffsetX = event.clientX - lightboxPanX;
+  lightboxDragOffsetY = event.clientY - lightboxPanY;
+  $('lightboxViewport').setPointerCapture(event.pointerId);
+  $('lightboxViewport').classList.add('dragging');
+  event.preventDefault();
+});
+$('lightboxViewport').addEventListener('pointermove', (event) => {
+  if (!lightboxDragging || event.pointerId !== lightboxPointerId) return;
+  lightboxPanX = event.clientX - lightboxDragOffsetX;
+  lightboxPanY = event.clientY - lightboxDragOffsetY;
+  updateLightboxTransform();
+  event.preventDefault();
+});
+$('lightboxViewport').addEventListener('pointerup', stopLightboxDrag);
+$('lightboxViewport').addEventListener('pointercancel', stopLightboxDrag);
+$('lightboxViewport').addEventListener('wheel', (event) => {
+  if ($('imageLightbox').classList.contains('hidden')) return;
+  event.preventDefault();
+  setLightboxZoom(lightboxZoom + (event.deltaY < 0 ? 0.25 : -0.25));
+}, { passive: false });
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('imageLightbox').classList.contains('hidden')) {
+    event.preventDefault();
+    closeImageLightbox();
+  }
+});
+updateLightboxTransform();
 $('attach').addEventListener('click', (event) => {
   event.stopPropagation();
   const opening = $('addMenu').classList.contains('hidden');
@@ -3025,14 +3248,26 @@ $('modelTrigger').addEventListener('click', (event) => {
   $('modelTrigger').setAttribute('aria-expanded', String(open));
   $('modelSearch').value = '';
   renderModelMenu();
-  if (open) $('modelSearch').focus();
+  if (open) {
+    scrollSelectedModelIntoView();
+    $('modelSearch').focus();
+  }
 });
 $('modelMenu').addEventListener('click', (event) => event.stopPropagation());
 $('modelSearch').addEventListener('input', () => renderModelMenu($('modelSearch').value));
 $('checkModels').addEventListener('click', (event) => {
   event.stopPropagation();
-  vscode.postMessage({ type: checkingModels ? 'cancelModelCheck' : 'checkModels' });
+  vscode.postMessage({ type: checkingModels ? 'cancelModelCheck' : 'checkModels', ...(checkingModels ? {} : { mode }) });
 });
+$('profileTrigger').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const open = $('profileMenu').classList.contains('hidden');
+  if (open) closeDropdowns($('profileMenu'));
+  $('profileMenu').classList.toggle('hidden', !open);
+  $('profilePicker').classList.toggle('open', open);
+  $('profileTrigger').setAttribute('aria-expanded', String(open));
+});
+$('profileMenu').addEventListener('click', (event) => event.stopPropagation());
 $('providerTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
   const open = $('providerMenu').classList.contains('hidden');
@@ -3184,6 +3419,11 @@ $('configPanel').addEventListener('click', (event) => {
     $('languageMenu').classList.add('hidden');
     $('languagePicker').classList.remove('open');
     $('languageTrigger').setAttribute('aria-expanded', 'false');
+  }
+  if (!$('profilePicker').contains(event.target)) {
+    $('profileMenu').classList.add('hidden');
+    $('profilePicker').classList.remove('open');
+    $('profileTrigger').setAttribute('aria-expanded', 'false');
   }
 });
 document.addEventListener('click', () => {
@@ -3462,13 +3702,18 @@ window.addEventListener('message', ({ data }) => {
     $('changeTray').classList.toggle('hidden', !lastChangeCount);
     $('collapsedChanges').classList.add('hidden');
   } else if (data.type === 'connection') {
-    activeProvider = data.provider || '9router';
+    const incomingProvider = data.provider || '9router';
+    const providerChanged = modelsProvider !== incomingProvider;
+    if (providerChanged && modelsProvider) clearModelSelectionForProviderSwitch();
+    activeProvider = incomingProvider;
     setProvider(activeProvider, false);
     if (data.endpoint) {
       $('endpoint').value = data.endpoint;
       $('configEndpoint').value = data.endpoint;
     }
     const isRouter = activeProvider === '9router';
+    const isOmniRoute = activeProvider === 'omniroute';
+    const isGatewayProvider = isRouter || isOmniRoute;
     const routerReady = isRouter && data.routerRuntimeState === 'ready';
     const routerStale = isRouter && data.routerRuntimeState === 'stale';
     const routerExternal = routerReady && data.routerRuntimeOwner === 'external';
@@ -3487,7 +3732,9 @@ window.addEventListener('message', ({ data }) => {
      $('disconnectConnection').textContent = uiCopy('Ngắt kết nối', 'Disconnect');
      $('openCockpitCenter').classList.toggle('hidden', activeProvider !== 'cockpit');
      $('openCockpitCenter').textContent = uiCopy('Mở Cockpit', 'Open Cockpit');
-    $('topConnectLabel').textContent = isRouter
+     $('openOmniRouteCenter').classList.toggle('hidden', !isOmniRoute);
+     $('openOmniRouteCenter').textContent = uiCopy('Mở OmniRoute', 'Open OmniRoute');
+    $('topConnectLabel').textContent = isGatewayProvider
        ? data.connected
          ? uiCopy('Cấu hình', 'Configure')
          : routerStale
@@ -3505,9 +3752,11 @@ window.addEventListener('message', ({ data }) => {
     $('setupProviderBadge').textContent = providerName;
     $('setupProviderMark').innerHTML = brandIcon(providerMeta[activeProvider]?.brand || brandKey(providerName, activeProvider), providerName);
     $('setupEndpointLabel').textContent = data.endpoint || $('configEndpoint').value.trim() || 'Chưa có endpoint';
-     $('setupTitle').textContent = isRouter ? uiCopy('Mở 9Router.', 'Open 9Router.') : uiCopy('Kết nối ' + providerName + '.', 'Connect ' + providerName + '.');
+     $('setupTitle').textContent = isGatewayProvider ? uiCopy('Mở ' + providerName + '.', 'Open ' + providerName + '.') : uiCopy('Kết nối ' + providerName + '.', 'Connect ' + providerName + '.');
      $('setupCopy').textContent = isRouter
        ? uiCopy('Kiểm tra hoặc cài 9Router rồi mở bảng điều khiển. Không cần API key để mở trang quản lý.', 'Check or install 9Router, then open its dashboard. An API key is not required to open the management page.')
+       : isOmniRoute
+         ? uiCopy('Mở dashboard OmniRoute để quản lý provider và model. OmniRoute phải đang chạy ở cổng 20128.', 'Open the OmniRoute dashboard to manage providers and models. OmniRoute must be running on port 20128.')
        : activeProvider === 'ollama' || activeProvider === 'lm-studio'
          ? uiCopy('Provider local không cần API key, nhưng ứng dụng, model và API server phải đang chạy trên máy.', 'A local provider needs no API key, but its app, model and API server must be running.')
          : uiCopy('Mở Cài đặt để kiểm tra endpoint và API key của provider này.', 'Open Settings to check this provider endpoint and API key.');
@@ -3525,19 +3774,21 @@ window.addEventListener('message', ({ data }) => {
            : uiCopy('Gateway và API đang sẵn sàng nhận yêu cầu từ Chat hoặc Agent.', 'The gateway and API are ready for Chat or Agent requests.');
       $('startRouter').classList.add('hidden');
       $('openDashboard').classList.toggle('hidden', !isRouter);
+      $('openOmniRouteCenter').classList.toggle('hidden', !isOmniRoute);
       $('retryConnection').classList.remove('hidden');
       $('topConnect').classList.remove('attention');
     } else {
-      $('startRouter').classList.toggle('hidden', !isRouter);
+      $('startRouter').classList.toggle('hidden', !isGatewayProvider);
       $('openDashboard').classList.add('hidden');
+      $('openOmniRouteCenter').classList.add('hidden');
       $('openCockpitCenter').classList.toggle('hidden', activeProvider !== 'cockpit');
       $('disconnectConnection').classList.add('hidden');
       $('retryConnection').classList.remove('hidden');
        if (!launchingRouter) setRouterLaunchState('idle', isRouter ? uiCopy('9Router chưa chạy · bấm Mở 9Router', '9Router is not running · click Open 9Router') : uiCopy(providerName + ' chưa kết nối', providerName + ' is not connected'));
     }
     const select = $('model');
-    const previous = select.value;
-    const previousWasAuto = modelSelectionSource === 'auto' && previous === lastAutoModel;
+    const previous = providerChanged ? '' : select.value;
+    const previousWasAuto = !providerChanged && modelSelectionSource === 'auto' && previous === lastAutoModel;
     modelHealth = {};
      select.replaceChildren(new Option(uiCopy('Chọn model', 'Select model'), ''));
     for (const model of data.models || []) {
@@ -3548,7 +3799,7 @@ window.addEventListener('message', ({ data }) => {
       select.add(option);
     }
     const configuredDefault = data.defaultModel && [...select.options].some((option) => option.value === data.defaultModel) ? data.defaultModel : '';
-    const rememberedModel = composerPreferences.models?.[mode] && [...select.options].some((option) => option.value === composerPreferences.models[mode])
+    const rememberedModel = !providerChanged && composerPreferences.models?.[mode] && [...select.options].some((option) => option.value === composerPreferences.models[mode])
       ? composerPreferences.models[mode]
       : '';
     const preferred = previous || rememberedModel || configuredDefault || smartModelForMode(mode);
@@ -3560,6 +3811,7 @@ window.addEventListener('message', ({ data }) => {
     $('modelLabel').textContent = selectedLabel;
     $('modelBrand').innerHTML = select.value ? brandIcon(brandKey(select.value, activeProvider), selectedLabel) : '';
     renderModelMenu();
+    modelsProvider = incomingProvider;
     updateCodexTuning();
     if (data.connected && select.options.length <= 2) scheduleModelListRecovery();
     else if (select.options.length > 2 && modelListRecoveryTimer) {
@@ -3630,10 +3882,14 @@ window.addEventListener('message', ({ data }) => {
     $('modelMenu').classList.remove('hidden');
     $('modelPicker').classList.add('open');
     $('modelTrigger').setAttribute('aria-expanded', 'true');
+    renderModelMenu();
+    scrollSelectedModelIntoView();
     $('modelSearch').focus();
   } else if (data.type === 'configSaved') {
     $('configEndpoint').value = data.endpoint;
-    activeProvider = data.provider || '9router';
+    const nextProvider = data.provider || '9router';
+    if (activeProvider !== nextProvider) clearModelSelectionForProviderSwitch();
+    activeProvider = nextProvider;
     setProvider(activeProvider, false);
     $('configApiKey').value = '';
     if (data.profile) applyProfileUi(data.profile);
@@ -3674,7 +3930,9 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'profileLoaded') {
     keyStateRequestId++;
     applyProfileUi(data.profile);
-    activeProvider = data.profile?.kind || '9router';
+    const nextProvider = data.profile?.kind || '9router';
+    if (activeProvider !== nextProvider) clearModelSelectionForProviderSwitch();
+    activeProvider = nextProvider;
     updateConnectionBadge(providerMeta[activeProvider]?.label || activeProvider, 'checking');
     $('configApiKey').value = '';
     $('keyState').textContent = data.hasApiKey ? uiCopy('Đã lưu API key an toàn', 'API key stored securely') : uiCopy('Chưa lưu API key', 'No API key saved');
@@ -3682,11 +3940,12 @@ window.addEventListener('message', ({ data }) => {
   } else if (data.type === 'modelCheckStart') {
     checkingModels = true;
     modelHealth = {};
+    modelHealthMode = data.mode || mode;
      $('checkModels').textContent = uiCopy('Đang kiểm tra 0/' + data.total + ' · Bấm để hủy', 'Checking 0/' + data.total + ' · Click to cancel');
     $('checkModels').classList.add('checking');
     renderModelMenu($('modelSearch').value);
   } else if (data.type === 'modelCheck') {
-    modelHealth[data.model] = { status: data.status, message: data.message || (data.latencyMs ? 'OK · ' + data.latencyMs + ' ms' : '') };
+    if (!data.mode || data.mode === mode) modelHealth[data.model] = { status: data.status, message: data.message || (data.latencyMs ? 'OK · ' + data.latencyMs + ' ms' : '') };
     renderModelMenu($('modelSearch').value);
   } else if (data.type === 'modelCheckProgress') {
      $('checkModels').textContent = uiCopy('Đang kiểm tra ' + data.completed + '/' + data.total + ' · Bấm để hủy', 'Checking ' + data.completed + '/' + data.total + ' · Click to cancel');
@@ -3732,8 +3991,9 @@ window.addEventListener('message', ({ data }) => {
       $('topConnect').classList.add('attention');
     }
   } else if (data.type === 'browserOpened') {
-     setRouterLaunchState('ready', uiCopy('Đã mở trình quản lý', 'Management page opened'));
-     $('launchDescription').textContent = uiCopy('9Router đang chạy nền. Trình duyệt đã mở trang quản lý.', '9Router is running in the background. The dashboard is open in your browser.');
+     const openedProvider = providerMeta[activeProvider]?.label || activeProvider;
+     setRouterLaunchState('ready', uiCopy('Đã mở ' + openedProvider, openedProvider + ' opened'));
+     $('launchDescription').textContent = uiCopy(openedProvider + ' đang chạy. Trình duyệt đã mở trang quản lý.', openedProvider + ' is running. The dashboard is open in your browser.');
     showError('');
   } else if (data.type === 'attachmentLoading') {
     $('attachmentProgress').classList.toggle('hidden', !data.active);
@@ -3760,12 +4020,12 @@ window.addEventListener('message', ({ data }) => {
           chip.innerHTML = fileTypeIcon(item.name) + '<span>' + escapeHtml(item.name) + '</span>';
           preview.classList.add('attachment-preview-fallback');
           preview.append(chip);
-          const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', 'Bỏ ảnh đính kèm');
+          const remove = document.createElement('button'); remove.type = 'button'; remove.innerHTML = uiIcon('x'); remove.setAttribute('aria-label', 'Bỏ ảnh đính kèm');
           remove.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'removeAttachment', index }); });
           preview.append(remove);
         };
         image.addEventListener('error', handleImageError);
-        const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', 'Bỏ ảnh đính kèm');
+        const remove = document.createElement('button'); remove.type = 'button'; remove.innerHTML = uiIcon('x'); remove.setAttribute('aria-label', 'Bỏ ảnh đính kèm');
         remove.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'removeAttachment', index }); });
         preview.append(image, remove); list.append(preview); continue;
       }
@@ -3773,7 +4033,7 @@ window.addEventListener('message', ({ data }) => {
       chip.className = 'attachment-chip';
       chip.innerHTML = fileTypeIcon(item.name) + '<span>' + escapeHtml(item.name) + '</span>';
       const remove = document.createElement('button');
-      remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', 'Bỏ tệp đính kèm');
+      remove.type = 'button'; remove.innerHTML = uiIcon('x'); remove.setAttribute('aria-label', 'Bỏ tệp đính kèm');
       remove.addEventListener('click', () => vscode.postMessage({ type: 'removeAttachment', index }));
       chip.append(remove); list.append(chip);
     }
@@ -3905,6 +4165,8 @@ window.addEventListener('message', ({ data }) => {
       $('modelMenu').classList.remove('hidden');
       $('modelPicker').classList.add('open');
       $('modelTrigger').setAttribute('aria-expanded', 'true');
+      renderModelMenu();
+      scrollSelectedModelIntoView();
       $('modelSearch').focus();
     });
     item.querySelector('.tool-skip').addEventListener('click', () => finish('skip'));

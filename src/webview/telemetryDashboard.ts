@@ -20,7 +20,7 @@ export function renderTelemetryDashboard(
   quota: QuotaSnapshot,
   nonce: string,
   activeProfile?: ProviderProfile,
-  language: 'vi' | 'en' = 'vi'
+  language: 'vi' | 'en' = 'en'
 ): string {
   const visibleRecords = activeProfile ? records.filter((record) => record.profileId === activeProfile.id) : records;
   const displayedQuota = activeProfile && activeProfile.kind !== '9router'
@@ -104,6 +104,7 @@ body{background:linear-gradient(180deg,#121415 0,#101213 100%)}
 *::-webkit-scrollbar-button:single-button{display:block;width:10px;height:11px;border:0;background-color:transparent;background-position:center;background-repeat:no-repeat;background-size:7px 7px}
 *::-webkit-scrollbar-button:single-button:vertical:decrement{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 6.5 5 3.5l3 3' fill='none' stroke='%238b9299' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
 *::-webkit-scrollbar-button:single-button:vertical:increment{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='m2 3.5 3 3 3-3' fill='none' stroke='%238b9299' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
+.model-copy strong{font-size:12.5px}.model-copy span{font-size:10px}.quota-numbers{font-size:10.5px}.quota-numbers b{font-size:11px}.reset span{font-size:9px}.reset strong{font-size:11px}.request-head{font-size:9px}.request-model strong{font-size:12px}.request-model small,.request-row>span{font-size:10px}.request-row b{font-size:12px}.request-row>em{font-size:10.5px}.section-head span{font-size:9.5px}.footnote{font-size:10px}
 [hidden]{display:none!important}
 @media(max-width:900px){.app{padding:20px 18px 48px}.masthead{grid-template-columns:1fr;align-items:start}.actions{justify-content:flex-start}.snapshot{grid-template-columns:1fr 1fr}.metric:nth-child(3){border-left:0;border-top:1px solid var(--line)}.metric:nth-child(4){border-top:1px solid var(--line)}.filter-bar{grid-template-columns:1fr;gap:9px}.filters{grid-template-columns:1fr 1fr}.quota-columns,.quota-row{grid-template-columns:minmax(190px,1fr) minmax(220px,1.4fr) 100px;gap:16px}}
 @media(max-width:680px){.app{padding-inline:12px}.quota-columns{display:none}.quota-row{grid-template-columns:1fr;gap:11px;padding:14px 0}.reset{grid-template-columns:auto 1fr;align-items:center;gap:8px;text-align:left}.account-head{grid-template-columns:36px minmax(0,1fr) auto}.account-head .plan{display:none}.request-head{display:none}.request-row{grid-template-columns:minmax(0,1fr) minmax(92px,auto);grid-template-areas:"model token" "model latency";column-gap:14px;row-gap:4px;min-height:74px;padding:12px 14px}.request-model{grid-area:model;align-self:center}.request-row>span{display:none}.request-row>b{grid-area:token;align-self:end;justify-self:stretch}.request-row>em{grid-area:latency;align-self:start;justify-self:stretch}}
@@ -376,6 +377,7 @@ function providerName(provider: string): string {
   if (provider === 'anthropic' || provider === 'claude') return 'Anthropic Claude';
   if (provider === 'openai') return 'OpenAI';
   if (provider === '9router') return '9Router';
+  if (provider === 'omniroute') return 'OmniRoute';
   if (provider === 'cockpit') return 'Cockpit Tools';
   if (provider === 'openai-compatible') return 'OpenAI-compatible';
   if (provider === 'opencode') return 'OpenCode';

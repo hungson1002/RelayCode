@@ -646,7 +646,7 @@ export class McpManager implements vscode.Disposable {
   }
 
   private respondToBrowser(response: http.ServerResponse, ok: boolean, serverName?: string, reason?: McpOAuthResultReason): void {
-    const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'vi');
+    const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'en');
     response.writeHead(ok ? 200 : 400, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',

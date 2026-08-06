@@ -100,6 +100,40 @@ describe('RouterClient compatible chat responses', () => {
 });
 
 describe('RouterClient model checks', () => {
+  it('checks Chat mode through the same streaming path used by real messages', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      'data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n',
+      { headers: { 'content-type': 'text/event-stream' } }
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new RouterClient({ endpoint: 'http://localhost:20128/v1', apiKey: 'key' })
+      .checkModel('model', undefined, 'chat');
+
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
+      model: 'model',
+      stream: true,
+      messages: [{ role: 'user', content: 'Reply with OK only.' }]
+    });
+  });
+
+  it('checks Agent mode for an actual tool call instead of a plain completion', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { tool_calls: [{ id: 'probe-1', function: { name: 'relaycode_probe', arguments: '{}' } }] } }]
+    }), { headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await new RouterClient({ endpoint: 'http://localhost:20128/v1', apiKey: 'key' })
+      .checkModel('agent-model', undefined, 'agent');
+
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
+      model: 'agent-model',
+      stream: true,
+      tool_choice: 'auto',
+      tools: [{ function: { name: 'relaycode_probe' } }]
+    });
+  });
+
   it('uses the same plain chat probe as 9Router for prefixed models', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: 'hi' } }]

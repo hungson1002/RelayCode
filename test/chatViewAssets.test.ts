@@ -134,6 +134,14 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("healthStatus === 'limited'");
     expect(CHAT_VIEW_CONTROLLER).toContain('Tạm giới hạn · thử lại sau');
     expect(CHAT_VIEW_STYLES).toContain('.model-health.limited:before');
+    expect(CHAT_VIEW_STYLES).toContain('.model-option>.model-brand{justify-self:center!important');
+    expect(CHAT_VIEW_CONTROLLER).toContain('Agent tool-call failed');
+    expect(CHAT_VIEW_CONTROLLER).toContain("healthGlyph.textContent = healthStatus === 'ok' ? '✓' : healthStatus === 'error' ? '×'");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('healthGlyph.title = healthHint');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function showModelHealthTooltip(target, message)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('healthGlyph.addEventListener(\'mouseenter\'');
+    expect(CHAT_VIEW_STYLES).toContain('.model-health-tooltip.visible');
+    expect(CHAT_VIEW_STYLES).toContain('.model-health.has-glyph:before,.model-health.has-glyph:after');
   });
 
   it('keeps provider status and models synchronized after connecting', () => {
@@ -149,6 +157,16 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('#connectionBadge.route-meta');
     expect(CHAT_VIEW_CONTROLLER).toContain("let language = $('uiLanguage').value");
     expect(CHAT_VIEW_CONTROLLER).toContain("language = $('uiLanguage').value");
+  });
+
+  it('clears the old provider model immediately and auto-selects from the new provider', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("let modelsProvider = ''");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function clearModelSelectionForProviderSwitch()');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const providerChanged = modelsProvider !== incomingProvider');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const previous = providerChanged ? \'\' : select.value');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const rememberedModel = !providerChanged && composerPreferences.models?.[mode]');
+    expect(CHAT_VIEW_CONTROLLER).toContain('modelsProvider = incomingProvider');
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (activeProvider !== nextProvider) clearModelSelectionForProviderSwitch()');
   });
 
   it('switches language without remounting the webview and keeps settings open for MCP', () => {
@@ -266,6 +284,14 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain("vscode.Uri.parse('cockpit-tools://')");
   });
 
+  it('provides OmniRoute with open-dashboard controls', () => {
+    expect(html).toContain('id="openOmniRoute"');
+    expect(html).toContain('id="openOmniRouteCenter"');
+    expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'openOmniRoute' })");
+    expect(providerSource).toContain("message.type === 'openOmniRoute'");
+    expect(providerSource).toContain("const endpoint = profile?.kind === 'omniroute' ? profile.endpoint : 'http://127.0.0.1:20128/v1'");
+  });
+
   it('keeps connection controls available for every saved provider', () => {
     expect(html).toContain('id="disconnectConnection"');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('disconnectConnection').classList.toggle('hidden', !data.connected)");
@@ -277,6 +303,14 @@ describe('Chat webview assets', () => {
     expect(html).toContain('<option value="opencode">OpenCode</option>');
     expect(CHAT_VIEW_CONTROLLER).toContain("endpoint: 'https://opencode.ai/zen/v1'");
     expect(CHAT_VIEW_CONTROLLER).toContain("keyLabel: 'OpenCode API key'");
+  });
+
+  it('exposes OmniRoute first with its local OpenAI-compatible defaults', () => {
+    expect(html).toContain('data-provider="omniroute"');
+    expect(html).toContain('<option value="omniroute">OmniRoute</option>');
+    expect(CHAT_VIEW_CONTROLLER).toContain("endpoint: 'http://127.0.0.1:20128/v1'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("keyLabel: 'OmniRoute API key (optional)'");
+    expect(providerSource).toContain("provider !== 'omniroute'");
   });
 
   it('allows saved provider profiles and their secret keys to be deleted safely', () => {
@@ -292,6 +326,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("function openFloatingSurface(id, options = {})");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (event.target === $('accessConfirm'))");
     expect(CHAT_VIEW_CONTROLLER).toContain("closeFloatingSurfaces();");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (!$('profilePicker').contains(event.target))");
+    expect(CHAT_VIEW_STYLES).toContain('width:min(235px,100%)');
   });
 
   it('keeps confirmations, prompts and transient notices inside the extension', () => {
@@ -666,7 +702,7 @@ describe('Chat webview assets', () => {
   it('keeps custom tooltips limited to the intentional controls', () => {
     expect(CHAT_VIEW_CONTROLLER).not.toContain('function normalizeTooltip(element)');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('relay-tooltip-popover');
-    expect(CHAT_VIEW_CONTROLLER).not.toContain('.title =');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('fileGlyph.title =');
     expect(CHAT_VIEW_CONTROLLER).toContain('data-relay-tooltip');
     expect(CHAT_VIEW_CONTROLLER).not.toContain("setAttribute('title', label)");
     expect(CHAT_VIEW_STYLES).not.toContain('.relay-tooltip-popover');
@@ -739,6 +775,27 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'modelCheckEnd'");
   });
 
+  it('provides a pannable image viewer with zoom controls and a centered close action', () => {
+    expect(html).toContain('id="lightboxViewport"');
+    expect(html).toContain('id="zoomOut"');
+    expect(html).toContain('id="zoomLabel"');
+    expect(html).toContain('id="zoomIn"');
+    expect(html).toContain('id="resetZoom"');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function setLightboxZoom(value)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('lightboxViewport').setPointerCapture(event.pointerId)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("setLightboxZoom(lightboxZoom + (event.deltaY < 0 ? 0.25 : -0.25))");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function closeImageLightbox()');
+    expect(CHAT_VIEW_STYLES).toContain('.image-lightbox-toolbar');
+    expect(CHAT_VIEW_STYLES).toContain('bottom:14px');
+    expect(CHAT_VIEW_STYLES).toContain('.image-lightbox>#closeImage');
+    expect(CHAT_VIEW_STYLES).toContain('.image-lightbox>#closeImage span::before');
+    expect(CHAT_VIEW_STYLES).toContain('.image-lightbox>#closeImage:hover');
+    expect(CHAT_VIEW_STYLES).toContain('.attachment-preview button:hover,.attachment-chip button:hover');
+    expect(CHAT_VIEW_STYLES).not.toContain('transform:scale(1.08)');
+    expect(CHAT_VIEW_STYLES).not.toContain('background:#e87878!important');
+    expect(CHAT_VIEW_STYLES).toContain('place-items:center!important');
+  });
+
   it('defers favorite reordering until the model picker is opened again and uses a larger bookmark control', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('let favoriteModelsAtMenuOpen = []');
     expect(CHAT_VIEW_CONTROLLER).toContain('if (open) favoriteModelsAtMenuOpen = [...favoriteModels]');
@@ -746,6 +803,15 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('favorite.innerHTML = \'<svg viewBox="0 0 24 24"');
     expect(CHAT_VIEW_STYLES).toContain('grid-template-columns:24px minmax(0,1fr) 14px 28px!important');
     expect(CHAT_VIEW_STYLES).toContain('.model-favorite svg{display:block;width:16px;height:16px');
+  });
+
+  it('highlights the selected model and scrolls it into view when the picker opens', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('function scrollSelectedModelIntoView()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("selected.scrollIntoView({ block: 'center', behavior: 'auto' })");
+    expect(CHAT_VIEW_CONTROLLER).toContain("button.setAttribute('aria-selected', String(selected))");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("selectedMark.className = 'model-selected'");
+    expect(CHAT_VIEW_STYLES).toContain('.model-option.active{background:#3d4548!important');
+    expect(CHAT_VIEW_STYLES).not.toContain('.model-option.active>.model-selected');
   });
 
   it('clears a pending model-switch target when the failure is retried or skipped', () => {
@@ -797,7 +863,7 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('body .file-type-icon.fileCss{color:#5aa7e8!important}');
     expect(CHAT_VIEW_CONTROLLER).not.toContain("row.setAttribute('data-tooltip', change.path)");
     expect(CHAT_VIEW_CONTROLLER).not.toContain('class="file-link" data-tooltip="');
-    expect(CHAT_VIEW_CONTROLLER).not.toContain('.title =');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('fileGlyph.title =');
     expect(html).not.toContain(' title="');
     expect(html).not.toContain('data-tooltip');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('data-tooltip');

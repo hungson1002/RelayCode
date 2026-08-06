@@ -152,7 +152,7 @@ describe('MCP catalog compatibility', () => {
     expect(managerSource).toContain('if (this.connections.has(id) || !current || current.state !== state)');
     expect(managerSource).toContain('this.callbackUrl = `http://localhost:${address.port}/relaycode/callback`');
     expect(managerSource).toContain("callback.pathname !== '/relaycode/callback'");
-    expect(managerSource).toContain("get<'vi' | 'en'>('language', 'vi')");
+    expect(managerSource).toContain("get<'vi' | 'en'>('language', 'en')");
     expect(managerSource).toContain('renderMcpOAuthResult({ language, ok, serverName, reason })');
     expect(providerSource).toContain("client_name: 'RelayCode Desktop'");
   });

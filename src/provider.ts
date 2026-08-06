@@ -1,8 +1,8 @@
 import { RouterClient } from './routerClient';
 import { AnthropicClient } from './anthropicClient';
-import type { ChatMessage, RequestMetrics, RequestTuning, RouterModel } from './types';
+import type { ChatMessage, ChatMode, RequestMetrics, RequestTuning, RouterModel } from './types';
 
-export type ProviderKind = '9router' | 'cockpit' | 'opencode' | 'openai' | 'anthropic' | 'openai-compatible' | 'ollama' | 'lm-studio';
+export type ProviderKind = 'omniroute' | '9router' | 'cockpit' | 'opencode' | 'openai' | 'anthropic' | 'openai-compatible' | 'ollama' | 'lm-studio';
 
 export interface ProviderConfig {
   kind: ProviderKind;
@@ -32,7 +32,7 @@ export interface ProviderClient {
     signal?: AbortSignal
   ): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt?: string }>;
   streamChat(model: string, messages: ChatMessage[], onDelta: (delta: string) => void, signal?: AbortSignal, tuning?: RequestTuning): Promise<RequestMetrics>;
-  checkModel(model: string, signal?: AbortSignal): Promise<RequestMetrics>;
+  checkModel(model: string, signal?: AbortSignal, mode?: ChatMode): Promise<RequestMetrics>;
   completeWithTools(
     model: string,
     messages: Array<Record<string, unknown>>,
@@ -56,5 +56,5 @@ export function createProvider(config: ProviderConfig): ProviderClient {
   if (config.kind === 'anthropic') {
     return new AnthropicClient({ endpoint: config.endpoint, apiKey: config.apiKey });
   }
-  return new RouterClient({ endpoint: config.endpoint, apiKey: config.apiKey, allowEmptyApiKey: config.kind === 'ollama' || config.kind === 'lm-studio' });
+  return new RouterClient({ endpoint: config.endpoint, apiKey: config.apiKey, allowEmptyApiKey: config.kind === 'omniroute' || config.kind === 'ollama' || config.kind === 'lm-studio' });
 }

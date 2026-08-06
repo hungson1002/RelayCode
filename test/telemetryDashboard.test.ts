@@ -70,7 +70,7 @@ function record(): TelemetryRecord {
 
 describe('telemetry dashboard', () => {
   it('renders real account quotas and model/account/provider filters', () => {
-    const html = renderTelemetryDashboard(webview, [record()], quota(), 'nonce');
+    const html = renderTelemetryDashboard(webview, [record()], quota(), 'nonce', undefined, 'vi');
 
     expect(html).toContain('Gemini 3.5 Flash (High)');
     expect(html).toContain('user@example.com');
@@ -96,6 +96,10 @@ describe('telemetry dashboard', () => {
     expect(html).toContain('vscode.setState');
     expect(html).toContain('grid-template-areas:"model token" "model latency"');
     expect(html).toContain('.request-head span:nth-child(3),.request-head span:nth-child(4){text-align:right}');
+    expect(html).toContain('.model-copy strong{font-size:12.5px}');
+    expect(html).toContain('.quota-numbers{font-size:10.5px}');
+    expect(html).toContain('.request-row b{font-size:12px}');
+    expect(html).toContain('.request-row>em{font-size:10.5px}');
   });
 
   it('shows a secure login action instead of inventing quota data', () => {
@@ -104,7 +108,7 @@ describe('telemetry dashboard', () => {
       origin: 'http://localhost:20128',
       accounts: [],
       message: 'Cần đăng nhập.'
-    }, 'nonce');
+    }, 'nonce', undefined, 'vi');
 
     expect(html).toContain('Cần đăng nhập 9Router');
     expect(html).toContain('id="quotaLogin"');
@@ -129,7 +133,7 @@ describe('telemetry dashboard', () => {
       model: 'claude-sonnet',
       rateLimit: { tokensLimit: '1000', tokensRemaining: '640', reset: '60' }
     };
-    const html = renderTelemetryDashboard(webview, [record(), cockpitRecord], quota(), 'nonce', profile);
+    const html = renderTelemetryDashboard(webview, [record(), cockpitRecord], quota(), 'nonce', profile, 'vi');
 
     expect(html).toContain('Model activity');
     expect(html).toContain('Cockpit Tools');
@@ -152,7 +156,7 @@ describe('telemetry dashboard', () => {
     const first: TelemetryRecord = { ...record(), profileId: profile.id, profileName: profile.name, provider: profile.kind, model: 'nemotron-3-super-free', totalTokens: 120 };
     const second: TelemetryRecord = { ...first, id: 'metric-2', timestamp: first.timestamp + 1, totalTokens: 80 };
 
-    const html = renderTelemetryDashboard(webview, [first, second], quota(), 'nonce', profile);
+    const html = renderTelemetryDashboard(webview, [first, second], quota(), 'nonce', profile, 'vi');
 
     expect(html).toContain('OpenCode');
     expect(html).toContain('200 token đã ghi nhận');

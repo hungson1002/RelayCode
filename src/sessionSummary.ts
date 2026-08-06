@@ -45,7 +45,7 @@ export function sessionSummaryForPrompt(summary: string): string {
   return summary.trim() ? `<session-summary>\n${summary.trim()}\n</session-summary>` : '';
 }
 
-export function sessionSummaryForDisplay(summary: string, language: 'vi' | 'en' = 'vi'): string {
+export function sessionSummaryForDisplay(summary: string, language: 'vi' | 'en' = 'en'): string {
   if (language === 'en') return summary;
   return summary
     .replace(/^Session summary$/m, 'Tóm tắt phiên')

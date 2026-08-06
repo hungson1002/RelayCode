@@ -1063,4 +1063,62 @@ const messageTypographyPolishStyles = String.raw`
 .header-action.relay-tooltip-target:last-child::before{left:auto;right:13px;transform:rotate(45deg)}
 `;
 
-export const CHAT_VIEW_STYLES = styles + redesignStyles + interactionStyles + finalStyles + bubbleStyles + polishStyles + changeStyles + historyStyles + compactStyles + providerStyles + advancedStyles + dropdownFixStyles + mcpGalleryStyles + chatExperienceStyles + codexParityStyles + compactModeAndConnectionStyles + connectionEntryStyles + connectionCenterStyles + connectionPageV2Styles + modelHealthIconFixStyles + editableMessageStyles + errorAndMotionPolishStyles + recoveryAndRetryStyles + brandIdentityStyles + codexWorkflowStyles + codexComposerStyles + composerMenuV2Styles + codexTranscriptV2Styles + codexTranscriptV3Styles + narrowLayoutAndProfileFixStyles + unifiedDialogStyles + linkPresentationStyles + headerRedesignStyles + settingsAndSpacingPolishStyles + changeReviewV2Styles + boundedChangeTrayStyles + compactScrollbarStyles + ideNativeHeaderAndFileStyles + responsiveHeaderAndFileIconsV2Styles + responsiveHeaderAndFileIconsV3Styles + mcpConnectionStatusStyles + composerRunningAndSpacingStyles + historyClearStyles + permissionAndRunningIndicatorStyles + permissionPickerV2Styles + connectionBadgeV4Styles + markdownTableStyles + followUpQueueStyles + messageTypographyPolishStyles;
+const v112PolishStyles = String.raw`
+  .profile-bar{grid-template-columns:minmax(0,235px) auto!important;align-items:end!important;overflow:visible!important}
+  .profile-picker{position:relative;display:grid;gap:5px;width:min(235px,100%);flex:0 1 235px;min-width:0;overflow:visible}
+  .profile-picker>span{color:#a7abb0;font-size:10px}
+  .profile-trigger{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-width:0;height:36px;padding:0 10px;border:1px solid #464a4f;border-radius:9px;background:#1d1f21;color:#e6e8ea;text-align:left;cursor:pointer}
+  .profile-trigger:hover,.profile-picker.open .profile-trigger{border-color:#5b6167;background:#25282b}
+  .profile-trigger>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px;font-weight:620}
+  .profile-trigger i{flex:none;width:7px;height:7px;border-right:1.5px solid #a1a6ab;border-bottom:1.5px solid #a1a6ab;transform:rotate(45deg) translateY(-2px);transition:transform .14s}
+  .profile-picker.open .profile-trigger i{transform:rotate(225deg) translate(-2px,-2px)}
+  .profile-menu{position:absolute;z-index:125;top:calc(100% + 6px);left:0;right:0;display:grid;gap:3px;max-height:220px;overflow:auto;padding:6px;border:1px solid #464b50;border-radius:11px;background:#222426;box-shadow:0 18px 48px rgba(0,0,0,.62);animation:dropIn .12s ease-out}
+  .profile-option{display:grid;gap:2px;width:100%;min-width:0;padding:8px 9px;border:0;border-radius:8px;background:transparent;color:#e0e2e4;text-align:left;cursor:pointer}
+  .profile-option:hover,.profile-option.active{background:#303438}.profile-option.active{box-shadow:inset 2px 0 #65c8aa}.profile-option strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px}.profile-option small{color:#858b91;font-size:8.5px}.profile-option.active small{color:#9ed8c9}
+  .model-option{grid-template-columns:32px minmax(0,1fr) 18px 20px!important;column-gap:7px!important}
+  .model-option>.model-brand{justify-self:center!important;align-self:center!important;margin-inline:auto!important}
+  .model-option>.model-health{grid-column:auto!important;justify-self:center!important}
+  .model-option>.model-favorite{grid-column:auto!important;justify-self:end!important}
+  .model-option.active{background:#3d4548!important;box-shadow:inset 3px 0 #70cfb8, inset 0 0 0 1px rgba(112,207,184,.2)!important}
+  .model-option.active .model-option-label{color:#fff!important;font-weight:700!important}
+  .model-option.active .model-option-meta{color:#b5d9cf!important}
+  .model-option.active>.model-brand{border-color:#70cfb8!important;background:#253532!important}
+  .model-picker.open .model-trigger{border-color:#70cfb8!important;background:#25302e!important;box-shadow:0 0 0 2px rgba(112,207,184,.14)!important}
+  .model-trigger #modelLabel{font-weight:700!important;color:#f2f4f5!important}
+  .model-health.has-glyph{display:grid!important;place-items:center!important;width:14px!important;height:14px!important;font-size:0!important;line-height:0!important}
+  .model-health.has-glyph:before,.model-health.has-glyph:after{content:none!important;display:none!important}
+  .model-health-glyph{position:relative;display:grid;place-items:center;width:14px;height:14px;color:#777c81;font:750 11px/14px var(--vscode-font-family);cursor:help}
+  .model-health-glyph.ok{color:#70cfb8}
+  .model-health-glyph.error{color:#e87878;font-size:13px}
+  .model-health-glyph.limited{border:1px solid #d9bf58;border-radius:50%;color:#d9bf58;font-size:9px;line-height:12px}
+  .model-health-glyph.checking{width:12px;height:12px;border:1.5px solid #d9bf58;border-top-color:transparent;border-radius:50%;font-size:0;animation:iconSpin .9s linear infinite}
+  .model-health-tooltip{position:fixed;z-index:1000;display:block;max-width:min(360px,calc(100vw - 16px));padding:7px 10px;border:1px solid #59636c;border-radius:8px;background:#24282c;color:#f0f3f5;box-shadow:0 14px 34px rgba(0,0,0,.62);font:520 10px/1.4 var(--vscode-font-family);white-space:normal;overflow-wrap:anywhere;pointer-events:none;opacity:0;visibility:hidden;transform:translateY(3px);transition:opacity .12s ease,visibility .12s ease,transform .12s ease}
+  .model-health-tooltip.visible{opacity:1;visibility:visible;transform:translateY(0)}
+  .attachment-preview button,.attachment-chip button{display:grid!important;place-items:center!important;box-sizing:border-box!important;padding:0!important;font-size:0!important;line-height:0!important;transition:background .14s ease,border-color .14s ease,color .14s ease}
+  .attachment-preview button .ui-symbol,.attachment-chip button .ui-symbol{display:grid!important;place-items:center!important;width:11px!important;height:11px!important;margin:0!important}
+  .attachment-preview button .ui-symbol svg,.attachment-chip button .ui-symbol svg{display:block!important;width:11px!important;height:11px!important;margin:0!important}
+  .attachment-preview button{top:3px!important;right:3px!important}
+  .attachment-chip button{width:18px!important;height:18px!important;min-width:18px!important}
+  .attachment-preview button:hover,.attachment-chip button:hover{border-color:#666c73!important;background:#42464b!important;color:#f0f2f4!important}
+  .attachment-preview button:active,.attachment-chip button:active{background:#383c41!important}
+  .image-lightbox{grid-template-rows:minmax(0,1fr)!important;place-items:stretch!important;padding:16px 16px 58px!important;overflow:hidden!important}
+  .image-lightbox-viewport{position:relative;display:grid;place-items:center;min-width:0;min-height:0;overflow:hidden;touch-action:none;cursor:default}
+  .image-lightbox-viewport.can-pan{cursor:grab}.image-lightbox-viewport.dragging{cursor:grabbing}
+  .image-lightbox-viewport img{width:auto!important;height:auto!important;max-width:100%!important;max-height:100%!important;transform-origin:center center;will-change:transform;user-select:none;-webkit-user-drag:none;pointer-events:none}
+  .image-lightbox-toolbar{position:absolute;z-index:2;bottom:14px;left:50%;display:flex;align-items:center;gap:5px;transform:translateX(-50%);padding:4px;border:1px solid #454a50;border-radius:10px;background:rgba(34,37,40,.94);box-shadow:0 12px 30px rgba(0,0,0,.38)}
+  .image-lightbox-toolbar button{position:static!important;display:grid!important;place-items:center!important;width:28px!important;height:28px!important;margin:0!important;padding:0!important;border:1px solid #4b5158!important;border-radius:7px!important;background:#292d31!important;color:#f0f2f4!important;font:650 15px/1 var(--vscode-font-family)!important;cursor:pointer}
+  .image-lightbox-toolbar button:hover:not(:disabled){background:#3a4046!important}.image-lightbox-toolbar button:disabled{opacity:.38;cursor:default}
+  .image-lightbox-toolbar span{min-width:48px;color:#dfe3e6;text-align:center;font:650 10px/28px var(--vscode-font-family)}.image-lightbox-toolbar #resetZoom{width:auto!important;padding-inline:8px!important;font-size:10px!important}
+  .image-lightbox>#closeImage{position:absolute!important;z-index:3;top:14px!important;right:14px!important;display:grid!important;place-items:center!important;width:34px!important;height:34px!important;margin:0!important;padding:0!important;border:1px solid #51545a!important;border-radius:50%!important;background:#292b2e!important;color:#f0f0f0!important;font:650 20px/1 var(--vscode-font-family)!important;line-height:1!important;text-align:center!important;transition:background .14s ease,border-color .14s ease,color .14s ease}
+  .image-lightbox>#closeImage:hover{border-color:#666c73!important;background:#42464b!important;color:#f0f2f4!important}
+  .image-lightbox>#closeImage:active{background:#383c41!important}
+  .image-lightbox>#closeImage span{position:relative;display:block;width:14px;height:14px;font-size:0;line-height:0;transform:none}
+  .image-lightbox>#closeImage span::before,.image-lightbox>#closeImage span::after{content:"";position:absolute;left:6px;top:0;width:2px;height:14px;border-radius:2px;background:#f0f0f0}
+  .image-lightbox>#closeImage span::before{transform:rotate(45deg)}.image-lightbox>#closeImage span::after{transform:rotate(-45deg)}
+  .image-lightbox button:focus-visible{outline:1px solid #70cfb8;outline-offset:2px}
+  @media(max-width:520px){.image-lightbox{padding:10px 10px 54px!important}.image-lightbox-toolbar{bottom:10px}.image-lightbox>#closeImage{top:10px!important;right:10px!important}.image-lightbox-toolbar #resetZoom{display:none!important}}
+  @media(max-width:420px){.profile-bar{grid-template-columns:minmax(0,1fr) auto!important}.profile-picker{width:100%;flex-basis:auto}.profile-actions{min-width:0!important}.profile-new,.profile-delete{padding-inline:7px!important;font-size:9px!important}}
+  @media(max-width:340px){.profile-bar{grid-template-columns:minmax(0,1fr)!important}.profile-actions{justify-content:stretch!important}.profile-new,.profile-delete{flex:1!important}.profile-menu{right:0}}
+`;
+
+export const CHAT_VIEW_STYLES = styles + redesignStyles + interactionStyles + finalStyles + bubbleStyles + polishStyles + changeStyles + historyStyles + compactStyles + providerStyles + advancedStyles + dropdownFixStyles + mcpGalleryStyles + chatExperienceStyles + codexParityStyles + compactModeAndConnectionStyles + connectionEntryStyles + connectionCenterStyles + connectionPageV2Styles + modelHealthIconFixStyles + editableMessageStyles + errorAndMotionPolishStyles + recoveryAndRetryStyles + brandIdentityStyles + codexWorkflowStyles + codexComposerStyles + composerMenuV2Styles + codexTranscriptV2Styles + codexTranscriptV3Styles + narrowLayoutAndProfileFixStyles + unifiedDialogStyles + linkPresentationStyles + headerRedesignStyles + settingsAndSpacingPolishStyles + changeReviewV2Styles + boundedChangeTrayStyles + compactScrollbarStyles + ideNativeHeaderAndFileStyles + responsiveHeaderAndFileIconsV2Styles + responsiveHeaderAndFileIconsV3Styles + mcpConnectionStatusStyles + composerRunningAndSpacingStyles + historyClearStyles + permissionAndRunningIndicatorStyles + permissionPickerV2Styles + connectionBadgeV4Styles + markdownTableStyles + followUpQueueStyles + messageTypographyPolishStyles + v112PolishStyles;

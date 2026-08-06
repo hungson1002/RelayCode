@@ -10,7 +10,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
   const safeLanguage = language === 'en' ? 'en' : 'vi';
   const safeNonce = escapeAttribute(nonce);
   const safeCspSource = escapeAttribute(cspSource);
-  return `<!DOCTYPE html>
+  const html = `<!DOCTYPE html>
 <html lang="${safeLanguage}">
 <head>
   <meta charset="UTF-8">
@@ -58,14 +58,14 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
   <section id="configPanel" class="config-panel hidden">
     <div class="config-heading"><div><strong>Cấu hình provider</strong><span>Chọn nguồn model cho mọi yêu cầu</span></div><button id="closeConfig" class="header-action">Đóng</button></div>
     <label class="language-setting"><span>Ngôn ngữ giao diện</span><div id="languagePicker" class="language-picker"><button id="languageTrigger" class="language-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="uiLanguageLabel">Tiếng Việt</span><i aria-hidden="true"></i></button><div id="languageMenu" class="language-menu hidden" role="listbox"><button type="button" data-language="vi"><strong>Tiếng Việt</strong><small>Giao diện tiếng Việt</small></button><button type="button" data-language="en"><strong>English</strong><small>English interface</small></button></div><select id="uiLanguage" class="hidden" aria-hidden="true" tabindex="-1"><option value="vi">Tiếng Việt</option><option value="en">English</option></select></div></label>
-    <div class="profile-bar"><div><span>Hồ sơ đang dùng</span><div id="profileList" class="profile-list"></div></div><div class="profile-actions"><button id="deleteProfile" class="profile-delete" disabled>Xóa hồ sơ</button><button id="newProfile" class="secondary profile-new">+ Hồ sơ mới</button></div></div>
+    <div class="profile-bar"><div class="profile-picker" id="profilePicker"><span>Hồ sơ đang dùng</span><button id="profileTrigger" class="profile-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="activeProfileLabel">Chưa chọn hồ sơ</span><i aria-hidden="true"></i></button><div id="profileMenu" class="profile-menu hidden" role="listbox"></div></div><div class="profile-actions"><button id="deleteProfile" class="profile-delete" disabled>Xóa hồ sơ</button><button id="newProfile" class="secondary profile-new">+ Hồ sơ mới</button></div></div>
     <label>Tên hồ sơ<input id="profileName" spellcheck="false" placeholder="Ví dụ: OpenAI cá nhân"></label>
     <div class="provider-field"><span>Provider</span><div class="provider-picker" id="providerPicker"><button id="providerTrigger" class="provider-trigger" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="providerBrand" class="provider-brand-slot"></span><span><strong id="providerLabel">9Router</strong><small id="providerHint">Gateway local, nhiều model</small></span></button><div id="providerMenu" class="provider-menu hidden" role="listbox"><button type="button" class="provider-option" data-provider="9router"><span><strong>9Router</strong><small>Gateway local, nhiều model</small></span></button><button type="button" class="provider-option" data-provider="cockpit"><span><strong>Cockpit Tools</strong><small>Gateway local · nhiều tài khoản</small></span></button><button type="button" class="provider-option" data-provider="opencode"><span><strong>OpenCode</strong><small>OpenCode Zen · OpenAI-compatible</small></span></button><button type="button" class="provider-option" data-provider="openai"><span><strong>OpenAI</strong><small>API chính thức · cần API key</small></span></button><button type="button" class="provider-option" data-provider="anthropic"><span><strong>Anthropic Claude</strong><small>Messages API · cần API key</small></span></button><button type="button" class="provider-option" data-provider="openai-compatible"><span><strong>OpenAI-compatible</strong><small>Endpoint tùy chỉnh</small></span></button><button type="button" class="provider-option" data-provider="ollama"><span><strong>Ollama</strong><small>Local · không cần API key</small></span></button><button type="button" class="provider-option" data-provider="lm-studio"><span><strong>LM Studio</strong><small>Local · không cần API key</small></span></button></div></div><select id="configProvider" class="hidden" aria-hidden="true" tabindex="-1"><option value="9router">9Router</option><option value="cockpit">Cockpit Tools</option><option value="opencode">OpenCode</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="openai-compatible">OpenAI-compatible</option><option value="ollama">Ollama local</option><option value="lm-studio">LM Studio local</option></select></div>
     <label>Endpoint<input id="configEndpoint" spellcheck="false" placeholder="http://127.0.0.1:20128/v1"></label>
     <label id="apiKeyField"><span id="apiKeyLabel">API key</span><input id="configApiKey" type="password" autocomplete="off" placeholder="Nhập API key của provider"></label>
     <div class="price-row"><label>Input $ / 1M<input id="inputPrice" type="number" min="0" step="0.01" placeholder="Tùy chọn"></label><label>Output $ / 1M<input id="outputPrice" type="number" min="0" step="0.01" placeholder="Tùy chọn"></label></div>
     <p id="keyState" class="key-state">Chưa lưu API key</p>
-    <div class="config-actions"><button id="saveConfig" class="primary">Lưu và kết nối lại</button><button id="runDiagnostics" class="secondary">Chẩn đoán</button></div><div class="config-subactions"><button id="openMcp" class="secondary">MCP tools</button><button id="exportDiagnostics" class="secondary">Xuất chẩn đoán</button><button id="openCockpit" class="secondary hidden">Mở Cockpit</button><button id="localSetup" class="secondary hidden">Thiết lập local</button></div><p id="diagnosticsResult" class="diagnostics-result hidden" role="status" aria-live="polite"></p>
+    <div class="config-actions"><button id="saveConfig" class="primary">Lưu và kết nối lại</button><button id="runDiagnostics" class="secondary">Chẩn đoán</button></div><div class="config-subactions"><button id="openMcp" class="secondary">MCP tools</button><button id="exportDiagnostics" class="secondary">Xuất chẩn đoán</button><button id="openOmniRoute" class="secondary hidden">Mở OmniRoute</button><button id="openCockpit" class="secondary hidden">Mở Cockpit</button><button id="localSetup" class="secondary hidden">Thiết lập local</button></div><p id="diagnosticsResult" class="diagnostics-result hidden" role="status" aria-live="polite"></p>
   </section>
 
   <section id="setup" class="setup hidden">
@@ -86,7 +86,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
         <span class="state-mark" aria-hidden="true"></span>
         <div><strong id="launchTitle">Đang kiểm tra kết nối</strong><span id="launchDescription">RelayCode đang xác nhận provider có thể nhận yêu cầu.</span></div>
       </div>
-      <div class="connection-page-actions"><button id="startRouter" class="primary">Mở 9Router</button><button id="openDashboard" class="primary hidden">Mở trang quản lý</button><button id="openCockpitCenter" class="secondary hidden">Mở Cockpit</button><button id="retryConnection" class="secondary">Kiểm tra kết nối</button><button id="disconnectConnection" class="secondary hidden">Ngắt kết nối</button></div>
+      <div class="connection-page-actions"><button id="startRouter" class="primary">Mở 9Router</button><button id="openDashboard" class="primary hidden">Mở trang quản lý</button><button id="openOmniRouteCenter" class="primary hidden">Mở OmniRoute</button><button id="openCockpitCenter" class="secondary hidden">Mở Cockpit</button><button id="retryConnection" class="secondary">Kiểm tra kết nối</button><button id="disconnectConnection" class="secondary hidden">Ngắt kết nối</button></div>
       <p id="setupCheckResult" class="setup-check-result"><span></span>Chưa kiểm tra sức khỏe API trong phiên này.</p>
     </div>
 
@@ -150,10 +150,30 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
     </section>
   </div>
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
-  <div id="imageLightbox" class="image-lightbox hidden" role="dialog" aria-modal="true" aria-label="Xem ảnh"><button id="closeImage" aria-label="Đóng ảnh">×</button><img id="lightboxImage" alt="Ảnh đính kèm"></div>
+  <div id="imageLightbox" class="image-lightbox hidden" role="dialog" aria-modal="true" aria-label="Xem ảnh">
+    <div class="image-lightbox-toolbar" role="toolbar" aria-label="Điều khiển ảnh">
+      <button id="zoomOut" type="button" aria-label="Thu nhỏ">−</button>
+      <span id="zoomLabel" aria-live="polite">100%</span>
+      <button id="zoomIn" type="button" aria-label="Phóng to">+</button>
+      <button id="resetZoom" type="button">Đặt lại</button>
+    </div>
+    <div id="lightboxViewport" class="image-lightbox-viewport">
+      <img id="lightboxImage" alt="Ảnh đính kèm" draggable="false">
+    </div>
+    <button id="closeImage" type="button" aria-label="Đóng ảnh"><span aria-hidden="true">×</span></button>
+  </div>
   <script nonce="${safeNonce}">${controller}</script>
 </body>
 </html>`;
+  return html
+    .replace(
+      '<div id="providerMenu" class="provider-menu hidden" role="listbox">',
+      '<div id="providerMenu" class="provider-menu hidden" role="listbox"><button type="button" class="provider-option" data-provider="omniroute"><span><strong>OmniRoute</strong><small>Local gateway · automatic routing</small></span></button>'
+    )
+    .replace(
+      '<select id="configProvider" class="hidden" aria-hidden="true" tabindex="-1">',
+      '<select id="configProvider" class="hidden" aria-hidden="true" tabindex="-1"><option value="omniroute">OmniRoute</option>'
+    );
 }
 
 function escapeAttribute(value: string): string {

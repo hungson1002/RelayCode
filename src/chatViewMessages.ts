@@ -34,7 +34,7 @@ export type WebviewMessage =
   | { type: 'deleteProfile'; id: string }
   | { type: 'collapseSidebar'; width: number }
   | { type: 'dialogResult'; id: string; action?: string; value?: string }
-  | { type: 'checkModels' }
+  | { type: 'checkModels'; mode?: ChatMode }
   | { type: 'cancelModelCheck' }
   | { type: 'restoreCheckpoint'; id: string }
   | { type: 'getTelemetry' }
@@ -56,6 +56,7 @@ export type WebviewMessage =
   | { type: 'retryConnection' }
   | { type: 'checkRouterConnection' }
   | { type: 'openDashboard' }
+  | { type: 'openOmniRoute' }
   | { type: 'openCockpit' }
   | { type: 'openExternal'; url: string }
   | { type: 'openFile'; path: string }
@@ -88,16 +89,18 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
   const value = candidate;
   const noPayload = new Set([
     'ready', 'discardAgentRun', 'pauseGoal', 'clearGoal', 'acceptAllChanges',
-    'undoAllChanges', 'exportDiagnostics', 'showLogs', 'checkModels',
+    'undoAllChanges', 'exportDiagnostics', 'showLogs',
     'cancelModelCheck', 'getTelemetry', 'openTelemetryDashboard',
     'clearTelemetry', 'getMcpServers', 'setupLocalProvider',
     'stopTurn', 'startRouter', 'retryConnection', 'checkRouterConnection',
-    'openDashboard', 'openCockpit', 'deleteAllSessions', 'disconnectProvider', 'newThread',
+    'openDashboard', 'openOmniRoute', 'openCockpit', 'deleteAllSessions', 'disconnectProvider', 'newThread',
     'refreshSkills', 'openSettings', 'showAgentRecovery'
   ]);
   if (noPayload.has(value.type as string)) return true;
 
   switch (value.type) {
+    case 'checkModels':
+      return value.mode === undefined || isOneOf(value.mode, ['chat', 'agent', 'plan']);
     case 'webviewDiagnostic':
       return isOneOf(value.level, ['error', 'rejection']) && isString(value.message, 4_000);
     case 'setLanguage':
@@ -225,7 +228,7 @@ function isOneOf<const T extends readonly string[]>(value: unknown, choices: T):
 }
 
 function isProviderKind(value: unknown): value is ProviderKind {
-  return isOneOf(value, ['9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio']);
+  return isOneOf(value, ['omniroute', '9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio']);
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

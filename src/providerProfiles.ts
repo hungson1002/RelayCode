@@ -12,9 +12,10 @@ const LEGACY_OPENCODE_ENDPOINTS = new Set([
   'https://console.opencode.ai/inference/openai/v1'
 ]);
 const LEGACY_SHARED_ENDPOINT_HOSTS = new Set(['kiraai.vn']);
-const PROVIDER_KINDS: ProviderKind[] = ['9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio'];
+const PROVIDER_KINDS: ProviderKind[] = ['omniroute', '9router', 'cockpit', 'opencode', 'openai', 'anthropic', 'openai-compatible', 'ollama', 'lm-studio'];
 
 const DEFAULT_PROVIDER_ENDPOINTS: Record<ProviderKind, string> = {
+  omniroute: 'http://127.0.0.1:20128/v1',
   '9router': 'http://127.0.0.1:20128/v1',
   cockpit: 'http://127.0.0.1:1455/v1',
   opencode: OPENCODE_ZEN_ENDPOINT,
@@ -225,7 +226,7 @@ export class TelemetryStore {
 }
 
 function providerLabel(kind: ProviderKind): string {
-  return kind === 'cockpit' ? 'Cockpit Tools' : kind === 'opencode' ? 'OpenCode' : kind === 'anthropic' ? 'Anthropic Claude' : kind === 'lm-studio' ? 'LM Studio' : kind === 'openai-compatible' ? 'OpenAI-compatible' : kind === 'openai' ? 'OpenAI' : kind === 'ollama' ? 'Ollama' : '9Router';
+  return kind === 'omniroute' ? 'OmniRoute' : kind === 'cockpit' ? 'Cockpit Tools' : kind === 'opencode' ? 'OpenCode' : kind === 'anthropic' ? 'Anthropic Claude' : kind === 'lm-studio' ? 'LM Studio' : kind === 'openai-compatible' ? 'OpenAI-compatible' : kind === 'openai' ? 'OpenAI' : kind === 'ollama' ? 'Ollama' : '9Router';
 }
 
 function positive(value: number | undefined): number | undefined {

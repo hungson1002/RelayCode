@@ -607,6 +607,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.checkRouterConnection();
       } else if (message.type === 'openDashboard') {
         await this.openDashboard();
+      } else if (message.type === 'openOmniRoute') {
+        await this.openOmniRoute();
       } else if (message.type === 'openCockpit') {
         await this.openCockpit();
       } else if (message.type === 'openExternal') {
@@ -683,7 +685,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (!this.view?.visible) return;
         await vscode.commands.executeCommand('workbench.action.closeSidebar');
       } else if (message.type === 'checkModels') {
-        await this.checkModels();
+        await this.checkModels(message.mode ?? 'chat');
       } else if (message.type === 'cancelModelCheck') {
         this.modelCheckController?.abort();
       } else if (message.type === 'restoreCheckpoint') {
@@ -834,6 +836,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
   }
 
+  public async openOmniRoute(): Promise<void> {
+    try {
+      const profile = this.profileStore.active();
+      const endpoint = profile?.kind === 'omniroute' ? profile.endpoint : 'http://127.0.0.1:20128/v1';
+      const dashboardUrl = `${new URL(normalizeEndpoint(endpoint)).origin}/`;
+      await vscode.env.openExternal(vscode.Uri.parse(dashboardUrl));
+      await this.post({ type: 'browserOpened', url: dashboardUrl });
+    } catch (error) {
+      this.interaction.notify(this.errorText(error), 'danger');
+    }
+  }
+
   public async openCockpit(): Promise<void> {
     const cockpitLink = vscode.Uri.parse('cockpit-tools://');
     const downloadPage = vscode.Uri.parse('https://github.com/jlcodes99/cockpit-tools/releases');
@@ -930,7 +944,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (generation !== this.connectionGeneration) return;
     let routerRuntime: RouterRuntimeStatus | undefined;
     if (provider === '9router') routerRuntime = await this.routerProcess.inspect(endpoint);
-    const requiresKey = provider !== 'ollama' && provider !== 'lm-studio';
+    const requiresKey = provider !== 'omniroute' && provider !== 'ollama' && provider !== 'lm-studio';
     if (requiresKey && !apiKey.trim()) {
       this.connectionOnline = false;
       this.models = [];
@@ -1023,7 +1037,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const provider = this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');
     try {
       const apiKey = await this.getApiKey(provider);
-      if (provider !== 'ollama' && provider !== 'lm-studio' && !apiKey.trim()) return;
+      if (provider !== 'omniroute' && provider !== 'ollama' && provider !== 'lm-studio' && !apiKey.trim()) return;
       if (provider === '9router') {
         if (!(await this.routerProcess.isRunning(this.endpoint))) throw new Error('9Router chưa phản hồi health check.');
       } else {
@@ -1095,7 +1109,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.post({ type: 'connection', connected: true, endpoint, models: this.models, canStop: routerRuntime?.canStop ?? this.routerProcess.canStop(), provider, routerRuntimeState: routerRuntime?.state, routerRuntimeOwner: routerRuntime?.owner });
       }
       const latency = Date.now() - started;
-      const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+      const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
       const message = language === 'en'
         ? `Connected · ${models.length} models · ${latency} ms`
         : `Kết nối tốt · ${models.length} model · ${latency} ms`;
@@ -1150,13 +1164,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.interaction.notify('Đã xuất gói chẩn đoán. API key và token không có trong file.', 'success');
   }
 
-  private async checkModels(): Promise<void> {
+  private async checkModels(mode: ChatMode = 'chat'): Promise<void> {
     if (!this.models.length) throw new Error('Chưa có model để kiểm tra.');
-    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
     const english = language === 'en';
     const choice = await this.interaction.choose({
       title: english ? `Check ${this.models.length} models?` : `Kiểm tra ${this.models.length} model?`,
-      message: english ? 'RelayCode will send a short request to each model.' : 'RelayCode sẽ gửi một request ngắn đến từng model.',
+      message: mode === 'agent'
+        ? (english ? 'RelayCode will verify a real Agent tool-call for each model.' : 'RelayCode sẽ kiểm tra tool-call thật của Agent với từng model.')
+        : (english ? 'RelayCode will send a short streaming request to each model.' : 'RelayCode sẽ gửi một request streaming ngắn đến từng model.'),
       detail: english ? 'This may incur charges or hit a rate limit.' : 'Thao tác này có thể phát sinh phí hoặc chạm rate limit.',
       tone: 'warning',
       icon: 'pulse',
@@ -1172,7 +1188,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.modelCheckController?.abort();
     const runController = new AbortController();
     this.modelCheckController = runController;
-    await this.post({ type: 'modelCheckStart', total: this.models.length });
+    await this.post({ type: 'modelCheckStart', total: this.models.length, mode });
     let cursor = 0;
     let completed = 0;
     // Keep the probe burst small: free providers commonly enforce tight
@@ -1181,20 +1197,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       while (cursor < this.models.length && !runController.signal.aborted) {
         const model = this.models[cursor++];
         if (!model) break;
-        await this.post({ type: 'modelCheck', model: model.id, status: 'checking' });
+        await this.post({ type: 'modelCheck', model: model.id, status: 'checking', mode });
         const requestController = new AbortController();
         const cancelRequest = () => requestController.abort();
         runController.signal.addEventListener('abort', cancelRequest, { once: true });
         const timeout = setTimeout(() => requestController.abort(), 60_000);
         try {
-          const metrics = await client.checkModel(model.id, requestController.signal);
-          await this.post({ type: 'modelCheck', model: model.id, status: 'ok', latencyMs: metrics.latencyMs });
+          const metrics = await client.checkModel(model.id, requestController.signal, mode);
+          await this.post({ type: 'modelCheck', model: model.id, status: 'ok', latencyMs: metrics.latencyMs, mode });
         } catch (error) {
           const timedOut = requestController.signal.aborted && !runController.signal.aborted;
-          const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+          const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
           const message = timedOut ? localizeProviderError('timeout', language) : runController.signal.aborted ? 'Đã hủy' : this.errorText(error);
           const limited = timedOut || /HTTP 429|rate.?limit|giới hạn (?:cuộc gọi|yêu cầu)|too many requests/i.test(message);
-          await this.post({ type: 'modelCheck', model: model.id, status: limited ? 'limited' : 'error', message });
+          await this.post({ type: 'modelCheck', model: model.id, status: limited ? 'limited' : 'error', message, mode });
         } finally {
           clearTimeout(timeout);
           runController.signal.removeEventListener('abort', cancelRequest);
@@ -1207,7 +1223,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       await Promise.all(workers);
     } finally {
       if (this.modelCheckController === runController) this.modelCheckController = undefined;
-      await this.post({ type: 'modelCheckEnd', completed, total: this.models.length, cancelled: runController.signal.aborted });
+      await this.post({ type: 'modelCheckEnd', completed, total: this.models.length, cancelled: runController.signal.aborted, mode });
     }
   }
 
@@ -1275,7 +1291,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private telemetryDashboardHtml(webview: vscode.Webview): string {
     const quota = this.quotaSnapshot ?? this.quotaService.loading(this.quotaEndpoint());
-    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
     return renderTelemetryDashboard(webview, this.telemetryStore.list(), quota, getNonce(), this.profileStore.active(), language);
   }
 
@@ -1539,7 +1555,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (!message.model) throw new Error('Hãy chọn một model trước khi gửi.');
 
     const config = vscode.workspace.getConfiguration('nineRouter');
-    const responseLanguage = detectResponseLanguage(prompt, config.get<'vi' | 'en'>('language', 'vi'));
+    const responseLanguage = detectResponseLanguage(prompt, config.get<'vi' | 'en'>('language', 'en'));
     const tuningForModel = (model: string) => /(codex|gpt-5|(?:^|[/_-])o[134](?:$|[/_.-]))/i.test(model)
       ? {
           reasoningEffort: message.reasoningEffort,
@@ -1630,7 +1646,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
     let answer = '';
     const planChatSummary = message.mode === 'plan'
-      ? ((responseLanguage === 'en' || (responseLanguage === 'same' && config.get<'vi' | 'en'>('language', 'vi') === 'en'))
+      ? ((responseLanguage === 'en' || (responseLanguage === 'same' && config.get<'vi' | 'en'>('language', 'en') === 'en'))
         ? 'Plan is ready. Open the Implementation Plan tab to review, revise or proceed.'
         : 'Đã lập xong kế hoạch. Mở tab Kế hoạch thực hiện để xem, chỉnh sửa hoặc thực hiện.')
       : '';
@@ -2081,7 +2097,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     serviceTier: 'default' | 'fast' | undefined,
     createdAt: number
   ): void {
-    const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'vi');
+    const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'en');
     const title = planDocumentTitle(plan, prompt);
     const sessionId = this.currentSessionId;
     this.planPanel?.dispose();
@@ -3120,7 +3136,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         .filter((change) => change.sessionId === this.currentSessionId)
         .map((change) => vscode.workspace.asRelativePath(change.path));
       this.sessionSummary = buildSessionSummary(this.transcript, changedFiles);
-      const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'vi');
+      const language = vscode.workspace.getConfiguration('nineRouter').get<'vi' | 'en'>('language', 'en');
       await this.post({ type: 'notice', message: sessionSummaryForDisplay(this.sessionSummary, language) });
       return true;
     }
@@ -3326,7 +3342,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private post(message: unknown): Thenable<boolean> | Promise<boolean> {
-    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
     return this.view?.webview.postMessage(localizeUiPayload(message, language)) ?? Promise.resolve(false);
   }
 
@@ -3345,7 +3361,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (nested) message = nested.replace(/\\"/g, '"');
     } catch { /* plain error */ }
     if (raw.includes('REQUEST_BODY_INVALID')) return '9Router/provider từ chối payload. Hãy kiểm tra provider và API key của model này trong Dashboard 9Router.';
-    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
     return localizeProviderError(message, language);
   }
 
@@ -3390,7 +3406,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private html(webview: vscode.Webview): string {
     const nonce = getNonce();
-    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'vi'));
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
     // Localize the static HTML, but keep the controller source bilingual. If
     // the controller is localized as plain text too, switching from English
     // back to Vietnamese loses the original `uiCopy(vi, en)` branches.
@@ -3853,7 +3869,7 @@ function approvalPresentation(description: string): ApprovalPresentation {
 }
 
 function normalizeUiLanguage(value: unknown): 'vi' | 'en' {
-  return value === 'en' ? 'en' : 'vi';
+  return value === 'vi' ? 'vi' : 'en';
 }
 
 function similarCommandRule(command: string): string | undefined {

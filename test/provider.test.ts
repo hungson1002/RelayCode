@@ -11,6 +11,16 @@ describe('provider factory', () => {
     expect(createProvider({ kind: 'openai', endpoint: 'https://api.openai.com/v1', apiKey: 'test' })).toBeInstanceOf(RouterClient);
     expect(createProvider({ kind: 'cockpit', endpoint: 'http://127.0.0.1:1455/v1', apiKey: 'client-key' })).toBeInstanceOf(RouterClient);
     expect(createProvider({ kind: 'opencode', endpoint: 'https://opencode.ai/zen/v1', apiKey: 'test' })).toBeInstanceOf(RouterClient);
+    expect(createProvider({ kind: 'omniroute', endpoint: 'http://127.0.0.1:20128/v1', apiKey: '' })).toBeInstanceOf(RouterClient);
+  });
+
+  it('allows OmniRoute zero-config model discovery without an API key', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'auto' }] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createProvider({ kind: 'omniroute', endpoint: 'http://127.0.0.1:20128/v1', apiKey: '' });
+
+    await expect(client.listModels()).resolves.toEqual([{ id: 'auto', name: 'auto', kind: undefined }]);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).not.toHaveProperty('Authorization');
   });
 
   it('turns a Cockpit 403 response into an actionable credential message', async () => {

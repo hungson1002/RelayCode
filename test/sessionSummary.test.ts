@@ -22,7 +22,7 @@ describe('session summary', () => {
   });
 
   it('localizes the visible summary without changing its model structure', () => {
-    expect(sessionSummaryForDisplay('Session summary\nGoal: Build it\nChanged files: None recorded.')).toBe(
+    expect(sessionSummaryForDisplay('Session summary\nGoal: Build it\nChanged files: None recorded.', 'vi')).toBe(
       'Tóm tắt phiên\nMục tiêu: Build it\nFile đã đổi: Chưa ghi nhận.'
     );
     expect(sessionSummaryForDisplay('Session summary', 'en')).toBe('Session summary');
