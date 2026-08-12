@@ -270,7 +270,9 @@ export class RouterClient {
         [{ type: 'function', function: { name: 'relaycode_probe', description: 'A harmless RelayCode capability probe.', parameters: { type: 'object', properties: {} } } }],
         signal
       );
-      if (!result.toolCalls.length) throw new Error('Model phản hồi Chat nhưng không trả về tool-call cho Agent.');
+      if (!result.toolCalls.some((call) => call.name === 'relaycode_probe')) {
+        throw new Error('Model phản hồi nhưng không gọi đúng relaycode_probe cho Agent.');
+      }
       return result.metrics;
     }
     const startedAt = Date.now();

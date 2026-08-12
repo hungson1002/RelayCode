@@ -109,7 +109,7 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('font-family:var(--vscode-font-family)!important;font-size:inherit!important;font-weight:650!important;line-height:inherit!important');
     expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link>span:not(.file-type-icon):not(.file-line){vertical-align:baseline!important;line-height:inherit!important}');
     expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link .file-type-icon{display:inline-block!important;align-self:auto!important;flex:none!important;width:16px!important;min-width:16px!important;height:16px!important;min-height:16px!important;margin:0 4px 0 0!important;padding:0!important;line-height:0!important;vertical-align:-.34em!important;position:static!important;top:auto!important;transform:none!important;overflow:visible!important}');
-    expect(CHAT_VIEW_STYLES).toContain('overflow:visible!important;fill:none!important;shape-rendering:geometricPrecision!important');
+    expect(CHAT_VIEW_STYLES).toContain('overflow:visible!important;fill:currentColor!important;shape-rendering:geometricPrecision!important');
     expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link .file-type-icon .ui-symbol,body .message.assistant .body .file-link .file-type-icon .ui-symbol svg{display:block!important;width:16px!important;height:16px!important');
     expect(CHAT_VIEW_STYLES).toContain('body .agent-commentary .file-link{display:inline!important;align-items:initial!important;vertical-align:baseline!important');
     expect(CHAT_VIEW_STYLES).toContain('body .agent-commentary .file-link .file-type-icon{display:inline-block!important;align-self:auto!important;flex:none!important;width:16px!important;min-width:16px!important;height:16px!important;min-height:16px!important');
@@ -130,7 +130,7 @@ describe('Chat webview assets', () => {
 
   it('does not report temporary provider rate limits as broken models', () => {
     expect(providerSource).toContain("status: limited ? 'limited' : 'error'");
-    expect(providerSource).toContain('Math.min(3, this.models.length)');
+    expect(providerSource).toContain('Math.min(3, modelsToCheck.length)');
     expect(CHAT_VIEW_CONTROLLER).toContain("healthStatus === 'limited'");
     expect(CHAT_VIEW_CONTROLLER).toContain('Tạm giới hạn · thử lại sau');
     expect(CHAT_VIEW_STYLES).toContain('.model-health.limited:before');
@@ -189,9 +189,23 @@ describe('Chat webview assets', () => {
   });
 
   it('localizes the model check confirmation from the selected language', () => {
-    expect(providerSource).toContain("title: english ? `Check ${this.models.length} models?`");
+    expect(providerSource).toContain("title: english ? `Check ${modelsToCheck.length} models?`");
     expect(providerSource).toContain("label: english ? 'Check all' : 'Kiểm tra tất cả'");
+    expect(providerSource).toContain('const profile = this.profileStore.active();');
+    expect(providerSource).toContain("const profileId = profile?.id ?? '';");
+    expect(providerSource).toContain('const endpoint = profile?.endpoint ?? this.endpoint;');
+    expect(providerSource).toContain('const apiKey = profile ? await this.profileStore.apiKey(profile) : await this.getApiKey(provider);');
+    expect(providerSource).toContain("type: 'modelCheckStart', total: modelsToCheck.length, mode, profileId");
+    expect(providerSource).toContain("this.modelCheckController?.abort();\n        const profile = await this.profileStore.activate(message.id)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (data.profileId && data.profileId !== currentProfileId) return;");
     expect(CHAT_VIEW_CONTROLLER).toContain("$('checkModels').textContent = checkingModels");
+  });
+
+  it('localizes dynamic profile confirmation text in English mode', () => {
+    expect(providerSource).toContain("'Xóa hồ sơ?': 'Delete profile?'");
+    expect(providerSource).toContain("' và API key đã lưu riêng sẽ bị xóa.': ' and its saved API key will be deleted.'");
+    expect(providerSource).toContain("' sẽ bị xóa khỏi lịch sử.': ' will be removed from history.'");
+    expect(providerSource).toContain("'Xóa': 'Delete'");
   });
 
   it('normalizes a tampered language value before rendering HTML attributes', () => {
@@ -350,8 +364,8 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain("title: 'Agent vẫn đang chạy'");
     expect(providerSource).toContain("await this.deleteSession(message.id)");
     expect(providerSource).not.toContain("Hãy dừng tác vụ đang chạy trước khi xóa cuộc trò chuyện.");
-    expect(providerSource).toContain('title: smartSessionTitle(firstPrompt)');
-    expect(providerSource).toContain("turns.find((turn) => turn.role === 'user')");
+    expect(providerSource).toContain('title: smartSessionTitleFromTurns(this.transcript)');
+    expect(providerSource).toContain("title: kind === 'chatgpt-web' ? 'ChatGPT Web' : smartSessionTitleFromTurns(turns) || title");
     expect(providerSource).toContain('.sort((left, right) => right.updatedAt - left.updatedAt)');
   });
 
@@ -468,13 +482,24 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.message.user:hover .message-meta');
     expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions{display:flex;align-items:center;justify-content:flex-start');
     expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .label{display:block!important');
-  expect(CHAT_VIEW_STYLES).toContain('.worked-label{font-size:12px!important');
+    expect(CHAT_VIEW_STYLES).toContain('--response-text:#c4c7ca');
+    expect(CHAT_VIEW_STYLES).toContain('font-size:13px;\n    font-weight:400;\n    line-height:1.78');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant .body strong{color:var(--response-strong);font-weight:600}');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant.streaming .streaming-plain-copy{white-space:pre-wrap;font:inherit}');
+    expect(CHAT_VIEW_STYLES).toContain('.agent-commentary{color:var(--response-text);font-size:13px;font-weight:400;line-height:1.78}');
+    expect(CHAT_VIEW_STYLES).toContain('font-size:12px!important;font-weight:400!important;line-height:1.4');
+  expect(CHAT_VIEW_STYLES).toContain('.worked-label{display:flex!important;align-items:center!important;width:100%');
   });
 
   it('places the assistant copy control after the response review card', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("return uiIcon(kind === 'edit' ? 'pencilSimple' : kind)");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("type: 'messageFeedback'");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('response-feedback');
+    expect(CHAT_VIEW_CONTROLLER).toContain("messageActionIcon('arrowsOut')");
     expect(CHAT_VIEW_CONTROLLER).toContain("responseActions.className = 'assistant-response-actions'");
-    expect(CHAT_VIEW_CONTROLLER).toContain('responseActions.append(copy, label)');
-    expect(CHAT_VIEW_CONTROLLER).toContain("item.insertBefore(card, item.querySelector('.assistant-response-actions,.message-meta'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain('responseActions.append(copy, expand, label)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("type: 'openAssistantResponse'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (workedDetails) workedDetails.append(card)');
     expect(CHAT_VIEW_CONTROLLER).toContain('function placeAssistantResponseActionsAfterChangeSummary()');
     expect(CHAT_VIEW_CONTROLLER).toContain('placeAssistantResponseActionsAfterChangeSummary();');
     expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions{display:flex;align-items:center;justify-content:flex-start');
@@ -482,6 +507,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .message-action{opacity:0;transform:translateY(2px);pointer-events:none}');
     expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .message-action{visibility:hidden;transition:opacity .14s ease,visibility .14s ease,transform .14s ease}');
     expect(CHAT_VIEW_STYLES).toContain('.message.assistant:hover .assistant-response-actions .message-action');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant:hover + .chat-change-summary + .assistant-response-actions .message-action');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant:focus-within + .chat-change-summary + .assistant-response-actions .message-action');
     expect(CHAT_VIEW_STYLES).toContain('.message.assistant.streaming .assistant-response-actions{display:none!important}');
     expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions{display:flex;align-items:center;justify-content:flex-start;gap:7px;min-height:26px;margin-top:1px!important;opacity:1');
     expect(CHAT_VIEW_STYLES).toContain('.assistant-response-actions .label{display:block!important;visibility:hidden;opacity:0');
@@ -525,14 +552,15 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('if (opening) closeDropdowns(allowMenu)');
   });
 
-  it('shows live activity but removes progress and technical output after a turn finishes', () => {
+  it('shows live activity and folds completed technical output under Worked for', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function finalizeLiveActivity()');
     expect(CHAT_VIEW_CONTROLLER).toContain('function compactTechnicalHistory(');
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'activityComplete') {\n    finalizeLiveActivity()");
-    expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.agent-commentary,.activity-history-summary,.agent-activity,.terminal-card').forEach((node) => node.remove());");
+    expect(CHAT_VIEW_CONTROLLER).toContain("history.className = 'worked-history'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("details.className = 'worked-history-details'");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (data.cancelled) discardTechnicalHistory(turnMessage);");
     expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.activity-history-summary,.agent-activity,.terminal-card')");
-    expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.message.complete .agent-activity').forEach((node) => node.remove());");
+    expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.message.complete > .agent-activity').forEach((node) => node.remove());");
     expect(CHAT_VIEW_CONTROLLER).toContain('function scrollMessagesToBottom()');
     expect(CHAT_VIEW_CONTROLLER).toContain("setRunning(true);\n    scrollMessagesToBottom();");
     expect(CHAT_VIEW_CONTROLLER).toContain("type: 'resumeAgent', model: $('model').value");
@@ -603,23 +631,33 @@ describe('Chat webview assets', () => {
   it('reveals streamed provider deltas smoothly without blocking the provider stream', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('if (!assistantBody || !delta) return;');
     expect(CHAT_VIEW_CONTROLLER).toContain('pendingAssistantText += delta;');
-    expect(CHAT_VIEW_CONTROLLER).toContain('const charsThisFrame = Math.max(3, Math.min(12, Math.ceil(pendingAssistantText.length / 14)));');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const charactersPerSecond = Math.min(maximumRate, 110 + pendingAssistantText.length * 0.9);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantCharacterBudget + charactersPerSecond * elapsedMs / 1000');
+    expect(CHAT_VIEW_CONTROLLER).toContain('Math.max(1, Math.floor(assistantCharacterBudget))');
     expect(CHAT_VIEW_CONTROLLER).toContain('pendingAssistantText = pendingAssistantText.slice(charsThisFrame);');
     expect(CHAT_VIEW_CONTROLLER).toContain('if (pendingAssistantText) {\n    scheduleAssistantTextRender();\n    return;\n  }');
     expect(CHAT_VIEW_CONTROLLER).toContain('assistantRenderFrame = requestAnimationFrame(renderPendingAssistantText);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantStreamTextNode.appendData(chunk);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantBody.append(liveCopy);');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('assistantMarkdownTimer = setTimeout(materializeStreamingMarkdown');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantMarkdownRenderedLength = assistantRawText.length;');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('prompt').blur();");
     expect(CHAT_VIEW_STYLES).toContain('.composer-shell #prompt:focus,.composer-shell #prompt:focus-visible,.composer-shell.is-running #prompt:focus,.composer-shell.is-running #prompt:focus-visible{caret-color:#f2f3f4!important}');
     expect(CHAT_VIEW_STYLES).not.toContain('caret-color:transparent!important');
+    expect(CHAT_VIEW_STYLES).toContain('.message.assistant.streaming .streaming-plain-copy');
+    expect(CHAT_VIEW_STYLES).toContain('.messages{overflow-y:scroll!important;overflow-x:hidden!important;contain:inline-size}');
+    expect(CHAT_VIEW_STYLES).toContain('text-wrap:wrap!important');
     expect(CHAT_VIEW_CONTROLLER).toContain('renderMarkdownInto(assistantBody, assistantRawText);');
     expect(CHAT_VIEW_CONTROLLER).toContain('function markAssistantOutput()');
     expect(CHAT_VIEW_CONTROLLER).toContain('if (state === \'working\' && workingStatus && !assistantHasOutput)');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('typingTimer');
     expect(CHAT_VIEW_CONTROLLER).not.toContain('setTimeout(tick, 16)');
-    const renderStart = CHAT_VIEW_CONTROLLER.indexOf('function renderPendingAssistantText()');
+    const renderStart = CHAT_VIEW_CONTROLLER.indexOf('function renderPendingAssistantText(');
     const renderEnd = CHAT_VIEW_CONTROLLER.indexOf('function scheduleAssistantTextRender()', renderStart);
     expect(renderStart).toBeGreaterThan(-1);
     expect(renderEnd).toBeGreaterThan(renderStart);
     expect(CHAT_VIEW_CONTROLLER.slice(renderStart, renderEnd)).toContain('pendingAssistantText = pendingAssistantText.slice(charsThisFrame);');
+    expect(CHAT_VIEW_CONTROLLER.slice(renderStart, renderEnd)).not.toContain('item.dataset.rawContent = assistantRawText');
   });
 
   it('keeps Agent content deltas on the same live stream', () => {
@@ -646,18 +684,31 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).not.toContain("more.className = 'change-summary-more'");
   });
 
-  it('attaches the completed task file list to its assistant message', () => {
+  it('attaches inline file previews to the completed task workflow', () => {
     expect(providerSource).toContain('const completedChanges = [...this.changes.entries()]');
     expect(providerSource).toContain('changes: completedChanges');
+    expect(providerSource).toContain("message.type === 'previewChange'");
+    expect(providerSource).toContain('private async postChangePreview(id: string)');
+    expect(providerSource).toContain("type: 'changePreview'");
     expect(CHAT_VIEW_CONTROLLER).toContain('function appendTurnChangeSummary(');
     expect(CHAT_VIEW_CONTROLLER).toContain("item.querySelector('.turn-change-summary')?.remove()");
-    expect(CHAT_VIEW_CONTROLLER).toContain("item.insertBefore(card, item.querySelector('.assistant-response-actions,.message-meta'))");
-    expect(CHAT_VIEW_CONTROLLER).toContain("card.className = 'chat-change-summary turn-change-summary'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("card.className = 'activity-history-summary edit-history turn-change-summary'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'previewChange', id: change.id })");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function renderChangePreview(data)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'changePreview'");
     expect(CHAT_VIEW_CONTROLLER).toContain('appendTurnChangeSummary(turnMessage, data)');
-    expect(CHAT_VIEW_CONTROLLER).toContain("item.insertBefore(card, item.querySelector('.assistant-response-actions,.message-meta'))");
-    expect(CHAT_VIEW_CONTROLLER).toContain('setExpanded(false)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (workedDetails) workedDetails.append(card)');
     expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.turn-change-file')");
     expect(CHAT_VIEW_CONTROLLER).toContain('!hasInlineChangeSummary');
+    expect(CHAT_VIEW_STYLES).toContain('.edited-file-preview{');
+    expect(CHAT_VIEW_STYLES).toContain('.edited-file-line.removed{');
+    expect(CHAT_VIEW_STYLES).toContain('.edited-file-line.added{');
+  });
+
+  it('keeps one working clock per turn', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.worked-label.working-live').forEach((node) => {");
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (node !== existing) node.remove()');
+    expect(CHAT_VIEW_CONTROLLER).toContain('labels.slice(0, -1).forEach((node) => node.remove())');
   });
 
   it('uses the shared brand registry for models, providers and MCP services', () => {
@@ -748,15 +799,89 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function positionPermissionMenu()');
   });
 
-  it('turns pasted links into compact branded composer tokens', () => {
-    expect(CHAT_VIEW_CONTROLLER).toContain('let composerLinks = []');
-    expect(CHAT_VIEW_CONTROLLER).toContain('function compactExternalLink(');
-    expect(CHAT_VIEW_CONTROLLER).toContain("if (host === 'github.com')");
-    expect(CHAT_VIEW_CONTROLLER).toContain('function extractComposerLinks(');
-    expect(CHAT_VIEW_CONTROLLER).toContain("...composerLinks.map((link) => '[' + link.label + '](' + link.url + ')')");
+  it('uses a rich inline composer so pasted links stay at the caret without attachment controls', () => {
+    expect(html).toContain('id="prompt" class="prompt-editor"');
+    expect(html).toContain('contenteditable="true"');
+    expect(html).not.toContain('id="composerLinkTokens"');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function initializePromptEditor()');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function createPromptLink(url, label = url)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("link.className = 'composer-rich-link'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("copy.className = 'composer-rich-link-copy'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('link.append(icon, copy)');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("link.querySelector('span:last-child').textContent = label");
+    expect(CHAT_VIEW_CONTROLLER).toContain('return escapeHtml(target);');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("return parts.slice(0, 2).join('/')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("link.contentEditable = 'false'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('prompt.setRangeText(pasted, start, end');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('composer-link-remove');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('let composerLinks = []');
+    expect(CHAT_VIEW_CONTROLLER).toContain('renderMarkdownInto(text, copy)');
     expect(CHAT_VIEW_CONTROLLER).toContain("isGithub ? brandIcon('github', 'GitHub')");
-    expect(CHAT_VIEW_STYLES).toContain('.composer-token.link');
-    expect(CHAT_VIEW_STYLES).toContain('.rich-link-icon');
+    expect(CHAT_VIEW_STYLES).toContain('.composer-input .prompt-editor{');
+    expect(CHAT_VIEW_STYLES).toContain('.composer-rich-link{display:inline;');
+    expect(CHAT_VIEW_STYLES).toContain('.message.user .sent-prompt-copy .rich-link{display:inline-flex');
+    expect(CHAT_VIEW_STYLES).toContain('.message.user .sent-prompt-copy p{margin:0}');
+    expect(CHAT_VIEW_STYLES).toContain('background:transparent;color:#58aee8');
+    expect(CHAT_VIEW_STYLES).toContain('.message.user .sent-prompt-copy .rich-link-icon{color:#58aee8}');
+    expect(CHAT_VIEW_CONTROLLER).toContain("document.createTextNode('\\u200B')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("replace(/\\u200B/g, '')");
+  });
+
+  it('keeps URL semantics distinct from files and renders shell commands as one terminal surface', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("const looksLikeUrl = /^https?:\\/\\//i.test(plain)");
+    expect(CHAT_VIEW_CONTROLLER).toContain('const looksLikeFile = !looksLikeUrl &&');
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiIcon('globe')");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function renderCodeBlock(lines, languageHint = \'\')');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const inferredShell = commands.length > 0');
+    expect(CHAT_VIEW_CONTROLLER).toContain('class="markdown-terminal-code"');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('<div class="markdown-terminal"><div class="markdown-terminal-head"><span aria-hidden="true">\' + uiIcon(\'terminalWindow\') + \'</span><b>Terminal</b></div><pre>');
+    expect(CHAT_VIEW_CONTROLLER).toContain('html += renderCodeBlock(code, codeLanguage)');
+    expect(CHAT_VIEW_STYLES).toContain('.markdown-terminal{');
+    expect(CHAT_VIEW_STYLES).toContain('.markdown-terminal-code{');
+  });
+
+  it('renders fenced plain text with a Codex-style label and exactly one copy action', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("text: 'Plain text', plaintext: 'Plain text', txt: 'Plain text'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('class="markdown-code-block"');
+    expect(CHAT_VIEW_CONTROLLER).toContain('class="markdown-code-copy" data-code-copy=');
+    expect(CHAT_VIEW_CONTROLLER).toContain("container.querySelectorAll('[data-code-copy]')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("button.innerHTML = uiIcon('check')");
+    expect(CHAT_VIEW_STYLES).toContain('.markdown-code-head{');
+    expect(CHAT_VIEW_STYLES).toContain('.markdown-code-copy{');
+    expect(CHAT_VIEW_STYLES).not.toContain('.markdown-code-expand');
+  });
+
+  it('renders ChatGPT Web tool use as an in-chat timeline instead of a floating picker', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('function appendChatGptWebActivity(activity, immediate = false)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("session.kind === 'chatgpt-web'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (data.sessionKind === 'chatgpt-web') appendChatGptWebIntro()");
+    expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'chatGptWebActivity'");
+    expect(CHAT_VIEW_STYLES).toContain('.chatgpt-web-activity{');
+    expect(CHAT_VIEW_STYLES).toContain('.chatgpt-web-intro{');
+    expect(CHAT_VIEW_STYLES).toContain('.chatgpt-web-history-item');
+  });
+
+  it('batches live ChatGPT Web activity without fighting the transcript scroll position', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('pendingChatGptWebActivities.push(activity)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('requestAnimationFrame(flushChatGptWebActivities)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const shouldFollow = messagesPinnedToBottom || messagesAreNearBottom()');
+    expect(CHAT_VIEW_CONTROLLER).toContain('appendChatGptWebActivity(turn.chatGptActivity, true)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('resetChatGptWebActivityQueue()');
+    expect(CHAT_VIEW_STYLES).toContain('contain:layout style;overflow-anchor:none');
+  });
+
+  it('allows attachment-only sends and keeps a file icon for every attachment fallback', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('let pendingAttachmentCount = 0');
+    expect(CHAT_VIEW_CONTROLLER).toContain('pendingAttachmentCount = Array.isArray(data.attachments) ? data.attachments.length : 0');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const prompt = composerPrompt;');
+    expect(CHAT_VIEW_CONTROLLER).toContain('if (!prompt && !pendingAttachmentCount) return;');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('attachmentList').replaceChildren();");
+    expect(providerSource).toContain('const hasAttachments = this.pendingAttachments.length > 0;');
+    expect(providerSource).toContain('if (!prompt && !hasAttachments) return;');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function createUserAttachmentLabel(name)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('createUserAttachmentLabel(attachment.name)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("String(name || '').startsWith('file') ? uiIcons.file");
+    expect(CHAT_VIEW_STYLES).toContain('.user-file>.ui-symbol');
   });
 
   it('uses one polished menu system for Add, commands, skills and context', () => {
@@ -870,6 +995,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link:hover{border:0!important;background:transparent!important');
     expect(CHAT_VIEW_STYLES).toContain('body .message.assistant .body .file-link>span:not(.file-type-icon):not(.file-line)');
     expect(CHAT_VIEW_STYLES).toContain('display:inline!important;align-items:initial!important;vertical-align:baseline!important');
+    expect(CHAT_VIEW_STYLES).toContain('overflow:visible!important;fill:currentColor!important;shape-rendering:geometricPrecision!important');
+    expect(CHAT_VIEW_STYLES).not.toContain('file-type-icon .ui-symbol svg{display:block!important;width:16px!important;height:16px!important;min-width:16px!important;min-height:16px!important;overflow:visible!important;fill:none!important');
     expect(CHAT_VIEW_STYLES).toContain('body .activity-current-icon[data-icon="fileHtml"]');
     expect(CHAT_VIEW_STYLES).toContain('body .activity-current-icon[data-icon="fileCss"]');
     expect(CHAT_VIEW_CONTROLLER).toContain("if (/\\.(?:vue)$/.test(clean)) return 'fileVue'");
@@ -926,7 +1053,7 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("type: 'webviewDiagnostic'");
   });
 
-  it('renders Codex-style live trace and keeps only the conclusion after completion', () => {
+  it('renders Codex-style live trace and preserves useful steps behind the Worked for disclosure', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function setActivityExpanded(');
     expect(CHAT_VIEW_CONTROLLER).toContain('function appendAgentCommentary(');
     expect(CHAT_VIEW_CONTROLLER).toContain('function archiveStreamedProgress(');
@@ -934,7 +1061,9 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('finalizeLiveActivity();');
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'commentary'");
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'activityComplete'");
-    expect(CHAT_VIEW_CONTROLLER).toContain("turnMessage.querySelectorAll('.agent-commentary,.activity-history-summary,.agent-activity,.terminal-card').forEach((node) => node.remove())");
+    expect(CHAT_VIEW_CONTROLLER).toContain("history.className = 'worked-history'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("details.className = 'worked-history-details'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("document.querySelectorAll('.message.complete > .agent-activity')");
     expect(CHAT_VIEW_CONTROLLER).toContain("toggle.className = 'activity-toggle'");
     expect(CHAT_VIEW_CONTROLLER).toContain("trace.className = 'activity-trace'");
     expect(CHAT_VIEW_CONTROLLER).toContain('class="terminal-command"');
@@ -944,6 +1073,9 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.activity-toggle');
     expect(CHAT_VIEW_STYLES).toContain('.terminal-command');
     expect(CHAT_VIEW_STYLES).toContain('.activity-history-summary');
+    expect(CHAT_VIEW_STYLES).toContain('.worked-history>summary.worked-label');
+    expect(CHAT_VIEW_STYLES).toContain('.agent-activity.expanded .activity-row.active{display:grid!important}');
+    expect(CHAT_VIEW_STYLES).toContain('border-bottom:1px solid rgba(255,255,255,.09)');
     expect(CHAT_VIEW_STYLES).toContain('.change-summary-copy');
     expect(CHAT_VIEW_STYLES).toContain('.chat-change-summary{display:block;margin:12px 0 50px');
     expect(providerSource).toContain("type: 'commentary'");
@@ -953,7 +1085,10 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain('let latestCheckpoint = resumeCheckpoint;');
     expect(providerSource).toContain('latestCheckpoint = checkpoint;');
     expect(providerSource).toContain("await this.post({ type: 'intermediateStep', content: '' });");
-    expect(providerSource).toContain('findHealthyFallbackModel(candidates, candidate, providerClient');
+    expect(providerSource).toContain('findHealthyFallbackModel(candidates, candidate, providerClient, turnController.signal, skippedFallbackModels, message.mode)');
+    expect(providerSource).toContain("type: 'modelRuntimeFailure'");
+    expect(providerSource).toContain('providerClient.checkModel(candidate, AbortSignal.any([signal, AbortSignal.timeout(8_000)]), mode)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'modelRuntimeFailure'");
     expect(providerSource).toContain("type: 'modelSwitched', model: nextModel, from: candidate");
     expect(providerSource).toContain('providerClient.checkModel(candidate');
     expect(providerSource).toContain('tuningForModel(candidate)');
@@ -963,8 +1098,9 @@ describe('Chat webview assets', () => {
 
   it('keeps the visible send control as a reliable stop button during a run', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("$('send').classList.toggle('queue-ready', running && hasPrompt && followUpQueueEnabled)");
-    expect(CHAT_VIEW_CONTROLLER).toContain("$('send').setAttribute('aria-label', running ? (hasPrompt && followUpQueueEnabled ? 'Gửi vào hàng chờ' : 'Dừng phản hồi') : 'Gửi')");
-    expect(CHAT_VIEW_CONTROLLER).toContain("if (effectiveComposerPrompt() && followUpQueueEnabled) {\n      send();\n      return;\n    }");
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Gửi vào hàng chờ', 'Queue message')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Dừng phản hồi', 'Stop response')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if ((effectiveComposerPrompt() || pendingAttachmentCount) && followUpQueueEnabled) {\n      send();\n      return;\n    }");
     expect(CHAT_VIEW_CONTROLLER).toContain("$('send').classList.add('stopping');\n  vscode.postMessage({ type: 'stopTurn' });");
     expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'stopTurn' });\n  // Release the composer immediately.");
     expect(CHAT_VIEW_CONTROLLER).toContain("settleTurn({ cancelled: true, timestamp: Date.now() });\n}");
@@ -996,7 +1132,7 @@ describe('Chat webview assets', () => {
   it('keeps draft provider diagnostics isolated and presents configuration errors as toasts', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("draft: true,\n    endpoint: $('configEndpoint').value");
     expect(CHAT_VIEW_CONTROLLER).toContain("profileId: currentProfileId || undefined");
-    expect(CHAT_VIEW_CONTROLLER).toContain("showUiToast({ message: 'Hãy chọn một model trước khi gửi.', tone: 'danger' })");
+    expect(CHAT_VIEW_CONTROLLER).toContain("showUiToast({ message: uiCopy('Hãy chọn một model trước khi gửi.', 'Select a model before sending.'), tone: 'danger' })");
     expect(CHAT_VIEW_CONTROLLER).not.toContain("appendMessage('assistant', data.message, true)");
     expect(providerSource).toContain("const draft = options.draft === true");
     expect(providerSource).toContain("if (!draft) {\n        this.models = models.map");

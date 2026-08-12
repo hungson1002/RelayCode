@@ -1,5 +1,89 @@
 # Changelog
 
+## 1.5.1
+
+- Batched bursty ChatGPT Web tool activity into a single animation-frame update to stop the timeline and sidebar from jumping.
+- Preserved the reader's scroll position and only followed new activity while the timeline is already near the bottom.
+- Stopped rebuilding the Review tray for read-only ChatGPT Web activity; it now updates only when files actually change.
+
+## 1.5.0
+
+- Added a dedicated ChatGPT Web entry to Chat history that is created only after ChatGPT actually calls a RelayCode workspace tool.
+- Replaced the floating activity picker as the primary history surface with an in-chat timeline for file reads, project searches, edits, commands and failures.
+- Associated ChatGPT-originated file changes with the ChatGPT Web timeline so its Review tray opens with the correct Accept and Undo state.
+- Kept ChatGPT Web tool activity isolated from normal RelayCode conversations and automatically starts a normal new chat when the user sends from the activity timeline.
+
+## 1.4.1
+
+- Replaced the premature ChatGPT-ready notice with a persistent final-step checklist covering every Plugin form field, tunnel selection, authentication, consent, creation and first-chat activation.
+- Added direct actions to open ChatGPT Plugins or copy the complete checklist, and surfaced the guide again from `/chatgpt` after setup.
+
+## 1.4.0
+
+- Replaced the manual ChatGPT Web bridge menu with a guided two-step connection flow that installs and verifies OpenAI `tunnel-client`, stores the Runtime API key in VS Code Secret Storage, validates the tunnel, runs it in the background, and restores it with RelayCode.
+- Added compact ChatGPT connection status, reconnect, activity, Tunnel ID copy and reset actions under `/chatgpt`.
+- Added labeled fenced code blocks for plain text and source languages with a single Codex-style Copy action.
+
+## 1.3.7
+
+- Matched Codex response typography with softer body contrast, regular text weight, restrained bold and heading weights, and roomier list rhythm.
+- Unified live streaming, commentary, inline code, completed Markdown and Worked-for labels under one stable response type system.
+
+## 1.3.6
+
+- Enforced real Playwright tool use for Browser Agent turns instead of accepting model refusals or text-only web tools.
+- Suppressed premature browser-capability disclaimers and exposed the exact connected Browser Agent tool names in runtime instructions.
+
+## 1.3.5
+
+- Removed unused Helpful and Not helpful controls and their local feedback storage path.
+- Kept Copy and Expand response as the two focused assistant actions.
+
+## 1.3.4
+
+- Fixed assistant feedback and expand controls incorrectly rendering as duplicate Copy icons.
+
+## 1.3.3
+
+- Replaced burst-based streaming with a time-based adaptive typewriter cadence.
+- Removed per-frame full-response DOM attribute copies to reduce streaming layout and garbage-collection stalls.
+
+## 1.3.2
+
+- Completed English localization for conversation deletion, including the dynamic history message and the destructive confirmation button.
+
+## 1.3.1
+
+- Stabilized streaming text by keeping one live text node and rendering Markdown only at completed boundaries.
+- Reserved the transcript scrollbar width and disabled dynamic pretty line balancing during generation to prevent sidebar width pulsing.
+- Replaced variable burst draining with a fixed per-frame character budget for smoother typing motion.
+
+## 1.3.0
+
+- Added a private ChatGPT Web MCP bridge for reading, searching, editing, deleting, and running approved commands in the open workspace.
+- Routed ChatGPT Web file mutations through RelayCode Review so every change supports Accept and Undo in VS Code.
+- Added persistent ChatGPT tool activity, `/chatgpt`, a management command, loopback-only networking, and Secure MCP Tunnel setup shortcuts.
+
+## 1.2.2
+
+- Upgraded `/browser` from a VS Code preview action to a real Playwright MCP Browser Agent with persistent connections, explicit approval and typed task support.
+- Fixed `@file:` and `@folder:` menu selections so they remain context mentions instead of being misclassified as slash commands; quoted paths with spaces are now supported.
+- Improved chat-history titles by skipping greetings and generic attachment prompts when a later user turn contains the actual task.
+- Added focused regression tests for all six context mentions, Browser Agent routing and multi-turn session titles.
+
+## 1.2.1
+
+- Fixed ordinary slash-menu items such as Browser and Terminal so selecting them creates a sendable command token.
+- Saved successful local workspace commands and their results as normal user/assistant turns in chat history.
+- Clarified that Browser opens a VS Code web preview and added regression coverage for Browser, Terminal, Git review/PR, schedules, plugins and hooks.
+
+## 1.2.0
+
+- Refactored the chat webview controller from one 4,600-line source into focused core, streaming, model, Markdown, activity, transcript, composer, event and host-message modules.
+- Added architecture regression tests that validate module order, size boundaries and the final assembled browser script.
+- Added Git-scope review, an integrated workspace terminal, read-only subagents, local hooks and schedules, browser preview, GitHub PR review and assistant feedback actions.
+- Improved progressive Markdown streaming to reduce visible stalls and end-of-turn reflow.
+
 - Added OpenCode Console as a first-class OpenAI-compatible provider with its
   official inference endpoint and dedicated provider branding.
 - MCP API-key dialogs now return to the Tool connections panel, while closing

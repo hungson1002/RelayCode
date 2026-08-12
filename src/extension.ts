@@ -14,7 +14,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nineRouter.configure', () => provider.configure()),
     vscode.commands.registerCommand('nineRouter.newThread', () => provider.newThread()),
     vscode.commands.registerCommand('nineRouter.openDashboard', () => provider.openDashboard()),
-    vscode.commands.registerCommand('nineRouter.showLogs', () => provider.showLogs())
+    vscode.commands.registerCommand('nineRouter.showLogs', () => provider.showLogs()),
+    vscode.commands.registerCommand('nineRouter.openTerminal', () => provider.openIntegratedTerminal()),
+    vscode.commands.registerCommand('nineRouter.openBrowserPreview', () => provider.openBrowserPreview()),
+    vscode.commands.registerCommand('nineRouter.manageChatGptBridge', () => provider.manageChatGptBridge()),
+    vscode.commands.registerCommand('nineRouter.manageScheduledTasks', () => provider.manageScheduledTasks())
   );
 }
 

@@ -1,163 +1,87 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/media/icon-128.png" alt="RelayCode" width="72" style="border-radius: 12px;">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/media/icon-128.png" alt="RelayCode" width="72">
   <h1>RelayCode</h1>
-  <p><strong>Workspace lập trình AI ưu tiên review cho các editor tương thích VS Code.</strong></p>
-  <p>Hoạt động với VS Code, Cursor, Antigravity và các môi trường tương thích khác.</p>
-  <p>Hỏi, lập kế hoạch, sửa file, chạy kiểm tra và xem lại mọi thay đổi trước khi giữ lại.</p>
+  <p><strong>Workspace lập trình AI ưu tiên review dành cho các editor tương thích VS Code.</strong></p>
+  <p>Trò chuyện, lập kế hoạch, sửa code, chạy kiểm tra và review thay đổi ngay trong project.</p>
   <p>
-    <a href="https://marketplace.visualstudio.com/items?itemName=huxon.relaycode-huxon">VS Code Marketplace</a> ·
+    <a href="https://marketplace.visualstudio.com/items?itemName=huxon.relaycode-huxon">Marketplace</a> ·
     <a href="https://open-vsx.org/extension/huxon/relaycode-huxon">Open VSX</a> ·
     <a href="https://github.com/hungson1002/RelayCode/releases">Bản phát hành</a> ·
-    <a href="https://github.com/hungson1002/RelayCode/issues">Issues</a> ·
-    <a href="LICENSE">License</a> ·
+    <a href="https://github.com/hungson1002/RelayCode/issues">Báo lỗi</a> ·
     <a href="README.md">English</a>
   </p>
 </div>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-home.png" alt="Màn hình chính RelayCode với model picker và composer" width="640" style="border-radius: 12px;">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-home.png" alt="Workspace RelayCode" width="680">
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-demo.gif" alt="Workflow Agent của RelayCode: hỏi, làm việc và review" width="640" style="border-radius: 12px;">
-</p>
+## Tổng quan
 
-<p align="center"><em>Đặt câu hỏi, để Agent làm việc, rồi review kết quả trước khi chấp nhận.</em></p>
+RelayCode đưa AI vào workspace hiện tại nhưng vẫn để bạn kiểm soát toàn bộ quy trình. Chọn provider và model, làm việc bằng Chat, Agent hoặc Plan, sau đó kiểm tra thay đổi của file trước khi chấp nhận.
 
-## RelayCode là gì?
+Extension hoạt động trên VS Code, Antigravity, Cursor và các editor tương thích khác.
 
-RelayCode đưa Chat, Agent và Plan vào workspace VS Code hiện tại. Bạn chọn provider và model, theo dõi hoạt động trong lúc làm việc, rồi review thay đổi của file trước khi đưa chúng vào project.
+## Điểm chính
 
-## Vì sao là RelayCode?
-
-- **Ưu tiên review** — xem file thay đổi và diff trước khi chấp nhận hoặc hoàn tác.
-- **Activity rõ ràng** — theo dõi bước hiện tại, tool activity, file đã đọc và kết quả kiểm tra.
-- **Kiểm soát quyền** — chọn mức tự động hóa của Agent khi sửa file hoặc chạy lệnh.
-- **Đa provider** — chuyển giữa các profile, endpoint và model mà không đổi workflow.
-- **MCP và context của workspace** — kết nối MCP server đã cấu hình và cho Agent làm việc cùng context của project.
-- **Streaming response** — thấy câu trả lời được tạo ra trong lúc Agent làm việc.
-- **Tự khớp ngôn ngữ** — response bám theo ngôn ngữ của tin nhắn mới nhất khi model được chọn hỗ trợ.
-
-## Ba cách làm việc
-
-### Chat
-
-Hỏi giải thích, review hoặc một câu trả lời tập trung mà không cấp cho model quyền sửa workspace.
-
-### Agent
-
-Cho Agent đọc workspace, sửa file, chạy lệnh đã được cho phép, dùng MCP tool đã cấu hình và báo lại kết quả. Activity timeline và change tray giúp workflow luôn dễ theo dõi.
-
-### Plan
-
-Biến một yêu cầu lớn thành implementation plan trước khi chạm vào file. Phù hợp khi cần thống nhất phạm vi, thứ tự thực hiện hoặc tạo checkpoint trước.
-
-## Thay đổi có thể review
-
-Agent gom các chỉnh sửa vào một change set để review. Bạn xem file và diff, sau đó chấp nhận hoặc hoàn tác ngay trong change tray.
-
-## Xem RelayCode hoạt động
-
-Giao diện thật tập trung prompt, model, mode, activity và các nút review trong cùng một workflow.
+- **Ưu tiên review** — xem diff trước khi chấp nhận hoặc hoàn tác thay đổi.
+- **Thao tác rõ ràng** — theo dõi tool, lệnh, kết quả kiểm tra và lỗi trong timeline.
+- **Chat, Agent và Plan** — chọn mức tự động hóa phù hợp với từng công việc.
+- **Nhiều provider** — tách profile cho dịch vụ cloud, local và endpoint tương thích OpenAI.
+- **Công cụ MCP** — mở rộng Agent bằng dịch vụ local hoặc remote đáng tin cậy.
+- **Kiểm soát quyền** — quyết định khi nào RelayCode được sửa file hoặc chạy lệnh.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-agent.png" alt="Chế độ Agent của RelayCode với phân tích workspace và kết quả kiểm tra" width="640" style="border-radius: 12px;">
-</p>
-
-Agent hiển thị file đã phân tích, context của project và kết quả validation ngay trong cuộc trò chuyện.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-review.png" alt="Review card của RelayCode với README thay đổi và nút Accept, Undo" width="640" style="border-radius: 12px;">
-</p>
-
-Change tray cho biết file nào đã thay đổi và cung cấp các thao tác **Review**, **Accept all** và **Undo all**.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-connection.png" alt="Provider settings của RelayCode với nhiều lựa chọn provider" width="640" style="border-radius: 12px;">
-</p>
-
-Provider settings gom active profile, endpoint, model source và thông tin kết nối vào một nơi. Các ảnh giao diện không chứa credential.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/workflow.png" alt="Workflow RelayCode: hỏi, làm việc, review, quyết định" width="640" style="border-radius: 12px;">
+  <img src="https://raw.githubusercontent.com/hungson1002/RelayCode/main/docs/assets/marketing/relaycode-demo.gif" alt="Quy trình Agent và review của RelayCode" width="680">
 </p>
 
 ## Bắt đầu nhanh
 
-1. Cài RelayCode từ [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=huxon.relaycode-huxon), [Open VSX](https://open-vsx.org/extension/huxon/relaycode-huxon) hoặc trang [GitHub Releases](https://github.com/hungson1002/RelayCode/releases).
-2. Mở view RelayCode từ Activity Bar.
-3. Mở **Settings**, chọn hoặc tạo provider profile, rồi cấu hình endpoint và API key nếu provider yêu cầu.
-4. Chọn model, chọn **Chat**, **Agent** hoặc **Plan**, rồi gửi prompt đầu tiên.
+1. Cài RelayCode từ [Marketplace](https://marketplace.visualstudio.com/items?itemName=huxon.relaycode-huxon), [Open VSX](https://open-vsx.org/extension/huxon/relaycode-huxon) hoặc [Bản phát hành](https://github.com/hungson1002/RelayCode/releases).
+2. Mở **RelayCode: Chat** từ Activity Bar.
+3. Mở **Settings** và kết nối một provider profile.
+4. Chọn model, sau đó chọn **Chat**, **Agent** hoặc **Plan**.
 
-Nếu muốn dùng setup local-first, hãy chạy [9Router](https://github.com/hungson1002/9router) và dùng endpoint OpenAI-compatible mặc định:
+Nếu dùng [9Router](https://github.com/hungson1002/9router) trên máy, hãy cấu hình endpoint tương thích OpenAI:
 
 ```text
 http://127.0.0.1:20128/v1
 ```
 
-## Provider và model
+## Chế độ làm việc
 
-RelayCode có profile cho các provider:
+- **Chat** trả lời câu hỏi mà không sửa workspace.
+- **Agent** có thể đọc file, sửa code, chạy lệnh đã được duyệt và dùng công cụ MCP.
+- **Plan** tạo kế hoạch triển khai để review trước khi thay đổi file.
 
-- 9Router
-- Cockpit Tools
-- OpenCode
-- OpenAI
-- Anthropic Claude
-- OpenAI-compatible endpoints
-- Ollama
-- LM Studio
+## Provider
 
-Model picker hiển thị các model mà provider đang active cung cấp. Endpoint, API key và thiết lập pricing được tách theo profile để bạn đổi provider mà không phải đổi workflow.
+RelayCode hỗ trợ 9Router, Cockpit Tools, OpenCode, OpenAI, Anthropic Claude, Ollama, LM Studio và endpoint tùy chỉnh tương thích OpenAI. Danh sách model được lấy trực tiếp từ provider profile đang hoạt động.
 
-## MCP, context và skills
+API key được lưu bằng Secret Storage của editor và không được ghi vào file project.
 
-RelayCode có thể kết nối MCP server đã cấu hình qua local process hoặc HTTP, bao gồm OAuth hoặc bearer-token flow nếu server hỗ trợ. Agent có thể dùng các tool đó cùng với file trong workspace và context của cuộc trò chuyện hiện tại.
+## Kết nối MCP
 
-Skills và instruction của project là một phần của context được đưa cho model. Chỉ bật tool và instruction phù hợp với workspace mà bạn tin cậy.
+MCP cho phép RelayCode dùng thêm công cụ như điều khiển trình duyệt, dịch vụ bên ngoài hoặc workflow chuyên biệt. Mở **Settings → MCP**, thêm local process hoặc HTTP server, hoàn tất xác thực nếu cần và chỉ bật công cụ bạn tin cậy cho workspace hiện tại.
 
-## Permission controls
+Thao tác MCP được hiển thị trong timeline và vẫn tuân theo cơ chế quyền cùng quy trình review của RelayCode.
 
-- Chọn **Ask**, **Edit files** hoặc **Full access** tùy task và mức độ tin cậy.
-- Dùng mode ít quyền nhất nhưng vẫn phù hợp với công việc.
+### ChatGPT Web
 
-## An toàn và quyền riêng tư
+Chạy `/chatgpt` hoặc **RelayCode: Manage ChatGPT Web Bridge** để kết nối ChatGPT qua MCP tunnel bảo mật. RelayCode hướng dẫn nhập Tunnel ID và Runtime API key, kiểm tra tunnel client chính thức và lưu key trong Secret Storage.
 
-- Workspace Trust và permission mode đang chọn được áp dụng cho các hành động của Agent.
-- Review thay đổi của file trước khi chấp nhận; change tray có thể undo.
-- API key được lưu bằng VS Code Secret Storage và không ghi vào file của project.
-- Request chỉ được gửi đến provider khi bạn sử dụng provider đã cấu hình.
-- Cơ chế xác thực MCP phụ thuộc vào server và chính sách cấp quyền của server đó.
+Khi ChatGPT Web dùng tool RelayCode, một timeline **ChatGPT Web** riêng sẽ xuất hiện trong lịch sử chat. Các thao tác đọc file, tìm code, sửa file, chạy lệnh và lỗi được ghi tại đây. Thay đổi file vẫn dùng quy trình **Review**, **Accept** và **Undo** giống Agent.
 
-Xem [Privacy Policy](PRIVACY.md) để biết chi tiết.
+MCP chỉ chia sẻ hoạt động của tool, không chia sẻ toàn bộ cuộc trò chuyện ChatGPT. Xem [hướng dẫn Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) của OpenAI để thiết lập tài khoản và Developer mode.
 
-## Cấu hình
+## An toàn
 
-Bạn có thể mở RelayCode settings từ nút settings trong sidebar hoặc từ VS Code Settings. Một số tùy chọn chính:
+- Dùng mức quyền thấp nhất phù hợp với công việc.
+- Review thay đổi của file trước khi chấp nhận.
+- Chỉ kết nối MCP server mà bạn tin cậy.
+- Chỉ bật Workspace Trust cho project đáng tin cậy.
 
-- Interface language: `Vietnamese` hoặc `English`.
-- Provider profile, endpoint và API key.
-- Default mode: `Chat` hoặc `Agent`.
-- Default model và model health checks.
-- Input/output pricing cho usage estimate local.
-
-## FAQ
-
-### RelayCode có bắt buộc dùng một provider cụ thể không?
-
-Không. Bạn có thể chọn provider tích hợp sẵn hoặc cấu hình endpoint OpenAI-compatible. Model nào khả dụng phụ thuộc vào provider đang active.
-
-### Agent có tự động sửa file không?
-
-Agent chỉ làm theo permission mode đang chọn. Thay đổi được đưa vào change tray để bạn kiểm tra, chấp nhận hoặc hoàn tác.
-
-### Có dùng được model local không?
-
-Có. Ollama, LM Studio, 9Router và các endpoint local tương thích khác đều có thể cấu hình qua provider profile.
-
-### Nếu provider không khả dụng thì sao?
-
-RelayCode hiển thị lỗi kết nối hoặc lỗi model trong sidebar. Bạn có thể chuyển profile hoặc chọn model khác đang khả dụng.
+Xem [Chính sách quyền riêng tư](PRIVACY.md) để biết thêm chi tiết.
 
 ## Phát triển
 
@@ -167,16 +91,8 @@ npm run check
 npm run build
 ```
 
-Nhấn `F5` để mở Extension Development Host. Xem [CHANGELOG.md](CHANGELOG.md) để theo dõi release notes.
+Nhấn `F5` để mở Extension Development Host. Xem lịch sử phiên bản trong [CHANGELOG.md](CHANGELOG.md).
 
-## Tài nguyên
-
-- [Privacy Policy](PRIVACY.md)
-- [Changelog](CHANGELOG.md)
-- [GitHub Releases](https://github.com/hungson1002/RelayCode/releases)
-- [GitHub Issues](https://github.com/hungson1002/RelayCode/issues)
-- [README tiếng Anh](README.md)
-
-## License
+## Giấy phép
 
 [MIT](LICENSE)

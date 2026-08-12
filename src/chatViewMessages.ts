@@ -18,6 +18,7 @@ export type WebviewMessage =
   | { type: 'acceptChange'; id: string }
   | { type: 'undoChange'; id: string }
   | { type: 'reviewChange'; id: string }
+  | { type: 'previewChange'; id: string }
   | { type: 'applyChangeHunk'; id: string; hunkId: number; action: 'accept' | 'undo' }
   | { type: 'acceptAllChanges' }
   | { type: 'undoAllChanges' }
@@ -60,6 +61,7 @@ export type WebviewMessage =
   | { type: 'openCockpit' }
   | { type: 'openExternal'; url: string }
   | { type: 'openFile'; path: string }
+  | { type: 'openAssistantResponse'; content: string }
   | { type: 'openPlanArtifact'; turnIndex: number }
   | { type: 'pickFiles'; kind: 'files' | 'images' | 'resources' }
   | { type: 'pasteImage'; name: string; mimeType: string; dataUrl: string }
@@ -121,6 +123,7 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
     case 'acceptChange':
     case 'undoChange':
     case 'reviewChange':
+    case 'previewChange':
     case 'restoreCheckpoint':
     case 'activateProfile':
     case 'deleteProfile':
@@ -177,6 +180,8 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
       return isString(value.url, 8_000);
     case 'openFile':
       return isString(value.path, 32_000);
+    case 'openAssistantResponse':
+      return isString(value.content, 2_000_000);
     case 'openPlanArtifact':
       return Number.isSafeInteger(value.turnIndex) && Number(value.turnIndex) >= 0;
     case 'pickFiles':

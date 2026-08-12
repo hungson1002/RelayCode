@@ -9,6 +9,7 @@ landing-page/**
 docs/PUBLISHING.md
 node_modules/**
 coverage/**
+.playwright-mcp/**
 *.vsix
 .gitignore
 tsconfig.json

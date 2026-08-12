@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { smartSessionTitle } from '../src/sessionTitle';
+import { smartSessionTitle, smartSessionTitleFromTurns } from '../src/sessionTitle';
 
 describe('smartSessionTitle', () => {
   it('removes greetings and preserves technical acronyms', () => {
@@ -33,5 +33,23 @@ describe('smartSessionTitle', () => {
 
   it('removes trailing conversational filler', () => {
     expect(smartSessionTitle('Tạo một bảng usage giúp tôi nhé')).toBe('Tạo một bảng usage');
+  });
+
+  it('uses a later substantive request instead of a greeting', () => {
+    expect(smartSessionTitleFromTurns([
+      { role: 'user', content: 'Xin chào' },
+      { role: 'assistant', content: 'Chào bạn!' },
+      { role: 'user', content: 'thử viết 1 file json đi' }
+    ])).toBe('Thử viết 1 file JSON');
+  });
+
+  it('skips generic attachment instructions and names attachment-only chats', () => {
+    expect(smartSessionTitleFromTurns([
+      { role: 'user', content: 'Please inspect the attached image or file.' },
+      { role: 'user', content: 'sửa lỗi menu model bị đóng' }
+    ])).toBe('Sửa lỗi menu model bị đóng');
+    expect(smartSessionTitleFromTurns([
+      { role: 'user', content: '', attachments: [{ name: 'login-error.png' }] }
+    ])).toBe('Xem login-error.png');
   });
 });

@@ -44,6 +44,7 @@ import fileZip from '@phosphor-icons/core/fill/file-zip-fill.svg';
 import folderOpen from '@phosphor-icons/core/regular/folder-open.svg';
 import gear from '@phosphor-icons/core/regular/gear.svg';
 import gitDiff from '@phosphor-icons/core/regular/git-diff.svg';
+import globe from '@phosphor-icons/core/regular/globe.svg';
 import info from '@phosphor-icons/core/regular/info.svg';
 import key from '@phosphor-icons/core/regular/key.svg';
 import lightbulb from '@phosphor-icons/core/regular/lightbulb.svg';
@@ -66,6 +67,8 @@ import wrench from '@phosphor-icons/core/regular/wrench.svg';
 import x from '@phosphor-icons/core/regular/x.svg';
 import { materialCss, materialHtml, materialJavascript, materialTypescript } from './materialFileIcons';
 
+const arrowsOut = '<svg viewBox="0 0 256 256" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16" d="M160 40h56v56M152 104l64-64M96 216H40v-56M104 152l-64 64M216 160v56h-56M152 152l64 64M40 96V40h56M104 104 40 40"/></svg>';
+
 export const UI_ICONS = {
   arrowCounterClockwise,
   arrowUp,
@@ -79,6 +82,7 @@ export const UI_ICONS = {
   circlesThree,
   codeBlock,
   copy,
+  arrowsOut,
   clockCounterClockwise,
   cube,
   database,
@@ -119,6 +123,7 @@ export const UI_ICONS = {
   folderOpen,
   gear,
   gitDiff,
+  globe,
   info,
   key,
   lightbulb,

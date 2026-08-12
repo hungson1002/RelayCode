@@ -127,7 +127,7 @@ export function renderChatViewHtml({ language, nonce, cspSource, styles, control
       <div id="composerMenu" class="composer-menu hidden"></div>
       <div id="composerInput" class="composer-input">
         <div id="composerTokens" class="composer-tokens" aria-live="polite"></div>
-        <textarea id="prompt" rows="1" placeholder="Nhập yêu cầu, dùng /, $ hoặc @…"></textarea>
+        <div id="prompt" class="prompt-editor" role="textbox" aria-multiline="true" contenteditable="true" data-placeholder="Nhập yêu cầu, dùng /, $ hoặc @…"></div>
       </div>
       <div id="codexTuning" class="codex-tuning hidden">
         <span class="tuning-label">Codex</span>

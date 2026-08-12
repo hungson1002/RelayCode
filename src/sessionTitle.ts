@@ -83,3 +83,32 @@ export function smartSessionTitle(prompt: string): string {
   title = capitalizeFirst(normalizeAcronyms(title));
   return compactTitle(title);
 }
+
+export interface SessionTitleTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  attachments?: Array<{ name: string }>;
+}
+
+function isWeakTitlePrompt(prompt: string): boolean {
+  const value = firstSentence(prompt).trim();
+  if (!value) return true;
+  if (/^\/(?:browser|terminal|plugins|hooks|schedule|status|summary|review|diff|mcp|settings|logs|export)$/i.test(value)) return true;
+  if (/^(?:(?:xin\s+)?chào(?:\s+bạn)?|hello|hi|hey|yo|bro+)[,.!?;:\s-]*$/iu.test(value)) return true;
+  if (/^(?:please\s+)?inspect\s+the\s+attached\s+(?:image|file)|^(?:hãy\s+)?(?:xem|kiểm\s+tra)\s+(?:ảnh|tệp)\s+đính\s+kèm/iu.test(value)) return true;
+  return value.replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).length < 2;
+}
+
+export function smartSessionTitleFromTurns(turns: SessionTitleTurn[]): string {
+  const userTurns = turns.filter((turn) => turn.role === 'user');
+  const substantive = userTurns.find((turn) => !isWeakTitlePrompt(turn.content));
+  if (substantive) return smartSessionTitle(substantive.content);
+
+  const attachment = userTurns.flatMap((turn) => turn.attachments ?? [])[0];
+  if (attachment?.name) return compactTitle(`Xem ${attachment.name}`);
+
+  const first = userTurns.find((turn) => turn.content.trim())?.content ?? '';
+  const slash = first.trim().match(/^\/([a-z-]+)/i)?.[1];
+  if (slash) return compactTitle(capitalizeFirst(slash.replace(/-/g, ' ')));
+  return smartSessionTitle(first);
+}

@@ -134,6 +134,15 @@ describe('RouterClient model checks', () => {
     });
   });
 
+  it('rejects an Agent probe that calls a different tool', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { tool_calls: [{ id: 'wrong-1', function: { name: 'another_tool', arguments: '{}' } }] } }]
+    }), { headers: { 'content-type': 'application/json' } })));
+
+    await expect(new RouterClient({ endpoint: 'http://localhost:20128/v1', apiKey: 'key' })
+      .checkModel('agent-model', undefined, 'agent')).rejects.toThrow(/relaycode_probe/i);
+  });
+
   it('uses the same plain chat probe as 9Router for prefixed models', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: 'hi' } }]
