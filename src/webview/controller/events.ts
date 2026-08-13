@@ -242,18 +242,31 @@ $('retryConnection').addEventListener('click', () => {
 $('connectionToggle').addEventListener('click', () => vscode.postMessage({ type: 'disconnectProvider' }));
 function runConnectionDiagnostics() {
   const meta = providerMeta[activeProvider] || providerMeta['9router'];
+  const wasHidden = $('connectionDiagnostics').classList.contains('hidden');
+  if (wasHidden) connectionDialogReturnFocus = document.activeElement;
   openFloatingSurface('connectionDiagnostics');
+  const connectionDialog = $('connectionDiagnostics').querySelector('.connection-dialog');
+  connectionDialog?.setAttribute('aria-busy', 'true');
+  if (connectionDialog) connectionDialog.dataset.tone = 'neutral';
   $('connectionProviderName').textContent = meta.label;
   $('connectionProviderMark').innerHTML = brandIcon(meta.brand, meta.label);
   $('connectionEndpoint').textContent = $('configEndpoint').value.trim() || uiCopy('Chưa có endpoint', 'No endpoint');
   $('connectionDialogSubtitle').textContent = uiCopy('Đang kiểm tra ', 'Checking ') + meta.label;
   $('connectionHealthBadge').textContent = uiCopy('Đang kiểm tra', 'Checking');
   $('connectionHealthBadge').className = 'checking';
-  $('connectionLatency').textContent = '—';
-  $('connectionModels').textContent = '—';
+  $('connectionLatency').textContent = '-';
+  $('connectionModels').textContent = '-';
   $('connectionMessage').textContent = uiCopy('Đang gửi yêu cầu kiểm tra provider…', 'Sending a provider check request…');
   $('retryDiagnostics').disabled = true;
   vscode.postMessage({ type: 'diagnostics' });
+  if (wasHidden) requestAnimationFrame(() => $('closeConnectionDiagnostics').focus());
+}
+let connectionDialogReturnFocus = null;
+function closeConnectionDiagnosticsDialog(restoreFocus = true) {
+  $('connectionDiagnostics').classList.add('hidden');
+  $('connectionDiagnostics').querySelector('.connection-dialog')?.setAttribute('aria-busy', 'false');
+  if (restoreFocus && connectionDialogReturnFocus?.isConnected) connectionDialogReturnFocus.focus();
+  connectionDialogReturnFocus = null;
 }
 function openConnectionCenter() {
   setupDismissed = false;
@@ -270,9 +283,10 @@ $('connectionBadge').addEventListener('keydown', (event) => {
   openConnectionCenter();
 });
 $('retryDiagnostics').addEventListener('click', runConnectionDiagnostics);
-$('closeConnectionDiagnostics').addEventListener('click', () => $('connectionDiagnostics').classList.add('hidden'));
-$('connectionDiagnostics').addEventListener('click', (event) => { if (event.target === $('connectionDiagnostics')) $('connectionDiagnostics').classList.add('hidden'); });
+$('closeConnectionDiagnostics').addEventListener('click', () => closeConnectionDiagnosticsDialog());
+$('connectionDiagnostics').addEventListener('click', (event) => { if (event.target === $('connectionDiagnostics')) closeConnectionDiagnosticsDialog(); });
 $('openConnectionSettings').addEventListener('click', () => {
+  closeConnectionDiagnosticsDialog(false);
   openFloatingSurface('configPanel');
 });
 function positionPermissionMenu() {
@@ -304,16 +318,13 @@ window.addEventListener('resize', () => {
 document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
   opt.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (opt.dataset.perm === 'full') openFloatingSurface('accessConfirm');
+    if (opt.dataset.perm === 'full') requestFullAccessDialog();
     else vscode.postMessage({ type: 'setPermissionMode', mode: opt.dataset.perm });
     $('permDropdown').classList.remove('open');
     $('permMenu').classList.add('hidden');
     $('permissionMode').setAttribute('aria-expanded', 'false');
   });
 });
-$('cancelFull').addEventListener('click', () => $('accessConfirm').classList.add('hidden'));
-$('confirmFull').addEventListener('click', () => { $('accessConfirm').classList.add('hidden'); vscode.postMessage({ type: 'setPermissionMode', mode: 'full' }); });
-$('accessConfirm').addEventListener('click', (event) => { if (event.target === $('accessConfirm')) $('accessConfirm').classList.add('hidden'); });
 $('configPanel').addEventListener('click', (event) => {
   event.stopPropagation();
   if (!$('providerPicker').contains(event.target)) {
@@ -388,7 +399,8 @@ $('runDiagnostics').addEventListener('click', () => {
 $('localSetup').addEventListener('click', () => vscode.postMessage({ type: 'setupLocalProvider' }));
 $('openCockpit').addEventListener('click', () => vscode.postMessage({ type: 'openCockpit' }));
 $('exportDiagnostics').addEventListener('click', () => vscode.postMessage({ type: 'exportDiagnostics' }));
-$('send').addEventListener('click', () => {
+$('send').addEventListener('click', (event) => {
+  event.stopPropagation();
   if (running) {
     if ((effectiveComposerPrompt() || pendingAttachmentCount) && followUpQueueEnabled) {
       send();
@@ -399,12 +411,49 @@ $('send').addEventListener('click', () => {
   }
   send();
 });
-$('goalPause').addEventListener('click', () => vscode.postMessage({ type: 'pauseGoal' }));
+$('goalDock').addEventListener('click', (event) => event.stopPropagation());
+$('goalDockTrigger').addEventListener('click', (event) => {
+  event.stopPropagation();
+  const open = $('goalRail').classList.contains('hidden');
+  if (open) closeDropdowns($('goalRail'));
+  $('goalRail').classList.toggle('hidden', !open);
+  $('goalDock').classList.toggle('open', open);
+  $('goalDockTrigger').setAttribute('aria-expanded', String(open));
+});
+$('goalRail').addEventListener('click', (event) => event.stopPropagation());
+$('goalPause').addEventListener('click', () => {
+  $('goalRail').classList.add('hidden');
+  $('goalDock').classList.remove('open');
+  $('goalDockTrigger').setAttribute('aria-expanded', 'false');
+  vscode.postMessage({ type: 'pauseGoal' });
+});
 $('goalResume').addEventListener('click', () => {
+  if (!$('model').value) {
+    showUiToast({ message: uiCopy('Hãy chọn một model trước khi tiếp tục Goal.', 'Select a model before resuming the Goal.'), tone: 'danger' });
+    openComposerModelPicker();
+    return;
+  }
+  $('goalRail').classList.add('hidden');
+  $('goalDock').classList.remove('open');
+  $('goalDockTrigger').setAttribute('aria-expanded', 'false');
   setRunning(true);
   vscode.postMessage({ type: 'resumeGoal', model: $('model').value });
 });
-$('goalClear').addEventListener('click', () => vscode.postMessage({ type: 'clearGoal' }));
+function clearComposerGoal() {
+  const hadActiveGoal = Boolean(activeGoal);
+  composerGoalMode = false;
+  activeGoal = null;
+  renderComposerTokens();
+  if (hadActiveGoal) vscode.postMessage({ type: 'clearGoal' });
+  $('prompt').focus();
+}
+goalDockQuickClear.addEventListener('click', (event) => {
+  event.stopPropagation();
+  clearComposerGoal();
+});
+$('goalClear').addEventListener('click', () => {
+  clearComposerGoal();
+});
 $('clearQueue').addEventListener('click', () => {
   if (!followUpQueueEnabled) {
     followUpQueueEnabled = true;
@@ -422,7 +471,8 @@ $('prompt').addEventListener('keydown', (event) => {
   if (!menu.classList.contains('hidden') && items.length) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      composerMenuIndex = (composerMenuIndex + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      if (composerMenuIndex < 0) composerMenuIndex = event.key === 'ArrowDown' ? 0 : items.length - 1;
+      else composerMenuIndex = (composerMenuIndex + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
       items.forEach((item, index) => item.classList.toggle('selected', index === composerMenuIndex));
       items[composerMenuIndex]?.scrollIntoView({ block: 'nearest' });
       return;
@@ -442,7 +492,6 @@ $('prompt').addEventListener('keydown', (event) => {
   if (event.key === 'Backspace' && !$('prompt').value) {
     if (composerContexts.length) composerContexts.pop();
     else if (composerSkills.length) composerSkills.pop();
-    else if (composerGoalMode) composerGoalMode = false;
     else if (composerCommand) composerCommand = null;
     else return;
     event.preventDefault();
@@ -453,6 +502,7 @@ $('prompt').addEventListener('keydown', (event) => {
 });
 $('prompt').addEventListener('input', () => {
   closeAddMenu();
+  composerMenuIndex = -1;
   resizePrompt();
   renderComposerMenu();
   updateSendState();

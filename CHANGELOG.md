@@ -1,5 +1,76 @@
 # Changelog
 
+## 2.0.0
+
+- Rebuilt the RelayCode sidebar around a compact, editor-native shell for Chat, provider setup, model selection, commands, skills, permissions and Goal workflows.
+- Added a unified in-extension dialog system for destructive actions, permission prompts, model fallbacks and connection diagnostics.
+- Made slash commands open and operate their real UI surfaces, including models, modes, permissions, settings, MCP tools, diagnostics and long-running goals.
+- Redesigned Chat history, provider settings, Connection Center and composer controls with responsive layouts, reliable popup dismissal and bilingual English/Vietnamese copy.
+- Improved semantic state styling for connections, saved API keys, model health and bookmarks, and removed redundant header actions and visual noise.
+- Added regression coverage for the redesigned webview, release-critical controller boundaries, startup recovery, provider routing and interactive controls.
+
+## 1.7.4
+
+- Removed the Goal status dot and replaced the Goal icon in place with a centered gray clear action on hover or direct keyboard focus.
+
+## 1.7.3
+
+- Completed English localization for the redesigned Provider settings and model picker, including reliable live language switching.
+- Made saved API-key and successful connection messages consistently green so success states are easy to distinguish.
+- Changed model bookmarks to a yellow outline when inactive and a solid yellow mark when saved.
+- Removed the remaining model-selector caret and strengthened model, connection and diagnostics check actions.
+
+## 1.7.2
+
+- Fixed hidden provider actions appearing together in Connection Center by strengthening the shared hidden-state contract.
+- Removed the provider icon from the compact model selector and stabilized the Full access control so hover never shifts its label.
+- Simplified Goal to an icon-only composer control with a quick clear action that appears immediately on hover or keyboard focus.
+- Stopped command and skill menus from implying a selected first row, and made every composer popup close reliably when clicking outside.
+- Rebuilt Provider settings into grouped Interface, Profile, Connection and Cost sections with a dedicated scroll area and fixed action dock.
+
+## 1.7.1
+
+- Removed the nested scrollbar from the model picker so only the model list scrolls while search and model checks remain fixed.
+- Made Add and Skills category headers full-bleed and sticky, with tighter rows and clearer selected states.
+- Rebuilt the provider badge and header actions as one compact editor-native toolbar with larger provider branding and clearer Phosphor icons.
+- Reworked Connection Center spacing, actions and status layout so semantic dots always occupy a dedicated slot and never overlap text.
+- Added responsive behavior and regression coverage for narrow sidebars, popup scrolling, full-width category chrome and connection status alignment.
+
+## 1.7.0
+
+- Moved Goal into a persistent context dock at the bottom of the composer, with live running, paused, failed and ready states plus compact pause, resume and clear controls.
+- Made `/model` open the real model picker reliably and connected UI slash commands for modes, permissions, model checks, history, usage, settings, MCP and diagnostics.
+- Fixed nested command surfaces closing immediately after selection by isolating command-row click events from the global dismiss handler.
+- Rebuilt the composer, command palette, model picker and settings surfaces with a unified responsive visual system.
+- Fixed initial language rendering, selected-language feedback and narrow language-menu clipping and horizontal overflow.
+
+## 1.6.0
+
+- Overhauled the extension shell around Chat with one editor-native token system for the header, composer, menus, settings, connection center, MCP, usage and change review.
+- Rebuilt the composer as a compact two-level surface with reliable model-name truncation, aligned controls and responsive permission labels.
+- Replaced nested dashboard-style cards with compact rows, dividers and contextual hover states across provider, telemetry and MCP surfaces.
+- Standardized controls on VS Code theme colors, 6px control radii and 10px panel radii while preserving the existing Chat, history and dialog presentation.
+
+## 1.5.4
+
+- Rebuilt every confirmation and prompt as a compact, editor-native dialog without decorative top borders, nested warning cards or oversized icons.
+- Switched dialog surfaces and controls to VS Code theme tokens for better consistency across themes.
+- Simplified multi-choice prompts and connection diagnostics while preserving keyboard focus safety for destructive actions.
+- Removed the redundant Configure Provider and Open Provider Dashboard shortcuts from the Chat view title bar; both features remain available where they are contextually useful.
+
+## 1.5.3
+
+- Unified confirmations, prompts, model fallback checks and Full access warnings under one polished dialog system.
+- Added semantic danger, warning and success presentation with clearer details, action icons and responsive multi-choice layouts.
+- Made destructive dialogs safer by focusing the non-destructive action first and preventing Enter from triggering destructive actions.
+- Matched provider connection diagnostics to the same dialog language with accessible checking, success and failure states.
+
+## 1.5.2
+
+- Refined Chat history into a compact editor-native popover with clearer hierarchy, spacing and responsive behavior.
+- Added conversation counts, a richer empty state and consistent Phosphor icons for history actions.
+- Reduced visual noise by revealing per-conversation deletion only on hover or keyboard focus while keeping it available on touch devices.
+
 ## 1.5.1
 
 - Batched bursty ChatGPT Web tool activity into a single animation-frame update to stop the timeline and sidebar from jumping.

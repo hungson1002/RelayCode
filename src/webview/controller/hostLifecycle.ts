@@ -94,7 +94,7 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
   } else if (data.type === 'focusSkillPicker') {
     const prompt = $('prompt');
     prompt.value = prompt.value.replace(/\s*$/, prompt.value ? ' $' : '$');
-    composerMenuIndex = 0;
+    composerMenuIndex = -1;
     renderComposerMenu();
     prompt.focus();
     resizePrompt();
@@ -329,6 +329,9 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
         : uiCopy('Nhập API key của provider', 'Enter the provider API key');
     }
   } else if (data.type === 'diagnosticsResult') {
+    const connectionDialog = $('connectionDiagnostics').querySelector('.connection-dialog');
+    connectionDialog?.setAttribute('aria-busy', 'false');
+    if (connectionDialog) connectionDialog.dataset.tone = data.ok ? 'success' : 'danger';
     $('diagnosticsResult').textContent = data.message;
     $('diagnosticsResult').className = 'diagnostics-result ' + (data.ok ? 'success' : 'failure');
     $('runDiagnostics').disabled = false;
@@ -343,8 +346,8 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
      $('connectionDialogSubtitle').textContent = data.ok ? uiCopy('Provider đã sẵn sàng', 'Provider is ready') : uiCopy('Provider chưa thể sử dụng', 'Provider is unavailable');
      $('connectionHealthBadge').textContent = data.ok ? uiCopy('Sẵn sàng', 'Ready') : uiCopy('Có lỗi', 'Error');
     $('connectionHealthBadge').className = data.ok ? 'ready' : 'failed';
-    $('connectionLatency').textContent = typeof data.latency === 'number' ? data.latency + ' ms' : '—';
-    $('connectionModels').textContent = typeof data.modelCount === 'number' ? String(data.modelCount) : '—';
+    $('connectionLatency').textContent = typeof data.latency === 'number' ? data.latency + ' ms' : '-';
+    $('connectionModels').textContent = typeof data.modelCount === 'number' ? String(data.modelCount) : '-';
      $('connectionMessage').textContent = data.message || (data.ok ? uiCopy('Kết nối hoạt động bình thường.', 'Connection is working normally.') : uiCopy('Không thể kết nối provider.', 'Unable to connect to the provider.'));
   } else if (data.type === 'profiles') {
     profiles = data.profiles || [];

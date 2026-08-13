@@ -1,11 +1,14 @@
 import arrowUp from '@phosphor-icons/core/regular/arrow-up.svg';
 import arrowCounterClockwise from '@phosphor-icons/core/regular/arrow-counter-clockwise.svg';
+import arrowRight from '@phosphor-icons/core/regular/arrow-right.svg';
 import arrowsClockwise from '@phosphor-icons/core/regular/arrows-clockwise.svg';
 import brain from '@phosphor-icons/core/regular/brain.svg';
 import broom from '@phosphor-icons/core/regular/broom.svg';
 import caretDown from '@phosphor-icons/core/regular/caret-down.svg';
 import caretRight from '@phosphor-icons/core/regular/caret-right.svg';
+import chartLineUp from '@phosphor-icons/core/regular/chart-line-up.svg';
 import chatCircle from '@phosphor-icons/core/regular/chat-circle.svg';
+import check from '@phosphor-icons/core/regular/check.svg';
 import checkCircle from '@phosphor-icons/core/regular/check-circle.svg';
 import circlesThree from '@phosphor-icons/core/regular/circles-three.svg';
 import codeBlock from '@phosphor-icons/core/regular/code-block.svg';
@@ -59,6 +62,7 @@ import selection from '@phosphor-icons/core/regular/selection.svg';
 import shieldWarning from '@phosphor-icons/core/regular/shield-warning.svg';
 import slidersHorizontal from '@phosphor-icons/core/regular/sliders-horizontal.svg';
 import spinnerGap from '@phosphor-icons/core/regular/spinner-gap.svg';
+import stop from '@phosphor-icons/core/regular/stop.svg';
 import target from '@phosphor-icons/core/regular/target.svg';
 import terminalWindow from '@phosphor-icons/core/regular/terminal-window.svg';
 import trash from '@phosphor-icons/core/regular/trash.svg';
@@ -71,13 +75,16 @@ const arrowsOut = '<svg viewBox="0 0 256 256" aria-hidden="true"><path fill="non
 
 export const UI_ICONS = {
   arrowCounterClockwise,
+  arrowRight,
   arrowUp,
   arrowsClockwise,
   brain,
   broom,
   caretDown,
   caretRight,
+  chartLineUp,
   chatCircle,
+  check,
   checkCircle,
   circlesThree,
   codeBlock,
@@ -138,6 +145,7 @@ export const UI_ICONS = {
   shieldWarning,
   slidersHorizontal,
   spinnerGap,
+  stop,
   target,
   terminalWindow,
   trash,

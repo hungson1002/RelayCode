@@ -1,14 +1,43 @@
-export const CHAT_CONTROLLER_COMPOSER = String.raw`function renderGoal(goal) {
-  activeGoal = goal || null;
+export const CHAT_CONTROLLER_COMPOSER = String.raw`function goalStatusCopy(state) {
+  return state === 'running'
+    ? uiCopy('Đang làm việc', 'Working')
+    : state === 'paused'
+      ? uiCopy('Đã tạm dừng', 'Paused')
+      : state === 'failed'
+        ? uiCopy('Cần xử lý', 'Needs attention')
+        : state === 'draft'
+          ? uiCopy('Yêu cầu tiếp theo sẽ trở thành mục tiêu', 'Your next request will become the goal')
+          : uiCopy('Sẵn sàng để review', 'Ready for review');
+}
+
+function syncGoalDock() {
+  const dock = $('goalDock');
   const rail = $('goalRail');
-  rail.classList.toggle('hidden', !activeGoal);
-  if (!activeGoal) return;
-  const state = activeGoal.status || 'ready';
+  const enabled = Boolean(activeGoal || composerGoalMode);
+  const state = activeGoal?.status || 'draft';
+  dock.classList.toggle('hidden', !enabled);
+  dock.classList.toggle('has-active-goal', Boolean(activeGoal));
+  dock.dataset.state = state;
   rail.dataset.state = state;
-  $('goalTitle').textContent = activeGoal.objective;
-  $('goalStatus').textContent = activeGoal.lastStatus || (state === 'running' ? uiCopy('Đang làm việc', 'Working') : state === 'paused' ? uiCopy('Đã tạm dừng', 'Paused') : state === 'failed' ? uiCopy('Cần xử lý', 'Needs attention') : uiCopy('Sẵn sàng để review', 'Ready for review'));
+  if (!enabled) {
+    rail.classList.add('hidden');
+    dock.classList.remove('open');
+    $('goalDockTrigger').setAttribute('aria-expanded', 'false');
+    return;
+  }
+  const status = activeGoal?.lastStatus || goalStatusCopy(state);
+  goalDockQuickClear.setAttribute('aria-label', activeGoal ? uiCopy('Xóa mục tiêu', 'Clear goal') : uiCopy('Tắt Goal', 'Turn off Goal'));
+  $('goalTitle').textContent = activeGoal?.objective || uiCopy('Goal đang bật', 'Goal is on');
+  $('goalStatus').textContent = status;
+  $('goalDockTrigger').setAttribute('aria-label', 'Goal · ' + status);
   $('goalPause').classList.toggle('hidden', state !== 'running');
   $('goalResume').classList.toggle('hidden', state !== 'paused' && state !== 'failed');
+  $('goalClear').setAttribute('aria-label', activeGoal ? uiCopy('Xóa mục tiêu', 'Clear goal') : uiCopy('Tắt Goal', 'Turn off Goal'));
+}
+
+function renderGoal(goal) {
+  activeGoal = goal || null;
+  syncGoalDock();
 }
 
 function renderFollowUpQueue() {
@@ -257,7 +286,7 @@ function settleTurn(data) {
 }
 
 function updateSendState() {
-  const hasPrompt = Boolean($('prompt').value.trim() || pendingAttachmentCount || composerSkills.length || composerContexts.length || composerGoalMode || composerCommand);
+  const hasPrompt = Boolean($('prompt').value.trim() || pendingAttachmentCount || composerSkills.length || composerContexts.length || composerCommand);
   $('send').disabled = running ? false : !hasPrompt;
   $('send').classList.toggle('queue-ready', running && hasPrompt && followUpQueueEnabled);
   $('send').setAttribute('aria-label', running
@@ -284,7 +313,7 @@ function resizePrompt() {
   const height = Math.min(prompt.scrollHeight, maximum);
   prompt.style.height = height + 'px';
   prompt.style.overflowY = prompt.scrollHeight > maximum ? 'auto' : 'hidden';
-  document.querySelector('.composer-shell')?.classList.toggle('has-input', Boolean(prompt.value.trim() || pendingAttachmentCount || composerSkills.length || composerContexts.length || composerGoalMode || composerCommand));
+  document.querySelector('.composer-shell')?.classList.toggle('has-input', Boolean(prompt.value.trim() || pendingAttachmentCount || composerSkills.length || composerContexts.length || composerCommand));
 }
 
 function composerSkillLabel(name) {
@@ -323,13 +352,6 @@ function renderComposerTokens() {
       $('prompt').focus();
     }));
   }
-  if (composerGoalMode) {
-    host.append(createComposerToken('goal', 'Goal', () => {
-      composerGoalMode = false;
-      renderComposerTokens();
-      $('prompt').focus();
-    }));
-  }
   composerSkills.forEach((skill) => {
     host.append(createComposerToken('skill', composerSkillLabel(skill.name), () => {
       composerSkills = composerSkills.filter((item) => item.name !== skill.name);
@@ -344,8 +366,9 @@ function renderComposerTokens() {
       $('prompt').focus();
     }));
   });
-  const hasTokens = Boolean(composerCommand) || composerGoalMode || composerSkills.length > 0 || composerContexts.length > 0;
+  const hasTokens = Boolean(composerCommand) || composerSkills.length > 0 || composerContexts.length > 0;
   $('composerInput').classList.toggle('has-tokens', hasTokens);
+  syncGoalDock();
   updateComposerPlaceholder();
   updateSendState();
 }
@@ -430,7 +453,11 @@ function createMenuRow({ glyph, label, description, meta = '', action, selected 
   suffix.className = 'menu-meta';
   suffix.textContent = meta;
   button.append(icon, main, suffix);
-  button.addEventListener('click', action);
+  button.addEventListener('click', (event) => {
+    // Do not let the document close a nested surface opened by this row.
+    event.stopPropagation();
+    action(event);
+  });
   return button;
 }
 
@@ -500,7 +527,14 @@ function renderComposerMenu() {
     ['/summary', uiCopy('Xem mục tiêu, file đổi và việc còn lại', 'View goals, changed files and open issues'), 'Summary', 'info'],
     ['/skills', uiCopy('Tìm và chèn skill', 'Find and insert a skill'), 'Skills', 'cube'],
     ['/model', uiCopy('Mở danh sách model', 'Open the model list'), 'Model', 'circlesThree'],
+    ['/mode', uiCopy('Mở danh sách chế độ làm việc', 'Open the work mode list'), 'Mode', 'slidersHorizontal'],
+    ['/permissions', uiCopy('Mở quyền thao tác của Agent', 'Open Agent permissions'), 'Permissions', 'shieldWarning'],
+    ['/check-models', uiCopy('Kiểm tra model cho chế độ hiện tại', 'Check models for the current mode'), 'Check models', 'pulse'],
+    ['/agent', uiCopy('Chuyển sang chế độ Agent', 'Switch to Agent mode'), 'Agent mode', 'wrench'],
+    ['/chat', uiCopy('Chuyển sang chế độ Chat', 'Switch to Chat mode'), 'Chat mode', 'chatCircle'],
     ['/plan', uiCopy('Chuyển sang chế độ Plan', 'Switch to Plan mode'), 'Plan mode', 'lightbulb'],
+    ['/history', uiCopy('Mở lịch sử cuộc trò chuyện', 'Open conversation history'), 'History', 'clockCounterClockwise'],
+    ['/usage', uiCopy('Mở số liệu sử dụng', 'Open usage metrics'), 'Usage', 'pulse'],
     ['/review', uiCopy('Xem các file đã thay đổi', 'View changed files'), 'Code review', 'magnifyingGlass'],
     ['/terminal', uiCopy('Mở terminal tương tác của workspace', 'Open the interactive workspace terminal'), 'Terminal', 'terminal'],
     ['/browser', uiCopy('Điều khiển browser thật bằng Playwright', 'Control a real browser with Playwright'), 'Browser Agent', 'globe'],
@@ -539,7 +573,6 @@ function renderComposerMenu() {
   const filtered = source.filter((item) => item.key.toLowerCase().includes(needle)).slice(0, 50);
   menu.replaceChildren();
   if (composerMenuIndex >= filtered.length) composerMenuIndex = filtered.length - 1;
-  if (composerMenuIndex < 0 && filtered.length) composerMenuIndex = 0;
   for (const [index, item] of filtered.entries()) {
     const button = createMenuRow({
       glyph: item.glyph || (item.kind === 'skill' ? 'cube' : 'info'),
@@ -560,26 +593,21 @@ function renderComposerMenu() {
       } else if (item.kind === 'mention') {
         replaceComposerTrigger(trigger, item.key);
         $('prompt').focus();
-      } else if (item.kind === 'command' && item.key === '/goal') {
-        composerGoalMode = true;
-        replaceComposerTrigger(trigger);
-        renderComposerTokens();
-      } else if (item.kind === 'command' && item.key === '/skills') {
-        replaceComposerTrigger(trigger, '$');
-        composerMenuIndex = 0;
-        renderComposerMenu();
-        $('prompt').focus();
-        return;
-      } else if (item.kind === 'command' && item.key === '/model') {
-        replaceComposerTrigger(trigger);
-        $('modelTrigger').click();
-      } else if (item.kind === 'command' && item.key === '/plan') {
-        replaceComposerTrigger(trigger);
-        setMode('plan');
       } else if (item.kind === 'command') {
+        if (runImmediateComposerCommand(item.key, trigger)) {
+          if (item.key !== '/skills') {
+            menu.classList.add('hidden');
+            composerMenuIndex = -1;
+          }
+          return;
+        }
         composerCommand = { key: item.key, label: item.label || item.key };
         $('prompt').value = '';
         renderComposerTokens();
+        menu.classList.add('hidden');
+        composerMenuIndex = -1;
+        requestAnimationFrame(send);
+        return;
       }
       menu.classList.add('hidden');
       composerMenuIndex = -1;
@@ -595,6 +623,15 @@ function renderComposerMenu() {
 
 function send() {
   const rawPrompt = $('prompt').value.trim();
+  if (!composerCommand && /^\/(?:goal|skills|models?|mode|permissions|check-models|agent|chat|plan|history|usage|settings|mcp|diagnostics|new|clear)$/i.test(rawPrompt)) {
+    if (runImmediateComposerCommand(rawPrompt)) {
+      if (rawPrompt.toLowerCase() !== '/skills') {
+        $('composerMenu').classList.add('hidden');
+        composerMenuIndex = -1;
+      }
+      return;
+    }
+  }
   const composerPrompt = effectiveComposerPrompt();
   const prompt = composerPrompt;
   if (!prompt && !pendingAttachmentCount) return;

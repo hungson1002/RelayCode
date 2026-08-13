@@ -75,6 +75,8 @@ export const CHAT_CONTROLLER_HOST_TURNS = String.raw`  } else if (data.type === 
     followUpQueueEnabled = true;
     activeTerminal = null;
     activeCommandGroup = null;
+    composerGoalMode = false;
+    resetComposerTokens();
     renderFollowUpQueue();
     renderGoal(null);
     setMode(composerPreferences.lastMode || defaultMode);
@@ -119,5 +121,6 @@ export const CHAT_CONTROLLER_HOST_TURNS = String.raw`  } else if (data.type === 
 setMode('chat');
 setPermissionMode('ask');
 resizePrompt();
+applyLanguageUi();
 requestBootstrap();
 `;

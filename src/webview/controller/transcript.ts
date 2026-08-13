@@ -125,11 +125,20 @@ function renderHistory(sessions = []) {
   allSessions = sessions;
   $('historyPanel').classList.toggle('expanded', historyExpanded);
   $('historyTitle').textContent = historyExpanded ? uiCopy('Tất cả lịch sử', 'All history') : uiCopy('Lịch sử chat', 'Chat history');
+  $('historyCount').textContent = uiCopy(
+    sessions.length + ' cuộc trò chuyện',
+    sessions.length + (sessions.length === 1 ? ' conversation' : ' conversations')
+  );
   $('clearAllHistory').classList.toggle('hidden', !sessions.length);
   $('clearAllHistory').textContent = activityCopy('Xóa tất cả', 'Clear all');
+  $('viewAllHistory').innerHTML = '<span>' + escapeHtml(uiCopy('Xem tất cả', 'View all')) + '</span>' + uiIcon('caretRight');
   const list = $('historyList'); list.replaceChildren();
   if (!sessions.length) {
-    const empty = document.createElement('div'); empty.className = 'history-empty'; empty.textContent = uiCopy('Chưa có cuộc trò chuyện nào.', 'No conversations yet.'); list.append(empty);
+    const empty = document.createElement('div'); empty.className = 'history-empty';
+    const emptyIcon = document.createElement('span'); emptyIcon.className = 'history-empty-icon'; emptyIcon.setAttribute('aria-hidden', 'true'); emptyIcon.innerHTML = uiIcon('chatCircle');
+    const emptyTitle = document.createElement('strong'); emptyTitle.textContent = uiCopy('Chưa có cuộc trò chuyện', 'No conversations yet');
+    const emptyHint = document.createElement('small'); emptyHint.textContent = uiCopy('Các cuộc trò chuyện gần đây sẽ hiện ở đây.', 'Your recent chats will appear here.');
+    empty.append(emptyIcon, emptyTitle, emptyHint); list.append(empty);
     $('viewAllHistory').classList.add('hidden');
     return;
   }
@@ -140,11 +149,13 @@ function renderHistory(sessions = []) {
     const title = document.createElement('span');
     if (session.kind === 'chatgpt-web') title.innerHTML = '<i aria-hidden="true">' + uiIcon('globe') + '</i><b>ChatGPT Web</b>';
     else title.textContent = session.title;
-    const time = document.createElement('time'); time.textContent = new Date(session.updatedAt).toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    button.title = session.kind === 'chatgpt-web' ? 'ChatGPT Web' : session.title;
+    const updatedAt = new Date(session.updatedAt);
+    const time = document.createElement('time'); time.dateTime = updatedAt.toISOString(); time.textContent = updatedAt.toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     button.append(title, time);
     button.addEventListener('click', () => { $('historyPanel').classList.add('hidden'); vscode.postMessage({ type: 'loadSession', id: session.id }); });
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'history-delete'; remove.setAttribute('aria-label', uiCopy('Xóa cuộc trò chuyện', 'Delete conversation'));
-    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V5h6v2m-8 0 1 12h8l1-12M10 10v6m4-6v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    remove.innerHTML = uiIcon('trash');
     remove.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'deleteSession', id: session.id }); });
     row.append(button, remove);
     list.append(row);

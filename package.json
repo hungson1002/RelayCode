@@ -2,7 +2,7 @@
   "name": "relaycode-huxon",
   "displayName": "RelayCode — AI Coding Agent",
   "description": "A focused AI coding workspace with Agent, Chat, Plan, multi-provider routing, MCP tools and safe reviewable changes.",
-  "version": "1.5.1",
+  "version": "2.0.0",
   "publisher": "huxon",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -132,19 +132,9 @@
     "menus": {
       "view/title": [
         {
-          "command": "nineRouter.configure",
-          "when": "view == nineRouter.chatView",
-          "group": "navigation@1"
-        },
-        {
           "command": "nineRouter.newThread",
           "when": "view == nineRouter.chatView",
-          "group": "navigation@2"
-        },
-        {
-          "command": "nineRouter.openDashboard",
-          "when": "view == nineRouter.chatView",
-          "group": "navigation@3"
+          "group": "navigation@1"
         }
       ]
     },

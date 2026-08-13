@@ -1,4 +1,27 @@
-export const CHAT_CONTROLLER_PANELS = String.raw`function renderTelemetry(records = []) {
+export const CHAT_CONTROLLER_PANELS = String.raw`function syncStructuralLanguageCopy() {
+  const copy = {
+    configHeadingTitle: uiCopy('Cấu hình provider', 'Provider settings'),
+    configHeadingCopy: uiCopy('Chọn nguồn model cho mọi yêu cầu', 'Choose the model source for every request'),
+    configInterfaceTitle: uiCopy('Giao diện', 'Interface'),
+    configInterfaceCopy: uiCopy('Ngôn ngữ dùng trong RelayCode', 'Language used across RelayCode'),
+    interfaceLanguageLabel: uiCopy('Ngôn ngữ giao diện', 'Interface language'),
+    configProfilesTitle: uiCopy('Hồ sơ', 'Profiles'),
+    configProfilesCopy: uiCopy('Lưu nhiều cấu hình provider riêng biệt', 'Save separate provider configurations'),
+    activeProfileText: uiCopy('Hồ sơ đang dùng', 'Active profile'),
+    profileNameText: uiCopy('Tên hồ sơ', 'Profile name'),
+    configConnectionTitle: uiCopy('Kết nối', 'Connection'),
+    configConnectionCopy: uiCopy('Provider và địa chỉ API đang dùng', 'Provider and API endpoint currently in use'),
+    providerFieldText: 'Provider',
+    configEndpointLabel: 'Endpoint',
+    configCostTitle: uiCopy('Chi phí ước tính', 'Estimated cost'),
+    configCostCopy: uiCopy('Không bắt buộc, tính theo một triệu token', 'Optional, estimated per one million tokens'),
+    modelMenuTitle: 'Models',
+    modelMenuCopy: uiCopy('Chọn model cho yêu cầu tiếp theo', 'Choose a model for the next request')
+  };
+  Object.entries(copy).forEach(([id, value]) => { $(id).textContent = value; });
+}
+
+function renderTelemetry(records = []) {
   const totalInput = records.reduce((sum, item) => sum + (item.inputTokens || 0), 0);
   const totalOutput = records.reduce((sum, item) => sum + (item.outputTokens || 0), 0);
   const costs = records.filter(item => typeof item.cost === 'number').reduce((sum, item) => sum + item.cost, 0);

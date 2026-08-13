@@ -5,12 +5,14 @@ import { CHAT_VIEW_CONTROLLER } from '../src/webview/chatViewController';
 
 const moduleNames = [
   'core',
+  'dialogs',
   'streaming',
   'models',
   'markdown',
   'activity',
   'panels',
   'transcript',
+  'commandActions',
   'composer',
   'events',
   'hostLifecycle',

@@ -176,6 +176,13 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function applyLanguageUi()');
     expect(CHAT_VIEW_CONTROLLER).toContain("openFloatingSurface('mcpPanel', { preserve: ['configPanel'] })");
     expect(CHAT_VIEW_CONTROLLER).toContain('const liveLanguagePairs');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function syncStructuralLanguageCopy()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("configInterfaceTitle: uiCopy('Giao diện', 'Interface')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("modelMenuCopy: uiCopy('Chọn model cho yêu cầu tiếp theo', 'Choose a model for the next request')");
+    expect(providerSource).toContain("'Lưu nhiều cấu hình provider riêng biệt': 'Save separate provider configurations'");
+    expect(providerSource).toContain("'Chọn model cho yêu cầu tiếp theo': 'Choose a model for the next request'");
+    expect(html).toContain('id="configInterfaceTitle"');
+    expect(html).toContain('id="modelMenuCopy"');
   });
 
   it('translates dynamically rendered add and slash-command menus', () => {
@@ -336,9 +343,9 @@ describe('Chat webview assets', () => {
   });
 
   it('closes floating panels when another surface or the outside area is clicked', () => {
-    expect(CHAT_VIEW_CONTROLLER).toContain("const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'accessConfirm', 'connectionDiagnostics', 'uiDialog']");
+    expect(CHAT_VIEW_CONTROLLER).toContain("const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'connectionDiagnostics', 'uiDialog']");
     expect(CHAT_VIEW_CONTROLLER).toContain("function openFloatingSurface(id, options = {})");
-    expect(CHAT_VIEW_CONTROLLER).toContain("if (event.target === $('accessConfirm'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (event.target === $('connectionDiagnostics')) closeConnectionDiagnosticsDialog()");
     expect(CHAT_VIEW_CONTROLLER).toContain("closeFloatingSurfaces();");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (!$('profilePicker').contains(event.target))");
     expect(CHAT_VIEW_STYLES).toContain('width:min(235px,100%)');
@@ -347,6 +354,7 @@ describe('Chat webview assets', () => {
   it('keeps confirmations, prompts and transient notices inside the extension', () => {
     expect(html).toContain('id="uiDialog"');
     expect(html).toContain('id="uiDialogInput"');
+    expect(html).toContain('id="uiDialogDetailWrap" class="ui-dialog-detail hidden"');
     expect(html).toContain('id="toastStack"');
     expect(CHAT_VIEW_CONTROLLER).toContain('function renderUiDialog(data)');
     expect(CHAT_VIEW_CONTROLLER).toContain("type: 'dialogResult'");
@@ -358,6 +366,30 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('queuedUiDialogs.shift()');
     expect(CHAT_VIEW_CONTROLLER).toContain("backdrop.classList.remove('hidden')");
     expect(CHAT_VIEW_CONTROLLER).toContain("toast.addEventListener('click', (event) => event.stopPropagation())");
+  });
+
+  it('uses one safe polished dialog system for destructive, model and permission prompts', () => {
+    expect(html).not.toContain('id="accessConfirm"');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function requestFullAccessDialog()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (typeof current.onAction === 'function') current.onAction(action, value)");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('uiDialogActionIcon');
+    expect(CHAT_VIEW_CONTROLLER).toContain("dialog.setAttribute('role', tone === 'danger' ? 'alertdialog' : 'dialog')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('uiDialogActions').querySelector('.primary')?.click()");
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("$('uiDialogActions').querySelector('.primary,.danger')?.click()");
+    expect(CHAT_VIEW_CONTROLLER).toContain("const asksForCaution = tone === 'danger' || tone === 'warning'");
+    expect(CHAT_VIEW_STYLES).toContain('.ui-dialog-detail{display:grid;grid-template-columns:16px');
+    expect(CHAT_VIEW_STYLES).toContain('.ui-dialog-action.danger{border-color:var(--vscode-inputValidation-errorBorder,#be1100)');
+    expect(CHAT_VIEW_STYLES).toContain('.ui-dialog>footer.many{display:grid;grid-template-columns:1fr');
+  });
+
+  it('matches connection checks to the dialog system and keeps them keyboard accessible', () => {
+    expect(html).toContain('class="modal-backdrop connection-dialog-backdrop hidden"');
+    expect(html).toContain('id="connectionDialogIcon" class="connection-dialog-icon"');
+    expect(html).toContain('aria-busy="false"');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('connectionDialogIcon').innerHTML = uiIcon('pulse')");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function closeConnectionDiagnosticsDialog(restoreFocus = true)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("event.key === 'Tab' && !$('connectionDiagnostics').classList.contains('hidden')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("connectionDialog.dataset.tone = data.ok ? 'success' : 'danger'");
   });
 
   it('makes chat deletion explicit and derives concise history titles', () => {
@@ -411,7 +443,8 @@ describe('Chat webview assets', () => {
   it('shows the stop state immediately and preserves space beside the send button', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("if (!standaloneCommand) setRunning(true)");
     expect(CHAT_VIEW_CONTROLLER).toContain("item.querySelector('.recovery-resume')?.addEventListener('click', () => {\n      setRunning(true);");
-    expect(CHAT_VIEW_CONTROLLER).toContain("$('goalResume').addEventListener('click', () => {\n  setRunning(true);");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('goalResume').addEventListener('click', () => {");
+    expect(CHAT_VIEW_CONTROLLER).toContain("showUiToast({ message: uiCopy('Hãy chọn một model trước khi tiếp tục Goal.'");
     expect(CHAT_VIEW_STYLES).toContain('.composer-actions .model-picker{margin-right:7px!important}');
     expect(CHAT_VIEW_STYLES).toContain('.composer-actions .send.running::before{display:block!important');
     expect(CHAT_VIEW_STYLES).toContain('@media(max-width:350px){');
@@ -550,6 +583,35 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("if (open) closeDropdowns($('providerMenu'))");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (!isOpen) closeDropdowns($('permMenu'))");
     expect(CHAT_VIEW_CONTROLLER).toContain('if (opening) closeDropdowns(allowMenu)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('composerMenu').classList.add('hidden')");
+    expect(CHAT_VIEW_CONTROLLER).toContain('composerMenuIndex = -1');
+  });
+
+  it('keeps composer controls stable and never implies a command selection before keyboard navigation', () => {
+    expect(CHAT_VIEW_CONTROLLER).not.toContain('if (composerMenuIndex < 0 && filtered.length) composerMenuIndex = 0');
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (composerMenuIndex < 0) composerMenuIndex = event.key === 'ArrowDown' ? 0 : items.length - 1");
+    expect(CHAT_VIEW_CONTROLLER).toContain("goalDockQuickClear.className = 'goal-dock-quick-clear'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function clearComposerGoal()');
+    expect(CHAT_VIEW_STYLES).toContain('.model-trigger-brand{display:none!important}');
+    expect(CHAT_VIEW_STYLES).toContain('width:110px!important;min-width:110px!important;max-width:110px!important');
+    expect(CHAT_VIEW_STYLES).toContain('.goal-dock-trigger>strong{display:none!important}');
+    expect(html).not.toContain('id="goalDockState"');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("$('goalDockState').className = state");
+    expect(CHAT_VIEW_STYLES).toContain('.goal-dock:hover .goal-dock-trigger>span,.goal-dock:has(.goal-dock-quick-clear:focus-visible) .goal-dock-trigger>span');
+    expect(CHAT_VIEW_STYLES).toContain('position:absolute!important;z-index:3!important;inset:0!important;display:grid!important;place-items:center!important');
+    expect(CHAT_VIEW_STYLES).toContain('.goal-dock-quick-clear:hover,.goal-dock-quick-clear:focus-visible{border:0!important;background:var(--rc-surface-hover)!important;color:var(--rc-muted)!important}');
+  });
+
+  it('keeps hidden provider actions hidden and presents settings as grouped scrollable sections', () => {
+    expect(CHAT_VIEW_STYLES).toContain('body .hidden.hidden{display:none!important}');
+    expect(html).toContain('class="config-scroll"');
+    expect(html).toContain('<strong id="configInterfaceTitle">Giao diện</strong>');
+    expect(html).toContain('<strong id="configProfilesTitle">Hồ sơ</strong>');
+    expect(html).toContain('<strong id="configConnectionTitle">Kết nối</strong>');
+    expect(html).toContain('<strong id="configCostTitle">Chi phí ước tính</strong>');
+    expect(html).toContain('class="config-action-dock"');
+    expect(CHAT_VIEW_STYLES).toContain('display:flex!important;flex-direction:column!important;top:54px!important');
+    expect(CHAT_VIEW_STYLES).toContain('.config-scroll{min-height:0!important;flex:1 1 auto!important');
   });
 
   it('shows live activity and folds completed technical output under Worked for', () => {
@@ -722,17 +784,22 @@ describe('Chat webview assets', () => {
   });
 
   it('provides Codex-style goal controls and a follow-up queue', () => {
+    expect(html).toContain('id="goalDock"');
+    expect(html).toContain('id="goalDockTrigger"');
     expect(html).toContain('id="goalRail"');
     expect(html).toContain('id="goalPause"');
     expect(html).toContain('id="goalResume"');
     expect(html).toContain('id="followUpQueue"');
     expect(CHAT_VIEW_CONTROLLER).toContain("['/goal',");
+    expect(CHAT_VIEW_CONTROLLER).toContain('function syncGoalDock()');
+    expect(CHAT_VIEW_CONTROLLER).not.toContain("host.append(createComposerToken('goal'");
     expect(CHAT_VIEW_CONTROLLER).toContain("['/compact',");
     expect(CHAT_VIEW_CONTROLLER).toContain('function queueFollowUp(');
     expect(CHAT_VIEW_CONTROLLER).toContain("queuedFollowUpReady = false;");
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'turnReady'");
     expect(providerSource).toContain("void this.post({ type: 'turnReady' });");
     expect(CHAT_VIEW_STYLES).toContain('.goal-rail[data-state="running"]');
+    expect(CHAT_VIEW_STYLES).toContain('.goal-dock-trigger{');
     expect(CHAT_VIEW_STYLES).toContain('.send.running.queue-ready');
     expect(CHAT_VIEW_CONTROLLER).toContain('function closeFollowUpMenus()');
     expect(CHAT_VIEW_CONTROLLER).toContain('followUpQueueEnabled = !followUpQueueEnabled;');
@@ -748,6 +815,25 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('Bỏ tin nhắn khỏi hàng đợi', 'Remove message from queue')");
     expect(CHAT_VIEW_CONTROLLER).toContain("uiCopy('1 tin nhắn đang chờ', '1 message queued')");
     expect(CHAT_VIEW_STYLES).toContain('.composer-actions .send.running.queue-ready::before{top:10px!important}');
+  });
+
+  it('executes UI slash commands and keeps their nested surfaces open', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain('function runImmediateComposerCommand(key, trigger = null)');
+    expect(CHAT_VIEW_CONTROLLER).toContain("command === '/model' || command === '/models'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('openComposerModelPicker();');
+    expect(CHAT_VIEW_CONTROLLER).toContain("command === '/settings'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("command === '/mcp'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('event.stopPropagation();\n    action(event);');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('send').addEventListener('click', (event) => {\n  event.stopPropagation();");
+    expect(CHAT_VIEW_STYLES).toContain('.model-menu-heading{');
+    expect(CHAT_VIEW_STYLES).toContain('.model-empty{');
+  });
+
+  it('keeps the language picker readable at narrow widths', () => {
+    expect(CHAT_VIEW_CONTROLLER).toContain("option.classList.toggle('active', selected)");
+    expect(CHAT_VIEW_STYLES).toContain('.language-menu{left:auto!important;right:0!important;width:230px!important;');
+    expect(CHAT_VIEW_STYLES).toContain('overflow-x:hidden!important;overflow-y:auto!important');
+    expect(CHAT_VIEW_STYLES).toContain('.language-menu strong,.language-menu small{display:block!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}');
   });
 
   it('keeps custom tooltips limited to the intentional controls', () => {
@@ -895,6 +981,19 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.send-icon');
   });
 
+  it('keeps popup scrolling, category chrome and connection status structurally separated', () => {
+    expect(html).toContain('class="connection-emblem"');
+    expect(html).toContain('class="state-slot"');
+    expect(CHAT_VIEW_STYLES).toContain('display:flex!important;flex-direction:column!important;overflow:hidden!important;overscroll-behavior:contain!important');
+    expect(CHAT_VIEW_STYLES).toContain('flex:1 1 auto!important;min-height:0!important;max-height:304px!important;padding-right:2px!important');
+    expect(CHAT_VIEW_STYLES).toContain('overflow-x:hidden!important;overflow-y:auto!important;overscroll-behavior:contain!important');
+    expect(CHAT_VIEW_STYLES).toContain('min-height:33px!important;margin:0 -6px 4px!important;padding:0 13px!important');
+    expect(CHAT_VIEW_STYLES).toContain('grid-template-columns:8px minmax(0,1fr)!important;align-items:start!important;column-gap:9px!important');
+    expect(CHAT_VIEW_STYLES).toContain('content:""!important;position:static!important;align-self:center!important');
+    expect(uiIconsSource).toContain("chartLineUp from '@phosphor-icons/core/regular/chart-line-up.svg'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('metricsToggleIcon').innerHTML = uiIcon('chartLineUp')");
+  });
+
   it('does not reopen a model picker that the user closed during a health check', () => {
     expect(CHAT_VIEW_CONTROLLER).not.toContain('keepModelMenuOpen');
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'modelCheckEnd'");
@@ -928,6 +1027,11 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('favorite.innerHTML = \'<svg viewBox="0 0 24 24"');
     expect(CHAT_VIEW_STYLES).toContain('grid-template-columns:24px minmax(0,1fr) 14px 28px!important');
     expect(CHAT_VIEW_STYLES).toContain('.model-favorite svg{display:block;width:16px;height:16px');
+    expect(CHAT_VIEW_STYLES).toContain('.model-option .model-favorite.active svg{fill:currentColor!important');
+    expect(CHAT_VIEW_STYLES).toContain('.model-trigger::after,.model-trigger:after{');
+    expect(CHAT_VIEW_STYLES).toContain('.key-state.saved{color:var(--rc-success)!important');
+    expect(CHAT_VIEW_STYLES).toContain('.diagnostics-result.success,.setup-check-result.success{color:var(--rc-success)!important');
+    expect(CHAT_VIEW_STYLES).toContain('.connection-page-actions #retryConnection.secondary,.config-actions #runDiagnostics.secondary{');
   });
 
   it('highlights the selected model and scrolls it into view when the picker opens', () => {
@@ -963,7 +1067,9 @@ describe('Chat webview assets', () => {
   it('keeps the header compact and uses aligned file-type library icons', () => {
     expect(extensionManifest.contributes.views.nineRouter[0].name).toBe('Chat');
     const titleCommands = extensionManifest.contributes.menus['view/title'];
-    expect(titleCommands.find((item: { command: string }) => item.command === 'nineRouter.configure')?.group).toBe('navigation@1');
+    expect(titleCommands).toEqual([
+      expect.objectContaining({ command: 'nineRouter.newThread', group: 'navigation@1' })
+    ]);
     expect(html).toContain('id="historyToggle" class="header-action" aria-label="Lịch sử chat"');
     expect(html).toContain('id="settings" class="header-action icon-only" aria-label="Cài đặt"');
     expect(CHAT_VIEW_STYLES).toContain('.route-header{height:49px!important');
@@ -1001,6 +1107,18 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('body .activity-current-icon[data-icon="fileCss"]');
     expect(CHAT_VIEW_CONTROLLER).toContain("if (/\\.(?:vue)$/.test(clean)) return 'fileVue'");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (/\\.(?:sql)$/.test(clean)) return 'fileSql'");
+  });
+
+  it('uses one editor-native shell system outside chat, history and dialogs', () => {
+    expect(CHAT_VIEW_STYLES).toContain('--rc-surface:var(--vscode-editorWidget-background');
+    expect(CHAT_VIEW_STYLES).toContain('height:42px!important;min-height:42px!important');
+    expect(CHAT_VIEW_STYLES).toContain('grid-template-columns:28px auto auto minmax(72px,1fr) 30px!important');
+    expect(CHAT_VIEW_STYLES).toContain('#modelLabel{display:block!important;min-width:0!important;overflow:hidden!important');
+    expect(CHAT_VIEW_STYLES).toContain('.config-panel,.overlay-panel{');
+    expect(CHAT_VIEW_STYLES).toContain('.setup{box-sizing:border-box!important;height:calc(100vh - 42px)!important');
+    expect(CHAT_VIEW_STYLES).toContain('.connection-orbit{display:none!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.telemetry-summary{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important');
+    expect(CHAT_VIEW_STYLES).toContain('.mcp-catalog{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important');
   });
 
   it('opens Chat first and reconnects the saved provider without gating the UI', () => {
@@ -1174,6 +1292,18 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain('resolvePendingChanges(pendingEntries, choice)');
     expect(providerSource).toContain('find((session) => pendingSessionIds.has(session.id))');
     expect(providerSource).toContain("globalState.update(CHAT_SESSIONS_STATE, [])");
+  });
+
+  it('renders a polished and accessible chat history popover', () => {
+    expect(html).toContain('id="historyPanel" class="history-panel hidden" role="dialog" aria-labelledby="historyTitle"');
+    expect(html).toContain('id="historyCount" class="history-count"');
+    expect(html).toContain('id="historyHeadingIcon" class="history-heading-icon"');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('historyHeadingIcon').innerHTML = uiIcon('clockCounterClockwise')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("remove.innerHTML = uiIcon('trash')");
+    expect(CHAT_VIEW_CONTROLLER).toContain("emptyHint.textContent = uiCopy(");
+    expect(CHAT_VIEW_STYLES).toContain('.history-heading-copy{display:flex;align-items:center');
+    expect(CHAT_VIEW_STYLES).toContain('.history-item-row:hover .history-delete,.history-item-row:focus-within .history-delete');
+    expect(CHAT_VIEW_STYLES).toContain('@media(hover:none){.history-delete{opacity:1;transform:none}}');
   });
 
   it('lets pending chat deletion review, keep, or undo its files safely', () => {

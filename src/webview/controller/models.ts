@@ -305,6 +305,20 @@ function renderModelMenu(query = '') {
       const rightRank = rankingFavorites.includes(right.value) ? 0 : recentModels.includes(right.value) ? 1 : 2;
       return leftRank - rightRank || left.text.localeCompare(right.text);
     });
+  if (!options.length) {
+    const empty = document.createElement('div');
+    empty.className = 'model-empty';
+    empty.innerHTML = uiIcon('circlesThree');
+    const copy = document.createElement('span');
+    const title = document.createElement('strong');
+    title.textContent = needle ? uiCopy('Không tìm thấy model', 'No models found') : uiCopy('Đang chờ danh sách model', 'Waiting for the model list');
+    const detail = document.createElement('small');
+    detail.textContent = needle ? uiCopy('Thử một từ khóa khác.', 'Try a different search.') : uiCopy('Kiểm tra kết nối provider nếu danh sách chưa xuất hiện.', 'Check the provider connection if the list does not appear.');
+    copy.append(title, detail);
+    empty.append(copy);
+    list.append(empty);
+    return;
+  }
   for (const option of options) {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'model-option'; button.setAttribute('role', 'option');
     const selected = option.value === $('model').value;

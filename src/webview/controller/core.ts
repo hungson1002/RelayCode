@@ -103,11 +103,24 @@ function brandKey(value, provider = '') {
   return brandIcons[provider] ? provider : 'mcp';
 }
 $('attachIcon').innerHTML = uiIcon('plus');
+$('goalDockIcon').innerHTML = uiIcon('target');
+const goalDockQuickClear = document.createElement('button');
+goalDockQuickClear.type = 'button';
+goalDockQuickClear.className = 'goal-dock-quick-clear';
+goalDockQuickClear.setAttribute('aria-label', 'Turn off Goal');
+goalDockQuickClear.innerHTML = uiIcon('x');
+$('goalDockTrigger').insertAdjacentElement('afterend', goalDockQuickClear);
 $('sendIcon').innerHTML = uiIcon('arrowUp');
 $('topConnectIcon').innerHTML = uiIcon('plugsConnected');
-$('historyToggleIcon').innerHTML = uiIcon('chatCircle');
-$('metricsToggleIcon').innerHTML = uiIcon('pulse');
+$('historyToggleIcon').innerHTML = uiIcon('clockCounterClockwise');
+$('historyHeadingIcon').innerHTML = uiIcon('clockCounterClockwise');
+$('closeHistory').innerHTML = uiIcon('x');
+$('connectionDialogIcon').innerHTML = uiIcon('pulse');
+$('closeConnectionDiagnostics').innerHTML = uiIcon('x');
+$('metricsToggleIcon').innerHTML = uiIcon('chartLineUp');
 $('settingsIcon').innerHTML = uiIcon('gear');
+$('closeConfig').innerHTML = uiIcon('x');
+$('closeConfig').setAttribute('aria-label', 'Close settings');
 $('uiLanguage').value = document.body.dataset.language === 'en' ? 'en' : 'vi';
 let language = $('uiLanguage').value;
 const uiCopy = (vi, en) => language === 'en' ? en : vi;
@@ -373,15 +386,24 @@ const liveLanguagePairs = [
   ['Đính kèm ngữ cảnh từ workspace', 'Attach context from workspace'], ['Đặt mục tiêu để agent tiếp tục theo đuổi', 'Set a goal for Agent to keep pursuing'],
   ['Lập kế hoạch trước khi thực hiện', 'Plan before implementation'], ['Thêm skill vào yêu cầu', 'Add a skill to the request'],
   ['Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Run a long task that can be paused and resumed'],
+  ['Goal đang bật', 'Goal is on'], ['Yêu cầu tiếp theo sẽ trở thành mục tiêu', 'Your next request will become the goal'],
+  ['Chọn model cho yêu cầu tiếp theo', 'Choose a model for the next request'], ['Tắt Goal', 'Turn off Goal'],
   ['Bắt đầu một cuộc chat mới', 'Start a new chat'], ['Rút gọn ngữ cảnh cuộc chat', 'Compact this chat context'],
   ['Tìm và chèn skill', 'Find and insert a skill'], ['Mở danh sách model', 'Open the model list'],
+  ['Mở danh sách chế độ làm việc', 'Open the work mode list'], ['Mở quyền thao tác của Agent', 'Open Agent permissions'],
+  ['Kiểm tra model cho chế độ hiện tại', 'Check models for the current mode'], ['Chuyển sang chế độ Agent', 'Switch to Agent mode'],
+  ['Chuyển sang chế độ Chat', 'Switch to Chat mode'], ['Mở lịch sử cuộc trò chuyện', 'Open conversation history'],
+  ['Mở số liệu sử dụng', 'Open usage metrics'],
   ['Chuyển sang chế độ Plan', 'Switch to Plan mode'], ['Xem các file đã thay đổi', 'View changed files'],
   ['Mở các thay đổi đang chờ review', 'Open changes awaiting review'], ['Bật hoặc tắt file đang mở trong ngữ cảnh', 'Toggle the open file in context'],
   ['Tạo khung AGENTS.md cho dự án', 'Create an AGENTS.md scaffold for the project'], ['Xem provider, MCP và skills', 'View provider, MCP and skills status'],
   ['Mở công cụ MCP', 'Open MCP tools'], ['Mở cấu hình', 'Open settings'], ['Mở Output Channel', 'Open Output Channel'],
   ['Mở 9Router', 'Open 9Router'],
+  ['Giao diện', 'Interface'], ['Ngôn ngữ dùng trong RelayCode', 'Language used across RelayCode'], ['Hồ sơ', 'Profiles'], ['Lưu nhiều cấu hình provider riêng biệt', 'Save separate provider configurations'],
+  ['Provider và địa chỉ API đang dùng', 'Provider and API endpoint currently in use'], ['Chi phí ước tính', 'Estimated cost'], ['Không bắt buộc, tính theo một triệu token', 'Optional, estimated per one million tokens'],
   ['Tên hồ sơ', 'Profile name'], ['Ví dụ: OpenAI cá nhân', 'For example: Personal OpenAI'], ['Endpoint và API key', 'Endpoint and API key'],
   ['Nhập API key của provider', 'Enter the provider API key'], ['Tùy chọn', 'Optional'], ['Lưu và kết nối lại', 'Save and reconnect'],
+  ['API key được lưu riêng và an toàn cho provider này', 'The API key is stored securely and separately for this provider'], ['Đã lưu API key an toàn', 'API key stored securely'], ['Chưa lưu API key', 'No API key saved'], ['Không cần API key · server local vẫn phải đang chạy', 'No API key required · the local server must still be running'],
   ['Chẩn đoán', 'Diagnostics'], ['Xuất chẩn đoán', 'Export diagnostics'], ['Mở Cockpit', 'Open Cockpit'],
   ['Thiết lập local', 'Set up local provider'], ['Connection center', 'Connection center'], ['Kết nối mô hình.', 'Connect a model.'],
   ['Quản lý provider, kiểm tra API và mở bảng điều khiển tại một nơi.', 'Manage providers, check APIs and open dashboards in one place.'],
@@ -426,13 +448,20 @@ function applyLanguageUi() {
   document.body.dataset.language = language;
   updateRelayTooltips();
   $('uiLanguageLabel').textContent = language === 'en' ? 'English' : 'Tiếng Việt';
+  document.querySelectorAll('#languageMenu [data-language]').forEach((option) => {
+    const selected = option.dataset.language === language;
+    option.classList.toggle('active', selected);
+    option.setAttribute('aria-selected', String(selected));
+  });
   translateLiveDom(language);
+  syncStructuralLanguageCopy();
   updateComposerPlaceholder();
   setPermissionMode($('permissionMode').dataset.mode || 'ask');
   $('modelSearch').placeholder = uiCopy('Tìm model…', 'Search models…');
   $('checkModels').textContent = checkingModels
     ? uiCopy('Đang kiểm tra · Bấm để hủy', 'Checking · Click to cancel')
     : uiCopy('Kiểm tra model', 'Check models');
+  syncGoalDock();
   $('imageLightbox').setAttribute('aria-label', uiCopy('Xem ảnh', 'Image viewer'));
   $('imageLightbox').querySelector('[role="toolbar"]')?.setAttribute('aria-label', uiCopy('Điều khiển ảnh', 'Image controls'));
   $('zoomOut').setAttribute('aria-label', uiCopy('Thu nhỏ', 'Zoom out'));
@@ -460,7 +489,7 @@ function comparableEndpoint(value) {
 
 const knownProviderEndpoints = new Set(Object.values(providerMeta).map(item => comparableEndpoint(item.endpoint)).filter(Boolean));
 const isKnownProviderEndpoint = (value) => knownProviderEndpoints.has(comparableEndpoint(value));
-const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'accessConfirm', 'connectionDiagnostics', 'uiDialog'];
+const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configPanel', 'connectionDiagnostics', 'uiDialog'];
 let activeUiDialog = null;
 let dialogReturnFocus = null;
 let queuedUiDialogs = [];
@@ -511,7 +540,8 @@ function closeDropdowns(except = null) {
     ['profileMenu', 'profilePicker', 'profileTrigger'],
     ['languageMenu', 'languagePicker', 'languageTrigger'],
     ['reasoningMenu', 'reasoningPicker', 'reasoningTrigger'],
-    ['permMenu', 'permDropdown', 'permissionMode']
+    ['permMenu', 'permDropdown', 'permissionMode'],
+    ['goalRail', 'goalDock', 'goalDockTrigger']
   ];
   for (const [menuId, pickerId, triggerId] of entries) {
     const menu = $(menuId);
@@ -525,6 +555,10 @@ function closeDropdowns(except = null) {
     menu.classList.add('hidden');
     menu.closest('.permission-allow-wrap')?.querySelector('.permission-menu-trigger')?.setAttribute('aria-expanded', 'false');
   });
+  if ($('composerMenu') !== except) {
+    $('composerMenu').classList.add('hidden');
+    composerMenuIndex = -1;
+  }
   if ($('addMenu') !== except) closeAddMenu();
 }
 
@@ -535,13 +569,17 @@ function closeUiDialog(action) {
   activeUiDialog = null;
   $('uiDialog').classList.add('hidden');
   $('uiDialogInput').value = '';
+  $('uiDialogInput').setAttribute('aria-invalid', 'false');
   $('uiDialogError').classList.add('hidden');
-  vscode.postMessage({
-    type: 'dialogResult',
-    id: current.id,
-    action,
-    value
-  });
+  if (typeof current.onAction === 'function') current.onAction(action, value);
+  else {
+    vscode.postMessage({
+      type: 'dialogResult',
+      id: current.id,
+      action,
+      value
+    });
+  }
   const next = queuedUiDialogs.shift();
   if (next) {
     requestAnimationFrame(() => renderUiDialog(next));
@@ -563,12 +601,15 @@ function renderUiDialog(data) {
   // an API-key/OAuth prompt returns to MCP instead of the Chat home.
   const backdrop = $('uiDialog');
   const dialog = backdrop.querySelector('.ui-dialog');
-  dialog.dataset.tone = data.tone || 'neutral';
-  $('uiDialogIcon').innerHTML = uiIcon(data.icon || (data.tone === 'danger' ? 'warning' : data.tone === 'success' ? 'checkCircle' : 'info'));
+  const tone = data.tone || 'neutral';
+  dialog.dataset.tone = tone;
+  dialog.setAttribute('role', tone === 'danger' ? 'alertdialog' : 'dialog');
+  $('uiDialogIcon').innerHTML = uiIcon(data.icon || (tone === 'danger' ? 'warning' : tone === 'warning' ? 'shieldWarning' : tone === 'success' ? 'checkCircle' : 'info'));
   $('uiDialogTitle').textContent = data.title || 'RelayCode';
   $('uiDialogMessage').textContent = data.message || '';
   $('uiDialogDetail').textContent = data.detail || '';
-  $('uiDialogDetail').classList.toggle('hidden', !data.detail);
+  $('uiDialogDetailIcon').innerHTML = uiIcon(tone === 'danger' ? 'warning' : tone === 'success' ? 'checkCircle' : 'info');
+  $('uiDialogDetailWrap').classList.toggle('hidden', !data.detail);
   $('uiDialogClose').innerHTML = uiIcon('x');
   $('uiDialogClose').classList.toggle('hidden', data.dismissible === false);
 
@@ -581,21 +622,32 @@ function renderUiDialog(data) {
     input.placeholder = data.input.placeholder || '';
     input.value = data.input.value || '';
     input.dataset.required = String(Boolean(data.input.required));
+    input.setAttribute('aria-invalid', 'false');
   }
 
   const actions = $('uiDialogActions');
   actions.replaceChildren();
-  actions.classList.toggle('many', (data.actions || []).length > 2);
-  for (const action of data.actions || []) {
+  const suppliedActions = data.actions || [];
+  const manyActions = suppliedActions.length > 2;
+  const orderedActions = manyActions
+    ? [...suppliedActions.filter((action) => !/^(?:cancel|close)$/i.test(action.id)), ...suppliedActions.filter((action) => /^(?:cancel|close)$/i.test(action.id))]
+    : suppliedActions;
+  actions.classList.toggle('many', manyActions);
+  actions.dataset.count = String(suppliedActions.length);
+  for (const action of orderedActions) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'ui-dialog-action ' + (action.kind || 'secondary');
-    button.textContent = action.label;
     button.dataset.action = action.id;
+    const actionLabel = document.createElement('span');
+    actionLabel.className = 'ui-dialog-action-label';
+    actionLabel.textContent = action.label;
+    button.append(actionLabel);
     button.addEventListener('click', () => {
       if (data.input?.required && !input.value.trim() && action.kind !== 'secondary') {
         $('uiDialogError').textContent = uiCopy('Trường này không được để trống.', 'This field is required.');
         $('uiDialogError').classList.remove('hidden');
+        input.setAttribute('aria-invalid', 'true');
         input.focus();
         return;
       }
@@ -610,7 +662,10 @@ function renderUiDialog(data) {
       input.focus();
       input.select();
     } else {
-      const preferred = actions.querySelector('.primary,.danger') || $('uiDialogClose');
+      const asksForCaution = tone === 'danger' || tone === 'warning' || Boolean(actions.querySelector('.danger'));
+      const preferred = asksForCaution
+        ? actions.querySelector('.secondary') || $('uiDialogClose')
+        : actions.querySelector('.primary') || actions.querySelector('.secondary') || $('uiDialogClose');
       preferred?.focus();
     }
   });
@@ -642,11 +697,14 @@ $('uiDialog').addEventListener('click', (event) => {
   event.stopPropagation();
   if (event.target === $('uiDialog') && activeUiDialog?.dismissible !== false) closeUiDialog(undefined);
 });
-$('uiDialogInput').addEventListener('input', () => $('uiDialogError').classList.add('hidden'));
+$('uiDialogInput').addEventListener('input', () => {
+  $('uiDialogError').classList.add('hidden');
+  $('uiDialogInput').setAttribute('aria-invalid', 'false');
+});
 $('uiDialogInput').addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
   event.preventDefault();
-  $('uiDialogActions').querySelector('.primary,.danger')?.click();
+  $('uiDialogActions').querySelector('.primary')?.click();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && activeUiDialog?.dismissible !== false) {
@@ -654,6 +712,22 @@ document.addEventListener('keydown', (event) => {
     closeUiDialog(undefined);
   } else if (event.key === 'Tab' && activeUiDialog) {
     const focusable = [...$('uiDialog').querySelectorAll('button:not(.hidden),input:not(.hidden)')]
+      .filter((element) => !element.disabled && element.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  } else if (event.key === 'Escape' && !$('connectionDiagnostics').classList.contains('hidden')) {
+    event.preventDefault();
+    closeConnectionDiagnosticsDialog();
+  } else if (event.key === 'Tab' && !$('connectionDiagnostics').classList.contains('hidden')) {
+    const focusable = [...$('connectionDiagnostics').querySelectorAll('button')]
       .filter((element) => !element.disabled && element.offsetParent !== null);
     if (!focusable.length) return;
     const first = focusable[0];
