@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1
+
+- Removed blue focus frames from message editing and the chat composer in favor of subtle editor-native gray focus feedback.
+- Moved the active Goal control directly after Full access while preserving Goal creation, pause, resume and clear behavior.
+- Reduced the default composer height, matched its surface to the extension chrome and separated Codex tuning from the context divider.
+
 ## 2.0.0
 
 - Rebuilt the RelayCode sidebar around a compact, editor-native shell for Chat, provider setup, model selection, commands, skills, permissions and Goal workflows.

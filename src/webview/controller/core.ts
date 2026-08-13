@@ -110,6 +110,7 @@ goalDockQuickClear.className = 'goal-dock-quick-clear';
 goalDockQuickClear.setAttribute('aria-label', 'Turn off Goal');
 goalDockQuickClear.innerHTML = uiIcon('x');
 $('goalDockTrigger').insertAdjacentElement('afterend', goalDockQuickClear);
+$('permDropdown').insertAdjacentElement('afterend', $('goalDock'));
 $('sendIcon').innerHTML = uiIcon('arrowUp');
 $('topConnectIcon').innerHTML = uiIcon('plugsConnected');
 $('historyToggleIcon').innerHTML = uiIcon('clockCounterClockwise');

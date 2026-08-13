@@ -591,7 +591,12 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).not.toContain('if (composerMenuIndex < 0 && filtered.length) composerMenuIndex = 0');
     expect(CHAT_VIEW_CONTROLLER).toContain("if (composerMenuIndex < 0) composerMenuIndex = event.key === 'ArrowDown' ? 0 : items.length - 1");
     expect(CHAT_VIEW_CONTROLLER).toContain("goalDockQuickClear.className = 'goal-dock-quick-clear'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('permDropdown').insertAdjacentElement('afterend', $('goalDock'))");
     expect(CHAT_VIEW_CONTROLLER).toContain('function clearComposerGoal()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("return composerGoalMode && body ? '/goal ' + body : body;");
+    expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'pauseGoal' })");
+    expect(CHAT_VIEW_CONTROLLER).toContain("vscode.postMessage({ type: 'resumeGoal', model: $('model').value })");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (hadActiveGoal) vscode.postMessage({ type: 'clearGoal' })");
     expect(CHAT_VIEW_STYLES).toContain('.model-trigger-brand{display:none!important}');
     expect(CHAT_VIEW_STYLES).toContain('width:110px!important;min-width:110px!important;max-width:110px!important');
     expect(CHAT_VIEW_STYLES).toContain('.goal-dock-trigger>strong{display:none!important}');
@@ -600,6 +605,11 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.goal-dock:hover .goal-dock-trigger>span,.goal-dock:has(.goal-dock-quick-clear:focus-visible) .goal-dock-trigger>span');
     expect(CHAT_VIEW_STYLES).toContain('position:absolute!important;z-index:3!important;inset:0!important;display:grid!important;place-items:center!important');
     expect(CHAT_VIEW_STYLES).toContain('.goal-dock-quick-clear:hover,.goal-dock-quick-clear:focus-visible{border:0!important;background:var(--rc-surface-hover)!important;color:var(--rc-muted)!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.composer-actions>.goal-dock{order:4!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.composer-input{min-height:54px!important;padding:8px 13px 2px!important}');
+    expect(CHAT_VIEW_STYLES).toContain('.message-editor textarea:focus-visible{');
+    expect(CHAT_VIEW_STYLES).toContain('border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important');
+    expect(CHAT_VIEW_STYLES).toContain('border:0!important;border-radius:7px!important;');
   });
 
   it('keeps hidden provider actions hidden and presents settings as grouped scrollable sections', () => {

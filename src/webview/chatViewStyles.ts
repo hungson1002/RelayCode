@@ -2029,4 +2029,46 @@ const semanticControlV7Styles = String.raw`
   }
 `;
 
-export const CHAT_VIEW_STYLES = styles + redesignStyles + interactionStyles + finalStyles + bubbleStyles + polishStyles + changeStyles + historyStyles + compactStyles + providerStyles + advancedStyles + dropdownFixStyles + mcpGalleryStyles + chatExperienceStyles + codexParityStyles + compactModeAndConnectionStyles + connectionEntryStyles + connectionCenterStyles + connectionPageV2Styles + modelHealthIconFixStyles + editableMessageStyles + errorAndMotionPolishStyles + recoveryAndRetryStyles + brandIdentityStyles + codexWorkflowStyles + codexComposerStyles + composerMenuV2Styles + codexTranscriptV2Styles + codexTranscriptV3Styles + narrowLayoutAndProfileFixStyles + unifiedDialogStyles + linkPresentationStyles + headerRedesignStyles + settingsAndSpacingPolishStyles + changeReviewV2Styles + boundedChangeTrayStyles + compactScrollbarStyles + ideNativeHeaderAndFileStyles + responsiveHeaderAndFileIconsV2Styles + responsiveHeaderAndFileIconsV3Styles + mcpConnectionStatusStyles + composerRunningAndSpacingStyles + historyClearStyles + permissionAndRunningIndicatorStyles + permissionPickerV2Styles + connectionBadgeV4Styles + markdownTableStyles + followUpQueueStyles + messageTypographyPolishStyles + v112PolishStyles + inlineWorkflowPreviewStyles + stableStreamingStyles + codexResponseTypographyStyles + labeledCodeBlockStyles + chatGptWebTimelineStyles + historyPanelV2Styles + dialogSystemV2Styles + workspaceShellV3Styles + workspaceShellV4Styles + workspaceChromeV5Styles + interactionAndSettingsV6Styles + semanticControlV7Styles;
+const composerRefinementV8Styles = String.raw`
+  .message-editor textarea,
+  .message-editor textarea:hover,
+  .message-editor textarea:focus,
+  .message-editor textarea:focus-visible{
+    border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important
+  }
+
+  .composer-shell{
+    background:color-mix(in srgb,var(--rc-surface) 92%,var(--rc-bg) 8%)!important;
+    border-color:color-mix(in srgb,var(--rc-border) 90%,var(--rc-text) 10%)!important
+  }
+  .composer-shell:focus-within,.composer-shell.prompt-focused{
+    border-color:color-mix(in srgb,var(--rc-border) 72%,var(--rc-text) 28%)!important;
+    box-shadow:0 5px 18px rgba(0,0,0,.14),inset 0 1px 0 rgba(255,255,255,.025)!important
+  }
+  .composer-input{min-height:54px!important;padding:8px 13px 2px!important}
+  .composer-input.has-tokens{padding-top:7px!important}
+  .composer-input .prompt-editor{min-height:34px!important;max-height:132px!important;padding:2px 0!important}
+  .composer-tokens{padding-bottom:3px!important}
+  .context-meter{margin:0 13px 3px!important}
+  .composer-actions{min-height:38px!important;padding:2px 8px 5px!important}
+
+  .codex-tuning{
+    min-height:30px!important;margin:0 13px 5px!important;padding:1px 3px!important;
+    border:0!important;border-radius:7px!important;
+    background:color-mix(in srgb,var(--rc-text) 4%,transparent)!important
+  }
+  .codex-tuning:not(.hidden)+.context-meter{margin-top:1px!important}
+
+  .composer-actions>.goal-dock{order:4!important}
+  .composer-actions>.mode-picker{order:2!important}
+  .composer-actions>.perm-wrap{order:3!important}
+  .composer-actions>#attach{order:1!important}
+  .composer-actions>.model-picker{order:5!important}
+  .composer-actions>#send{order:6!important}
+
+  @media(max-width:430px){
+    .composer-input{min-height:50px!important;padding-top:7px!important}
+  }
+`;
+
+export const CHAT_VIEW_STYLES = styles + redesignStyles + interactionStyles + finalStyles + bubbleStyles + polishStyles + changeStyles + historyStyles + compactStyles + providerStyles + advancedStyles + dropdownFixStyles + mcpGalleryStyles + chatExperienceStyles + codexParityStyles + compactModeAndConnectionStyles + connectionEntryStyles + connectionCenterStyles + connectionPageV2Styles + modelHealthIconFixStyles + editableMessageStyles + errorAndMotionPolishStyles + recoveryAndRetryStyles + brandIdentityStyles + codexWorkflowStyles + codexComposerStyles + composerMenuV2Styles + codexTranscriptV2Styles + codexTranscriptV3Styles + narrowLayoutAndProfileFixStyles + unifiedDialogStyles + linkPresentationStyles + headerRedesignStyles + settingsAndSpacingPolishStyles + changeReviewV2Styles + boundedChangeTrayStyles + compactScrollbarStyles + ideNativeHeaderAndFileStyles + responsiveHeaderAndFileIconsV2Styles + responsiveHeaderAndFileIconsV3Styles + mcpConnectionStatusStyles + composerRunningAndSpacingStyles + historyClearStyles + permissionAndRunningIndicatorStyles + permissionPickerV2Styles + connectionBadgeV4Styles + markdownTableStyles + followUpQueueStyles + messageTypographyPolishStyles + v112PolishStyles + inlineWorkflowPreviewStyles + stableStreamingStyles + codexResponseTypographyStyles + labeledCodeBlockStyles + chatGptWebTimelineStyles + historyPanelV2Styles + dialogSystemV2Styles + workspaceShellV3Styles + workspaceShellV4Styles + workspaceChromeV5Styles + interactionAndSettingsV6Styles + semanticControlV7Styles + composerRefinementV8Styles;
