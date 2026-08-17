@@ -2071,4 +2071,80 @@ const composerRefinementV8Styles = String.raw`
   }
 `;
 
-export const CHAT_VIEW_STYLES = styles + redesignStyles + interactionStyles + finalStyles + bubbleStyles + polishStyles + changeStyles + historyStyles + compactStyles + providerStyles + advancedStyles + dropdownFixStyles + mcpGalleryStyles + chatExperienceStyles + codexParityStyles + compactModeAndConnectionStyles + connectionEntryStyles + connectionCenterStyles + connectionPageV2Styles + modelHealthIconFixStyles + editableMessageStyles + errorAndMotionPolishStyles + recoveryAndRetryStyles + brandIdentityStyles + codexWorkflowStyles + codexComposerStyles + composerMenuV2Styles + codexTranscriptV2Styles + codexTranscriptV3Styles + narrowLayoutAndProfileFixStyles + unifiedDialogStyles + linkPresentationStyles + headerRedesignStyles + settingsAndSpacingPolishStyles + changeReviewV2Styles + boundedChangeTrayStyles + compactScrollbarStyles + ideNativeHeaderAndFileStyles + responsiveHeaderAndFileIconsV2Styles + responsiveHeaderAndFileIconsV3Styles + mcpConnectionStatusStyles + composerRunningAndSpacingStyles + historyClearStyles + permissionAndRunningIndicatorStyles + permissionPickerV2Styles + connectionBadgeV4Styles + markdownTableStyles + followUpQueueStyles + messageTypographyPolishStyles + v112PolishStyles + inlineWorkflowPreviewStyles + stableStreamingStyles + codexResponseTypographyStyles + labeledCodeBlockStyles + chatGptWebTimelineStyles + historyPanelV2Styles + dialogSystemV2Styles + workspaceShellV3Styles + workspaceShellV4Styles + workspaceChromeV5Styles + interactionAndSettingsV6Styles + semanticControlV7Styles + composerRefinementV8Styles;
+const liveMarkdownAndSettingsV9Styles = String.raw`
+  .message.user .sent-prompt-copy,
+  .message.user .sent-prompt-copy p{
+    min-width:0!important;max-width:100%!important;text-align:left!important
+  }
+  .message.user .sent-prompt-copy .rich-link{
+    display:inline-flex!important;align-items:flex-start!important;justify-content:flex-start!important;
+    width:auto!important;max-width:100%!important;text-align:left!important;white-space:normal!important
+  }
+  .message.user .sent-prompt-copy .rich-link-icon{margin-top:.2em!important}
+  .message.user .sent-prompt-copy .rich-link>span:last-child{
+    min-width:0!important;text-align:left!important;overflow-wrap:anywhere!important;word-break:normal!important
+  }
+
+  .settings-menu-floating{
+    position:fixed!important;z-index:1000!important;
+    inset:var(--settings-menu-top,10px) auto auto var(--settings-menu-left,10px)!important;
+    box-sizing:border-box!important;width:var(--settings-menu-width,calc(100vw - 20px))!important;max-width:calc(100vw - 20px)!important;
+    max-height:var(--settings-menu-max-height,220px)!important;margin:0!important;overflow-x:hidden!important;overflow-y:auto!important;
+    border:1px solid var(--vscode-widget-border,var(--rc-border))!important;
+    background:var(--vscode-quickInput-background,var(--rc-surface))!important;color:var(--rc-text)!important
+  }
+  .settings-menu-floating:popover-open{display:grid!important}
+  .settings-menu-floating.hidden{display:none!important}
+  .settings-menu-floating button,.settings-menu-floating .provider-option,.settings-menu-floating .profile-option{
+    transition:background-color .1s ease,color .1s ease!important
+  }
+  .settings-menu-floating button:hover,.settings-menu-floating button:focus-visible,
+  .settings-menu-floating .provider-option:hover,.settings-menu-floating .provider-option:focus-visible,
+  .settings-menu-floating .profile-option:hover,.settings-menu-floating .profile-option:focus-visible{
+    background:var(--vscode-list-hoverBackground,var(--rc-surface-hover))!important;color:var(--rc-text)!important
+  }
+  .config-panel .language-trigger:hover,.config-panel .profile-trigger:hover,.config-panel .provider-trigger:hover{
+    background:color-mix(in srgb,var(--vscode-input-background,var(--rc-bg)) 86%,var(--rc-text) 14%)!important;
+    border-color:color-mix(in srgb,var(--rc-border) 48%,var(--rc-text) 52%)!important
+  }
+  .config-panel .language-picker.open .language-trigger,
+  .config-panel .profile-picker.open .profile-trigger,
+  .config-panel .provider-picker.open .provider-trigger{
+    background:var(--vscode-input-background,var(--rc-bg))!important;border-color:var(--rc-accent)!important
+  }
+  @media(prefers-reduced-motion:reduce){.settings-menu-floating button{transition:none!important}}
+`;
+
+const modelResultsV10Styles = String.raw`
+  .model-health-filters{
+    flex:none!important;display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    gap:3px!important;margin:1px 0 5px!important;padding:3px!important;border:1px solid var(--rc-border-soft)!important;
+    border-radius:8px!important;background:color-mix(in srgb,var(--rc-bg) 76%,transparent)!important
+  }
+  .model-health-filters.hidden{display:none!important}
+  .model-health-filters button{
+    display:flex!important;align-items:center!important;justify-content:center!important;min-width:0!important;min-height:28px!important;
+    padding:0 6px!important;gap:5px!important;border:1px solid transparent!important;border-radius:6px!important;
+    background:transparent!important;color:var(--rc-muted)!important;font-size:9px!important;font-weight:560!important;cursor:pointer!important
+  }
+  .model-health-filters button span{min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+  .model-health-filters button b{flex:none!important;color:var(--rc-faint)!important;font-size:8.5px!important;font-weight:600!important}
+  .model-health-filters button:hover{background:var(--rc-surface-hover)!important;color:var(--rc-text)!important}
+  .model-health-filters button.active{
+    border-color:var(--rc-border-soft)!important;background:color-mix(in srgb,var(--rc-text) 7%,transparent)!important;
+    color:var(--rc-text)!important;box-shadow:none!important
+  }
+  .model-health-filters button.active b{color:var(--rc-muted)!important}
+  .model-health-filters button:focus-visible{outline:1px solid var(--rc-muted)!important;outline-offset:1px!important}
+
+  .model-option.active,.model-option.active:hover{
+    background:color-mix(in srgb,var(--rc-text) 7%,var(--rc-surface) 93%)!important;
+    color:var(--rc-text)!important;
+    box-shadow:inset 2px 0 0 color-mix(in srgb,var(--rc-text) 34%,transparent)!important
+  }
+  .model-option.active .model-option-label{color:var(--rc-text)!important;font-weight:600!important}
+  .model-option.active .model-option-meta{color:var(--rc-muted)!important}
+  .model-option.active>.model-brand{border-color:transparent!important;background:transparent!important}
+`;
+
+export const CHAT_VIEW_STYLES = styles + redesignStyles + interactionStyles + finalStyles + bubbleStyles + polishStyles + changeStyles + historyStyles + compactStyles + providerStyles + advancedStyles + dropdownFixStyles + mcpGalleryStyles + chatExperienceStyles + codexParityStyles + compactModeAndConnectionStyles + connectionEntryStyles + connectionCenterStyles + connectionPageV2Styles + modelHealthIconFixStyles + editableMessageStyles + errorAndMotionPolishStyles + recoveryAndRetryStyles + brandIdentityStyles + codexWorkflowStyles + codexComposerStyles + composerMenuV2Styles + codexTranscriptV2Styles + codexTranscriptV3Styles + narrowLayoutAndProfileFixStyles + unifiedDialogStyles + linkPresentationStyles + headerRedesignStyles + settingsAndSpacingPolishStyles + changeReviewV2Styles + boundedChangeTrayStyles + compactScrollbarStyles + ideNativeHeaderAndFileStyles + responsiveHeaderAndFileIconsV2Styles + responsiveHeaderAndFileIconsV3Styles + mcpConnectionStatusStyles + composerRunningAndSpacingStyles + historyClearStyles + permissionAndRunningIndicatorStyles + permissionPickerV2Styles + connectionBadgeV4Styles + markdownTableStyles + followUpQueueStyles + messageTypographyPolishStyles + v112PolishStyles + inlineWorkflowPreviewStyles + stableStreamingStyles + codexResponseTypographyStyles + labeledCodeBlockStyles + chatGptWebTimelineStyles + historyPanelV2Styles + dialogSystemV2Styles + workspaceShellV3Styles + workspaceShellV4Styles + workspaceChromeV5Styles + interactionAndSettingsV6Styles + semanticControlV7Styles + composerRefinementV8Styles + liveMarkdownAndSettingsV9Styles + modelResultsV10Styles;

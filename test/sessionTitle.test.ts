@@ -29,10 +29,13 @@ describe('smartSessionTitle', () => {
     expect(smartSessionTitle('Nhé, bạn có biết 9Router')).toBe('9Router');
     expect(smartSessionTitle('Biết 9router')).toBe('9Router');
     expect(smartSessionTitle('Vậy còn cockpit')).toBe('Cockpit');
+    expect(smartSessionTitle('Trước hết bạn biết về harnes không')).toBe('Harness');
   });
 
   it('removes trailing conversational filler', () => {
     expect(smartSessionTitle('Tạo một bảng usage giúp tôi nhé')).toBe('Tạo một bảng usage');
+    expect(smartSessionTitle('Sửa cho tôi cái dropdown phải để lên cái kia luôn')).toBe('Sửa vị trí dropdown');
+    expect(smartSessionTitle('cái đặt tên vẫn ngu ngu, phần model cho hiện chạy được và lỗi để lọc, làm active bớt chói đi')).toBe('Cải thiện tên lịch sử và bộ lọc model');
   });
 
   it('uses a later substantive request instead of a greeting', () => {
@@ -41,6 +44,14 @@ describe('smartSessionTitle', () => {
       { role: 'assistant', content: 'Chào bạn!' },
       { role: 'user', content: 'thử viết 1 file json đi' }
     ])).toBe('Thử viết 1 file JSON');
+  });
+
+  it('updates history to the most recent concrete change request', () => {
+    expect(smartSessionTitleFromTurns([
+      { role: 'user', content: 'Bạn biết về harnes không?' },
+      { role: 'assistant', content: 'Có.' },
+      { role: 'user', content: 'Sửa cho tôi cái dropdown bị che trong cài đặt' }
+    ])).toBe('Sửa dropdown cài đặt');
   });
 
   it('skips generic attachment instructions and names attachment-only chats', () => {

@@ -20,6 +20,8 @@ function setMode(next, remember = false) {
   if (modeChanged) {
     modelHealth = {};
     modelHealthMode = next;
+    modelHealthFilter = 'all';
+    modelHealthCheckComplete = false;
     renderModelMenu($('modelSearch')?.value || '');
   }
   $('modeLabel').textContent = mode === 'agent' ? 'Agent' : mode === 'plan' ? 'Plan' : 'Chat';
@@ -77,6 +79,8 @@ function applySmartModelForMode() {
 function clearModelSelectionForProviderSwitch() {
   modelHealth = {};
   modelHealthMode = '';
+  modelHealthFilter = 'all';
+  modelHealthCheckComplete = false;
   modelSelectionSource = 'auto';
   lastAutoModel = '';
   const select = $('model');
@@ -298,8 +302,31 @@ function renderModelMenu(query = '') {
   const list = $('modelOptions'); list.replaceChildren();
   const needle = query.trim().toLowerCase();
   const rankingFavorites = $('modelMenu').classList.contains('hidden') ? favoriteModels : favoriteModelsAtMenuOpen;
-  const options = [...$('model').options]
-    .filter(option => option.value && (!needle || option.text.toLowerCase().includes(needle)))
+  const availableOptions = [...$('model').options].filter(option => option.value);
+  const okCount = availableOptions.filter(option => modelHealth[option.value]?.status === 'ok').length;
+  const errorCount = availableOptions.filter(option => ['error', 'limited'].includes(modelHealth[option.value]?.status)).length;
+  const filters = $('modelHealthFilters');
+  filters.classList.toggle('hidden', !modelHealthCheckComplete || okCount + errorCount === 0);
+  filters.setAttribute('aria-label', uiCopy('Lọc kết quả kiểm tra model', 'Filter model check results'));
+  $('modelFilterAllLabel').textContent = uiCopy('Tất cả', 'All');
+  $('modelFilterOkLabel').textContent = uiCopy('Chạy được', 'Working');
+  $('modelFilterErrorLabel').textContent = uiCopy('Có lỗi', 'Issues');
+  $('modelFilterAllCount').textContent = String(availableOptions.length);
+  $('modelFilterOkCount').textContent = String(okCount);
+  $('modelFilterErrorCount').textContent = String(errorCount);
+  filters.querySelectorAll('[data-model-health-filter]').forEach((button) => {
+    const active = button.dataset.modelHealthFilter === modelHealthFilter;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  const options = availableOptions
+    .filter(option => {
+      const status = modelHealth[option.value]?.status;
+      if (modelHealthFilter === 'ok') return status === 'ok';
+      if (modelHealthFilter === 'error') return status === 'error' || status === 'limited';
+      return true;
+    })
+    .filter(option => !needle || option.text.toLowerCase().includes(needle))
     .sort((left, right) => {
       const leftRank = rankingFavorites.includes(left.value) ? 0 : recentModels.includes(left.value) ? 1 : 2;
       const rightRank = rankingFavorites.includes(right.value) ? 0 : recentModels.includes(right.value) ? 1 : 2;
@@ -311,9 +338,15 @@ function renderModelMenu(query = '') {
     empty.innerHTML = uiIcon('circlesThree');
     const copy = document.createElement('span');
     const title = document.createElement('strong');
-    title.textContent = needle ? uiCopy('Không tìm thấy model', 'No models found') : uiCopy('Đang chờ danh sách model', 'Waiting for the model list');
+    title.textContent = modelHealthFilter === 'ok'
+      ? uiCopy('Không có model chạy được', 'No working models')
+      : modelHealthFilter === 'error'
+        ? uiCopy('Không có model lỗi', 'No models with issues')
+        : needle ? uiCopy('Không tìm thấy model', 'No models found') : uiCopy('Đang chờ danh sách model', 'Waiting for the model list');
     const detail = document.createElement('small');
-    detail.textContent = needle ? uiCopy('Thử một từ khóa khác.', 'Try a different search.') : uiCopy('Kiểm tra kết nối provider nếu danh sách chưa xuất hiện.', 'Check the provider connection if the list does not appear.');
+    detail.textContent = modelHealthFilter !== 'all'
+      ? uiCopy('Chọn bộ lọc khác để xem các model còn lại.', 'Choose another filter to see the remaining models.')
+      : needle ? uiCopy('Thử một từ khóa khác.', 'Try a different search.') : uiCopy('Kiểm tra kết nối provider nếu danh sách chưa xuất hiện.', 'Check the provider connection if the list does not appear.');
     copy.append(title, detail);
     empty.append(copy);
     list.append(empty);
@@ -420,6 +453,7 @@ function restoreSavedProfileDraft() {
 
 function closeConfigPanel(restoreDraft = true) {
   if (restoreDraft) restoreSavedProfileDraft();
+  closeDropdowns();
   $('configPanel').classList.add('hidden');
 }
 

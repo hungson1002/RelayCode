@@ -580,7 +580,7 @@ describe('Chat webview assets', () => {
   it('keeps only one dropdown open at a time', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function closeDropdowns(except = null)');
     expect(CHAT_VIEW_CONTROLLER).toContain("if (open) closeDropdowns($('modelMenu'))");
-    expect(CHAT_VIEW_CONTROLLER).toContain("if (open) closeDropdowns($('providerMenu'))");
+    expect(CHAT_VIEW_CONTROLLER).toContain("showSettingsDropdown('providerMenu', 'providerPicker', 'providerTrigger')");
     expect(CHAT_VIEW_CONTROLLER).toContain("if (!isOpen) closeDropdowns($('permMenu'))");
     expect(CHAT_VIEW_CONTROLLER).toContain('if (opening) closeDropdowns(allowMenu)');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('composerMenu').classList.add('hidden')");
@@ -622,6 +622,14 @@ describe('Chat webview assets', () => {
     expect(html).toContain('class="config-action-dock"');
     expect(CHAT_VIEW_STYLES).toContain('display:flex!important;flex-direction:column!important;top:54px!important');
     expect(CHAT_VIEW_STYLES).toContain('.config-scroll{min-height:0!important;flex:1 1 auto!important');
+    expect(html).toContain('id="configScroll" class="config-scroll"');
+    expect(html).toContain('class="provider-menu settings-menu-floating hidden" role="listbox" popover="manual"');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function positionSettingsDropdown(menu, trigger)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function scheduleSettingsDropdownPosition()');
+    expect(CHAT_VIEW_CONTROLLER).toContain("$('configScroll').addEventListener('scroll', scheduleSettingsDropdownPosition, { passive: true });");
+    expect(CHAT_VIEW_CONTROLLER).toContain("typeof menu.hidePopover === 'function' && menu.matches(':popover-open')");
+    expect(CHAT_VIEW_STYLES).toContain('.settings-menu-floating:popover-open{display:grid!important}');
+    expect(CHAT_VIEW_STYLES).toContain('background:var(--vscode-list-hoverBackground,var(--rc-surface-hover))!important');
   });
 
   it('shows live activity and folds completed technical output under Worked for', () => {
@@ -711,7 +719,13 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('assistantRenderFrame = requestAnimationFrame(renderPendingAssistantText);');
     expect(CHAT_VIEW_CONTROLLER).toContain('assistantStreamTextNode.appendData(chunk);');
     expect(CHAT_VIEW_CONTROLLER).toContain('assistantBody.append(liveCopy);');
-    expect(CHAT_VIEW_CONTROLLER).not.toContain('assistantMarkdownTimer = setTimeout(materializeStreamingMarkdown');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantMarkdownTimer = window.setTimeout(materializeStreamingMarkdown, 96);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('scheduleStreamingMarkdown();');
+    expect(CHAT_VIEW_CONTROLLER).toContain('function completedStreamingMarkdownLength(source)');
+    expect(CHAT_VIEW_CONTROLLER).toContain('const stableLength = completedStreamingMarkdownLength(assistantRawText);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('appendMaterializedMarkdown(assistantRawText.slice(assistantMarkdownRenderedLength, stableLength), liveCopy);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('previous.append(...first.childNodes);');
+    expect(CHAT_VIEW_CONTROLLER).toContain('assistantStreamTextNode.data = liveTail;');
     expect(CHAT_VIEW_CONTROLLER).toContain('assistantMarkdownRenderedLength = assistantRawText.length;');
     expect(CHAT_VIEW_CONTROLLER).toContain("$('prompt').blur();");
     expect(CHAT_VIEW_STYLES).toContain('.composer-shell #prompt:focus,.composer-shell #prompt:focus-visible,.composer-shell.is-running #prompt:focus,.composer-shell.is-running #prompt:focus-visible{caret-color:#f2f3f4!important}');
@@ -919,6 +933,8 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_STYLES).toContain('.message.user .sent-prompt-copy p{margin:0}');
     expect(CHAT_VIEW_STYLES).toContain('background:transparent;color:#58aee8');
     expect(CHAT_VIEW_STYLES).toContain('.message.user .sent-prompt-copy .rich-link-icon{color:#58aee8}');
+    expect(CHAT_VIEW_STYLES).toContain('justify-content:flex-start!important;');
+    expect(CHAT_VIEW_STYLES).toContain('text-align:left!important;overflow-wrap:anywhere!important');
     expect(CHAT_VIEW_CONTROLLER).toContain("document.createTextNode('\\u200B')");
     expect(CHAT_VIEW_CONTROLLER).toContain("replace(/\\u200B/g, '')");
   });
@@ -1009,6 +1025,20 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'modelCheckEnd'");
   });
 
+  it('shows filterable working and issue results after a model check', () => {
+    expect(html).toContain('id="modelHealthFilters" class="model-health-filters hidden"');
+    expect(html).toContain('data-model-health-filter="ok"');
+    expect(html).toContain('data-model-health-filter="error"');
+    expect(CHAT_VIEW_CONTROLLER).toContain("modelHealthFilter = 'all'");
+    expect(CHAT_VIEW_CONTROLLER).toContain('modelHealthCheckComplete = false');
+    expect(CHAT_VIEW_CONTROLLER).toContain("modelHealthFilter === 'error'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("status === 'error' || status === 'limited'");
+    expect(CHAT_VIEW_CONTROLLER).toContain("button.setAttribute('aria-pressed', String(active))");
+    expect(CHAT_VIEW_CONTROLLER).toContain("modelHealthFilter = button.dataset.modelHealthFilter || 'all'");
+    expect(CHAT_VIEW_STYLES).toContain('.model-health-filters{');
+    expect(CHAT_VIEW_STYLES).toContain('grid-template-columns:repeat(3,minmax(0,1fr))!important');
+  });
+
   it('provides a pannable image viewer with zoom controls and a centered close action', () => {
     expect(html).toContain('id="lightboxViewport"');
     expect(html).toContain('id="zoomOut"');
@@ -1049,7 +1079,9 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain("selected.scrollIntoView({ block: 'center', behavior: 'auto' })");
     expect(CHAT_VIEW_CONTROLLER).toContain("button.setAttribute('aria-selected', String(selected))");
     expect(CHAT_VIEW_CONTROLLER).not.toContain("selectedMark.className = 'model-selected'");
-    expect(CHAT_VIEW_STYLES).toContain('.model-option.active{background:#3d4548!important');
+    expect(CHAT_VIEW_STYLES).toContain('.model-option.active,.model-option.active:hover{');
+    expect(CHAT_VIEW_STYLES).toContain('background:color-mix(in srgb,var(--rc-text) 7%,var(--rc-surface) 93%)!important');
+    expect(CHAT_VIEW_STYLES).toContain('box-shadow:inset 2px 0 0 color-mix(in srgb,var(--rc-text) 34%,transparent)!important');
     expect(CHAT_VIEW_STYLES).not.toContain('.model-option.active>.model-selected');
   });
 

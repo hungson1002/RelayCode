@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { relative, resolve } from 'node:path';
 import { AgentRuntime, compactProgressCommentary } from './agentRuntime';
+import { AgentHarness, type AgentHarnessEvent } from './agentHarness';
 import { normalizeEndpoint } from './routerClient';
 import { localizeProviderError } from './providerErrorMessages';
 import { smartSessionTitleFromTurns } from './sessionTitle';
@@ -2057,7 +2058,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               const task = String(args.task ?? '').trim();
               if (!task) return 'ERROR: task cannot be empty.';
               let result = '';
-              const subagent = new AgentRuntime(
+              const subagentRuntime = new AgentRuntime(
                 providerClient,
                 workspaceRoot,
                 async () => false,
@@ -2075,6 +2076,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 tuningForModel(effectiveModel),
                 120_000
               );
+              const subagent = new AgentHarness({
+                runId: `${runId}-subagent-${Date.now().toString(36)}`,
+                workspaceRoot,
+                workspaceTrusted: vscode.workspace.isTrusted,
+                runtime: subagentRuntime,
+                onEvent: (event) => this.logHarnessEvent(event)
+              });
               await subagent.run(task, effectiveModel, {
                 onDelta: (delta) => { result += delta; },
                 onStatus: (status) => void this.post({ type: 'status', message: `Subagent · ${status}` })
@@ -2146,7 +2154,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 }
               }, 5_000);
             });
-            const run = new AgentRuntime(
+            const runtime = new AgentRuntime(
               providerClient,
               workspaceRoot,
               (description) => this.askApproval(description),
@@ -2187,7 +2195,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 this.pendingSteering = [];
                 return steering;
               }
-            ).run(runtimePrompt, candidate, {
+            );
+            const harness = new AgentHarness({
+              runId: `${runId}-${candidate}`,
+              workspaceRoot,
+              workspaceTrusted: vscode.workspace.isTrusted,
+              runtime,
+              onEvent: (event) => this.logHarnessEvent(event)
+            });
+            const run = harness.run(runtimePrompt, candidate, {
               onDelta: (delta) => {
                 touchActivity();
                 if (turnContext?.browser && !browserToolUsed) browserPendingText += delta;
@@ -3760,6 +3776,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private post(message: unknown): Thenable<boolean> | Promise<boolean> {
     const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
     return this.view?.webview.postMessage(localizeUiPayload(message, language)) ?? Promise.resolve(false);
+  }
+
+  private logHarnessEvent(event: AgentHarnessEvent): void {
+    const duration = event.durationMs === undefined ? '' : ` · ${event.durationMs}ms`;
+    const error = event.error ? ` · ${event.error.replace(/\s+/g, ' ').slice(0, 300)}` : '';
+    this.output.appendLine(`[harness:${event.runId}] ${event.phase}${duration}${error}`);
   }
 
   private errorText(error: unknown): string {

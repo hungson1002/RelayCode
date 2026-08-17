@@ -29,27 +29,77 @@ function appendStreamingAssistantText(chunk) {
     assistantStreamTextNode = document.createTextNode(assistantRawText.slice(assistantMarkdownRenderedLength));
     liveCopy.append(assistantStreamTextNode);
     assistantBody.append(liveCopy);
-    return;
+  } else {
+    assistantStreamTextNode.appendData(chunk);
   }
-  assistantStreamTextNode.appendData(chunk);
+  scheduleStreamingMarkdown();
+}
+
+function completedStreamingMarkdownLength(source) {
+  let inCodeFence = false;
+  let stableLength = 0;
+  const completeLine = /([^\r\n]*)(?:\r\n|\n|\r)/g;
+  let match;
+  while ((match = completeLine.exec(source)) !== null) {
+    const line = match[1];
+    const lineEnd = match.index + match[0].length;
+    if (/^\s*\x60{3}/.test(line)) {
+      inCodeFence = !inCodeFence;
+      if (!inCodeFence) stableLength = lineEnd;
+      continue;
+    }
+    if (inCodeFence) continue;
+    if (!line.trim()
+      || /^\s*#{1,4}\s+\S/.test(line)
+      || /^\s*>\s?\S/.test(line)
+      || /^\s*(?:[-*+]\s+(?!\[[x ]\]\s)|\d+[.)]\s+)\S/i.test(line)) {
+      stableLength = lineEnd;
+    }
+  }
+  return stableLength;
+}
+
+function appendMaterializedMarkdown(source, beforeNode) {
+  const staging = document.createElement('div');
+  renderMarkdownInto(staging, source);
+  const first = staging.firstElementChild;
+  const previous = beforeNode?.previousElementSibling || assistantBody?.lastElementChild;
+  if (first && previous && /^(UL|OL)$/.test(first.tagName) && previous.tagName === first.tagName) {
+    previous.append(...first.childNodes);
+    first.remove();
+  }
+  const fragment = document.createDocumentFragment();
+  fragment.append(...staging.childNodes);
+  assistantBody?.insertBefore(fragment, beforeNode || null);
 }
 
 function materializeStreamingMarkdown() {
   assistantMarkdownTimer = 0;
   if (!assistantBody || !assistantRawText) return;
-  renderMarkdownInto(assistantBody, assistantRawText);
-  assistantMarkdownRenderedLength = assistantRawText.length;
-  assistantStreamTextNode = null;
+  const stableLength = completedStreamingMarkdownLength(assistantRawText);
+  if (stableLength <= assistantMarkdownRenderedLength) return;
+  const liveCopy = assistantStreamTextNode?.parentElement;
+  appendMaterializedMarkdown(assistantRawText.slice(assistantMarkdownRenderedLength, stableLength), liveCopy);
+  assistantMarkdownRenderedLength = stableLength;
+  const liveTail = assistantRawText.slice(stableLength);
+  if (assistantStreamTextNode && liveCopy) {
+    if (liveTail) assistantStreamTextNode.data = liveTail;
+    else { liveCopy.remove(); assistantStreamTextNode = null; }
+  }
   const item = assistantBody.closest('.message');
   if (item) item.dataset.rawContent = assistantRawText;
+  if (messagesPinnedToBottom) {
+    const messageList = $('messages');
+    messageList.scrollTop = messageList.scrollHeight;
+  }
+  updateRunningScrollIndicator();
 }
 
 function scheduleStreamingMarkdown() {
-  // Keep the live stream as one stable text node. Rebuilding the complete
-  // Markdown tree while tokens arrive changes line balancing, link/code
-  // metrics and scroll height, which makes the entire sidebar visibly pulse.
-  // Rich Markdown is materialized once by flushAssistantText at turn end or
-  // when a completed commentary block is archived into the activity timeline.
+  // Materialize only complete blocks; existing rich nodes remain untouched and
+  // the unfinished tail stays in one cheap text node, preventing stream jitter.
+  if (!assistantBody || assistantMarkdownTimer) return;
+  assistantMarkdownTimer = window.setTimeout(materializeStreamingMarkdown, 96);
 }
 
 function renderPendingAssistantText(frameTime = performance.now()) {

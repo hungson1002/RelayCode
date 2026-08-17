@@ -10,6 +10,8 @@ export const CHAT_CONTROLLER_HOST_MODELS = String.raw`  } else if (data.type ===
     checkingModels = true;
     modelHealth = {};
     modelHealthMode = data.mode || mode;
+    modelHealthFilter = 'all';
+    modelHealthCheckComplete = false;
      $('checkModels').textContent = uiCopy('Đang kiểm tra 0/' + data.total + ' · Bấm để hủy', 'Checking 0/' + data.total + ' · Click to cancel');
     $('checkModels').classList.add('checking');
     renderModelMenu($('modelSearch').value);
@@ -23,6 +25,7 @@ export const CHAT_CONTROLLER_HOST_MODELS = String.raw`  } else if (data.type ===
   } else if (data.type === 'modelCheckEnd') {
     if (data.profileId && data.profileId !== currentProfileId) return;
     checkingModels = false;
+    modelHealthCheckComplete = Object.values(modelHealth).some((item) => ['ok', 'error', 'limited'].includes(item.status));
      $('checkModels').textContent = data.cancelled ? uiCopy('Đã hủy · Kiểm tra lại', 'Canceled · Check again') : uiCopy('Kiểm tra model', 'Check models');
     $('checkModels').classList.remove('checking');
     renderModelMenu($('modelSearch').value);

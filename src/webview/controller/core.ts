@@ -185,7 +185,7 @@ let currentProfileId = '';
 let savedProfileId = '';
 let profiles = [];
 let modelHealth = {};
-let modelHealthMode = '';
+let modelHealthMode = '', modelHealthFilter = 'all', modelHealthCheckComplete = false;
 let allSessions = [];
 let historyExpanded = false;
 let changesHidden = false;
@@ -547,6 +547,7 @@ function closeDropdowns(except = null) {
   for (const [menuId, pickerId, triggerId] of entries) {
     const menu = $(menuId);
     if (!menu || menu === except) continue;
+    if (typeof menu.hidePopover === 'function' && menu.matches(':popover-open')) menu.hidePopover();
     menu.classList.add('hidden');
     $(pickerId)?.classList.remove('open');
     $(triggerId)?.setAttribute('aria-expanded', 'false');
@@ -724,6 +725,7 @@ document.addEventListener('keydown', (event) => {
       event.preventDefault();
       first.focus();
     }
+  } else if (event.key === 'Escape' && closeSettingsDropdownsForEscape(event)) {
   } else if (event.key === 'Escape' && !$('connectionDiagnostics').classList.contains('hidden')) {
     event.preventDefault();
     closeConnectionDiagnosticsDialog();

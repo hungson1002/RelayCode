@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
-import { existsSync, realpathSync } from 'node:fs';
 import * as vscode from 'vscode';
 import type { ProviderClient, ToolCompletionProgress } from './provider';
 import type { ExternalAgentTool } from './mcpManager';
@@ -12,6 +11,7 @@ import { requiresWorkspaceMutation } from './agentIntent';
 import { runShellCommand, shellRuntimeInstruction } from './commandRuntime';
 import { sanitizeModelText } from './modelText';
 import { searchWeb, WEB_SEARCH_TOOL } from './webSearch';
+import { WorkspaceSandbox } from './workspaceSandbox';
 
 const execFileAsync = promisify(execFile);
 
@@ -291,6 +291,8 @@ export function normalizeCompletedToolHistory(messages: Array<Record<string, unk
 }
 
 export class AgentRuntime {
+  private readonly workspaceSandbox: WorkspaceSandbox;
+
   public constructor(
     private readonly client: ProviderClient,
     private readonly workspaceRoot: string,
@@ -309,7 +311,9 @@ export class AgentRuntime {
     private readonly requestTuning?: RequestTuning,
     private readonly modelInactivityTimeoutMs = 180_000,
     private readonly consumeSteering?: () => string[]
-  ) {}
+  ) {
+    this.workspaceSandbox = new WorkspaceSandbox(workspaceRoot);
+  }
   private mutationPreparation: Promise<void> | undefined;
   private readonly mutatedPaths = new Set<string>();
   private commandMutationCount = 0;
@@ -1156,39 +1160,12 @@ export class AgentRuntime {
   }
 
   private workspaceUri(input: string): vscode.Uri {
-    const target = resolve(this.workspaceRoot, input);
-    const root = resolve(this.workspaceRoot);
-    if (!pathIsInside(root, target) || !this.realPathIsInsideWorkspace(target)) {
-      throw new Error('Đường dẫn nằm ngoài workspace hoặc đi qua symlink/junction không an toàn.');
-    }
-    return vscode.Uri.file(target);
+    return vscode.Uri.file(this.workspaceSandbox.resolvePath(input));
   }
 
   private isWorkspacePath(input: string): boolean {
-    const target = resolve(input);
-    const root = resolve(this.workspaceRoot);
-    return pathIsInside(root, target) && this.realPathIsInsideWorkspace(target);
+    return this.workspaceSandbox.contains(input);
   }
-
-  private realPathIsInsideWorkspace(target: string): boolean {
-    const root = resolve(this.workspaceRoot);
-    if (!existsSync(root)) return pathIsInside(root, target);
-    const realRoot = realpathSync.native(root);
-    let existing = target;
-    while (!existsSync(existing)) {
-      const parent = dirname(existing);
-      if (parent === existing) return false;
-      existing = parent;
-    }
-    const realExisting = realpathSync.native(existing);
-    return pathIsInside(realRoot, realExisting);
-  }
-}
-
-function pathIsInside(root: string, target: string): boolean {
-  const normalizedRoot = process.platform === 'win32' ? root.toLowerCase() : root;
-  const normalizedTarget = process.platform === 'win32' ? target.toLowerCase() : target;
-  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${sep}`);
 }
 
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {

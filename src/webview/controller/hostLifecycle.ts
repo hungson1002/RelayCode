@@ -211,6 +211,8 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
     const previous = providerChanged ? '' : select.value;
     const previousWasAuto = !providerChanged && modelSelectionSource === 'auto' && previous === lastAutoModel;
     modelHealth = {};
+    modelHealthFilter = 'all';
+    modelHealthCheckComplete = false;
      select.replaceChildren(new Option(uiCopy('Chọn model', 'Select model'), ''));
     for (const model of data.models || []) {
       const option = new Option(model.name, model.id);
@@ -359,6 +361,8 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
     checkingModels = false;
     modelHealth = {};
     modelHealthMode = '';
+    modelHealthFilter = 'all';
+    modelHealthCheckComplete = false;
     $('checkModels').textContent = uiCopy('Kiá»ƒm tra model', 'Check models');
     $('checkModels').classList.remove('checking');
     applyProfileUi(data.profile);

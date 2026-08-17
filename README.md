@@ -26,6 +26,7 @@ It runs in VS Code, Antigravity, Cursor, and other compatible editors.
 
 - **Review-first editing** — inspect diffs, then accept or undo changes.
 - **Visible execution** — follow tool calls, commands, validation, and failures in the timeline.
+- **Lightweight Agent harness** — manages run lifecycle, cancellation, recovery, and workspace protection without a required Docker or WSL daemon.
 - **Chat, Agent, and Plan** — use the right level of autonomy for each task.
 - **Multiple providers** — keep separate profiles for cloud, local, and OpenAI-compatible endpoints.
 - **MCP tools** — extend Agent with trusted local or remote services.
@@ -76,6 +77,7 @@ MCP shares tool activity, not the full ChatGPT conversation. See OpenAI's [Secur
 
 ## Safety
 
+- File tools and command working directories are confined to the trusted workspace by a lightweight process-local boundary. It is not an OS/container isolation boundary.
 - Use the least permissive mode that fits the task.
 - Review file changes before accepting them.
 - Connect only MCP servers you trust.

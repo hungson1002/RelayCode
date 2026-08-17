@@ -26,6 +26,7 @@ Extension hoạt động trên VS Code, Antigravity, Cursor và các editor tư�
 
 - **Ưu tiên review** — xem diff trước khi chấp nhận hoặc hoàn tác thay đổi.
 - **Thao tác rõ ràng** — theo dõi tool, lệnh, kết quả kiểm tra và lỗi trong timeline.
+- **Agent harness gọn nhẹ** — quản lý vòng đời, hủy, khôi phục và bảo vệ workspace mà không bắt buộc chạy nền Docker hoặc WSL.
 - **Chat, Agent và Plan** — chọn mức tự động hóa phù hợp với từng công việc.
 - **Nhiều provider** — tách profile cho dịch vụ cloud, local và endpoint tương thích OpenAI.
 - **Công cụ MCP** — mở rộng Agent bằng dịch vụ local hoặc remote đáng tin cậy.
@@ -76,6 +77,7 @@ MCP chỉ chia sẻ hoạt động của tool, không chia sẻ toàn bộ cuộ
 
 ## An toàn
 
+- File tool và thư mục chạy lệnh được giới hạn trong workspace đáng tin cậy bằng hàng rào nhẹ chạy cùng process. Đây không phải lớp cách ly cấp hệ điều hành/container.
 - Dùng mức quyền thấp nhất phù hợp với công việc.
 - Review thay đổi của file trước khi chấp nhận.
 - Chỉ kết nối MCP server mà bạn tin cậy.

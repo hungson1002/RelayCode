@@ -161,34 +161,90 @@ $('modelTrigger').addEventListener('click', (event) => {
 });
 $('modelMenu').addEventListener('click', (event) => event.stopPropagation());
 $('modelSearch').addEventListener('input', () => renderModelMenu($('modelSearch').value));
+document.querySelectorAll('#modelHealthFilters [data-model-health-filter]').forEach((button) => button.addEventListener('click', (event) => {
+  event.stopPropagation();
+  modelHealthFilter = button.dataset.modelHealthFilter || 'all';
+  renderModelMenu($('modelSearch').value);
+}));
 $('checkModels').addEventListener('click', (event) => {
   event.stopPropagation();
   vscode.postMessage({ type: checkingModels ? 'cancelModelCheck' : 'checkModels', ...(checkingModels ? {} : { mode }) });
 });
+function positionSettingsDropdown(menu, trigger) {
+  if (!menu || !trigger || menu.classList.contains('hidden')) return;
+  const edge = 10;
+  const gap = 6;
+  const rect = trigger.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const width = Math.min(rect.width, viewportWidth - edge * 2);
+  const left = Math.min(Math.max(edge, rect.left), viewportWidth - edge - width);
+  const spaceBelow = Math.max(0, viewportHeight - rect.bottom - edge - gap);
+  const spaceAbove = Math.max(0, rect.top - edge - gap);
+  const desiredHeight = Math.min(menu.scrollHeight || 180, menu.id === 'providerMenu' ? 330 : 220);
+  const opensAbove = spaceBelow < Math.min(desiredHeight, 160) && spaceAbove > spaceBelow;
+  const availableHeight = opensAbove ? spaceAbove : spaceBelow;
+  const maxHeight = Math.max(80, Math.min(desiredHeight, availableHeight));
+  const renderedHeight = Math.min(menu.scrollHeight || maxHeight, maxHeight);
+  const top = opensAbove ? rect.top - gap - renderedHeight : rect.bottom + gap;
+  menu.style.setProperty('--settings-menu-left', Math.round(left) + 'px');
+  menu.style.setProperty('--settings-menu-top', Math.round(Math.max(edge, top)) + 'px');
+  menu.style.setProperty('--settings-menu-width', Math.round(width) + 'px');
+  menu.style.setProperty('--settings-menu-max-height', Math.round(maxHeight) + 'px');
+  menu.classList.toggle('opens-above', opensAbove);
+}
+function showSettingsDropdown(menuId, pickerId, triggerId) {
+  const menu = $(menuId);
+  const picker = $(pickerId);
+  const trigger = $(triggerId);
+  const open = menu.classList.contains('hidden');
+  if (open) closeDropdowns(menu);
+  if (!open) {
+    closeDropdowns();
+    return;
+  }
+  menu.classList.remove('hidden');
+  picker.classList.add('open');
+  trigger.setAttribute('aria-expanded', 'true');
+  if (typeof menu.showPopover === 'function' && !menu.matches(':popover-open')) menu.showPopover();
+  positionSettingsDropdown(menu, trigger);
+  requestAnimationFrame(() => positionSettingsDropdown(menu, trigger));
+}
+function repositionSettingsDropdowns() {
+  positionSettingsDropdown($('profileMenu'), $('profileTrigger'));
+  positionSettingsDropdown($('providerMenu'), $('providerTrigger'));
+  positionSettingsDropdown($('languageMenu'), $('languageTrigger'));
+}
+let settingsDropdownPositionFrame = 0;
+function scheduleSettingsDropdownPosition() {
+  if (settingsDropdownPositionFrame) return;
+  settingsDropdownPositionFrame = requestAnimationFrame(() => {
+    settingsDropdownPositionFrame = 0;
+    repositionSettingsDropdowns();
+  });
+}
+function closeSettingsDropdownsForEscape(event) {
+  if (!['profileMenu', 'providerMenu', 'languageMenu'].some((id) => !$(id).classList.contains('hidden'))) return false;
+  event.preventDefault();
+  const trigger = [$('profileTrigger'), $('providerTrigger'), $('languageTrigger')].find((item) => item.getAttribute('aria-expanded') === 'true');
+  closeDropdowns();
+  trigger?.focus();
+  return true;
+}
 $('profileTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
-  const open = $('profileMenu').classList.contains('hidden');
-  if (open) closeDropdowns($('profileMenu'));
-  $('profileMenu').classList.toggle('hidden', !open);
-  $('profilePicker').classList.toggle('open', open);
-  $('profileTrigger').setAttribute('aria-expanded', String(open));
+  showSettingsDropdown('profileMenu', 'profilePicker', 'profileTrigger');
 });
 $('profileMenu').addEventListener('click', (event) => event.stopPropagation());
 $('providerTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
-  const open = $('providerMenu').classList.contains('hidden');
-  if (open) closeDropdowns($('providerMenu'));
-  $('providerMenu').classList.toggle('hidden', !open);
-  $('providerPicker').classList.toggle('open', open);
-  $('providerTrigger').setAttribute('aria-expanded', String(open));
+  showSettingsDropdown('providerMenu', 'providerPicker', 'providerTrigger');
 });
 $('providerMenu').addEventListener('click', (event) => event.stopPropagation());
 document.querySelectorAll('#providerMenu .provider-option').forEach(option => option.addEventListener('click', (event) => {
   event.stopPropagation();
   setProvider(option.dataset.provider, true, false);
-  $('providerMenu').classList.add('hidden');
-  $('providerPicker').classList.remove('open');
-  $('providerTrigger').setAttribute('aria-expanded', 'false');
+  closeDropdowns();
 }));
 $('reasoningTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
@@ -217,20 +273,14 @@ $('fastMode').addEventListener('click', (event) => {
 $('quotaReset').addEventListener('click', () => vscode.postMessage({ type: 'openTelemetryDashboard' }));
 $('languageTrigger').addEventListener('click', (event) => {
   event.stopPropagation();
-  const open = $('languageMenu').classList.contains('hidden');
-  if (open) closeDropdowns($('languageMenu'));
-  $('languageMenu').classList.toggle('hidden', !open);
-  $('languagePicker').classList.toggle('open', open);
-  $('languageTrigger').setAttribute('aria-expanded', String(open));
+  showSettingsDropdown('languageMenu', 'languagePicker', 'languageTrigger');
 });
 $('languageMenu').addEventListener('click', (event) => event.stopPropagation());
 document.querySelectorAll('#languageMenu [data-language]').forEach((option) => option.addEventListener('click', (event) => {
   event.stopPropagation();
   $('uiLanguage').value = option.dataset.language;
   $('uiLanguage').dispatchEvent(new Event('change'));
-  $('languageMenu').classList.add('hidden');
-  $('languagePicker').classList.remove('open');
-  $('languageTrigger').setAttribute('aria-expanded', 'false');
+  closeDropdowns();
 }));
 $('retryConnection').addEventListener('click', () => {
   showError('');
@@ -314,7 +364,9 @@ $('permissionMode').addEventListener('click', (e) => {
 });
 window.addEventListener('resize', () => {
   if (!$('permMenu').classList.contains('hidden')) positionPermissionMenu();
+  scheduleSettingsDropdownPosition();
 });
+$('configScroll').addEventListener('scroll', scheduleSettingsDropdownPosition, { passive: true });
 document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
   opt.addEventListener('click', (e) => {
     e.stopPropagation();

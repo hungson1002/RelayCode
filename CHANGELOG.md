@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.0.5
+
+- Improved local chat-history titles with typo normalization, focused topic summaries and preference for the latest concrete change request.
+- Added post-check model filters for all, working and issue results, including counts and combined search filtering.
+- Replaced the bright selected-model background with a restrained editor-neutral state and subtle edge marker.
+
+## 2.0.4
+
+- Removed streaming layout jitter by preserving completed Markdown nodes and appending only newly completed blocks.
+- Kept unfinished text in a stable live tail while progressively extending headings, quotes, lists, tables and fenced code.
+
+## 2.0.3
+
+- Rendered headings, lists, links and tables progressively while assistant responses are still streaming.
+- Restored natural left alignment and wrapping for long links in sent prompt bubbles.
+- Moved Settings dropdowns into the browser top layer so scrolling panels and the fixed action dock cannot clip them, with consistent hover, focus and Escape behavior.
+
+## 2.0.2
+
+- Added a lightweight Agent harness for trusted-workspace gating, run lifecycle tracking, cancellation and recovery observability.
+- Centralized workspace path confinement for file tools and command working directories, including traversal and symlink/junction protection.
+- Routed primary Agent and delegated read-only runs through the same harness boundary with full regression coverage.
+
 ## 2.0.1
 
 - Removed blue focus frames from message editing and the chat composer in favor of subtle editor-native gray focus feedback.
