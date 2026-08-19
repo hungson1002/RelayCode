@@ -69,3 +69,16 @@ export function requiresWorkspaceMutation(prompt: unknown): boolean {
   return explicitVietnameseMakeRequest.test(normalized)
     || mutationVerbs.some((verb) => normalized.includes(verb));
 }
+
+const gitWorkflowPattern = /\b(?:git|commit|push|pull|status|diff|branch|merge|stash|stage|unstage|tag|rebase)\b/i;
+const codeActionPattern = /\b(?:create|build|implement|edit|modify|update|fix|delete|remove|rename|generate|write|test|lint|typecheck|refactor|install|run)\b/i;
+
+/** True when the request is about version control, not changing project code. */
+export function isGitOnlyRequest(prompt: unknown): boolean {
+  const text = typeof prompt === 'string' ? prompt : JSON.stringify(prompt ?? '');
+  const normalized = text.trim().toLocaleLowerCase('vi');
+  if (!normalized || !gitWorkflowPattern.test(normalized)) return false;
+  const withoutGitTerms = normalized.replace(/\b(?:git|commit|push|pull|status|diff|branch|merge|stash|stage|unstage|tag|rebase)\b/gi, ' ');
+  return !codeActionPattern.test(withoutGitTerms)
+    && !/(?:tạo|xây dựng|triển khai|sửa|chỉnh|cập nhật|xóa|xoá|đổi tên|viết|thêm|cài đặt)/iu.test(withoutGitTerms);
+}

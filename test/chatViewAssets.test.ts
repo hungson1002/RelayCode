@@ -746,10 +746,10 @@ describe('Chat webview assets', () => {
     expect(CHAT_VIEW_CONTROLLER.slice(renderStart, renderEnd)).not.toContain('item.dataset.rawContent = assistantRawText');
   });
 
-  it('keeps Agent content deltas on the same live stream', () => {
-    expect(agentRuntimeSource).toContain('callbacks.onDelta(progress.content)');
-    expect(agentRuntimeSource).toContain("if (progress.type === 'content' && progress.content)");
-    expect(agentRuntimeSource).toContain('if (!this.currentStepStreamed)');
+  it('buffers Agent narration until the tool outcome is known', () => {
+    expect(agentRuntimeSource).toContain('Buffer model narration until the step is complete.');
+    expect(agentRuntimeSource).not.toContain('callbacks.onDelta(progress.content)');
+    expect(agentRuntimeSource).not.toContain('currentStepStreamed');
   });
 
   it('deduplicates approval prompts and supports a persistent edit permission', () => {

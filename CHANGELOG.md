@@ -286,7 +286,7 @@
 - Completed plans are now stored as persistent chat artifacts with an Open plan action, so the editor tab can be restored after it is closed or after an older chat is reopened. Agent activity shimmer speed is reduced by 50%.
 - Plan documents now recognize directory trees and render them as compact, responsive project outlines with folder/file icons, connectors, wrapped descriptions, and a bounded scrollbar-free viewport instead of oversized raw code blocks.
 
-## Unreleased
+## 2.0.6
 
 - Added a dedicated Implementation Plan editor with safe Markdown rendering, review/save/revise actions and explicit approval before handing work to Agent mode.
 - Added a safe Agent web reader for HTTP(S) links, with redirect validation, HTML cleanup, request limits and localized live activity.

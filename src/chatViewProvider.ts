@@ -207,6 +207,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private resumingRunId: string | undefined;
   private readonly output = vscode.window.createOutputChannel('RelayCode · Agent');
   private skills: AgentSkill[] = [];
+  private skillsLoaded = false;
+  private skillsRefreshPromise: Promise<void> | undefined;
   private activeSkillNames = new Set<string>();
   private lastConnectionCheckAt = 0;
   private connectionOnline: boolean | undefined;
@@ -936,8 +938,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private async refreshSkills(): Promise<void> {
-    this.skills = await discoverSkills(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
-    await this.post({ type: 'skills', skills: this.skills.map(({ name, description, source }) => ({ name, description, source })) });
+    if (this.skillsRefreshPromise) return this.skillsRefreshPromise;
+    const refresh = (async () => {
+      this.skills = await discoverSkills(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+      this.skillsLoaded = true;
+      await this.post({ type: 'skills', skills: this.skills.map(({ name, description, source }) => ({ name, description, source })) });
+    })();
+    this.skillsRefreshPromise = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.skillsRefreshPromise === refresh) this.skillsRefreshPromise = undefined;
+    }
   }
 
   private composerPreferences(): StoredComposerPreferences {
@@ -1771,7 +1783,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     await this.post({ type: 'recentModels', models: nextRecent });
     const attachments = this.pendingAttachments.slice();
     const attachmentNote = await this.attachmentPrompt(attachments);
-    this.skills = await discoverSkills(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+    if (!this.skillsLoaded && /(?:^|\s)\$[A-Za-z0-9][\w.:-]*/.test(prompt)) await this.refreshSkills();
     for (const skill of selectedSkills(prompt, this.skills)) this.activeSkillNames.add(skill.name.toLowerCase());
     const activeSkills = this.skills.filter((skill) => this.activeSkillNames.has(skill.name.toLowerCase()));
     const selectedSkillInstructions = skillInstructionsFor(activeSkills);
@@ -1946,7 +1958,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
               if (waitingSeconds >= 3) void this.post({ type: 'status', message: `Đang chờ model · ${waitingSeconds}s` });
             }, 3_000);
             const chatSystem = [
-              `${responseLanguageInstruction(responseLanguage)} Trả lời rõ ràng và gọn.`,
+              `${responseLanguageInstruction(responseLanguage)} Trả lời rõ ràng và gọn. Nếu người dùng không yêu cầu phân tích chi tiết, mặc định trả lời tối đa 6 câu; không lặp lại đề bài, không mở đầu dài dòng và không thêm lời mời chung chung ở cuối.`,
               'Bạn đang ở trong extension RelayCode. Trong ngữ cảnh sản phẩm này, 9Router là provider/gateway local để định tuyến nhiều model; Cockpit Tools là provider/gateway local hỗ trợ nhiều tài khoản. Khi người dùng hỏi các tên này trong ngữ cảnh RelayCode, ưu tiên giải thích theo ngữ cảnh sản phẩm này và nói rõ khi thông tin chưa đủ, thay vì liệt kê các sản phẩm không liên quan.',
               sessionSummaryForPrompt(this.sessionSummary),
               webContext
@@ -2468,8 +2480,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private askApproval(description: string): Promise<boolean> {
     const permission = this.context.globalState.get<string>(PERMISSION_MODE_STATE, 'ask');
-    if (permission === 'full') return Promise.resolve(true);
-    if (permission === 'edit' && !/chạy|test/i.test(description)) return Promise.resolve(true);
+    const highRiskGitAction = /\b(?:commit|push)\b/i.test(description);
+    if (permission === 'full' && !highRiskGitAction) return Promise.resolve(true);
+    if (permission === 'edit' && !highRiskGitAction && !/chạy|test/i.test(description)) return Promise.resolve(true);
     const presentation = approvalPresentation(description);
     if (presentation.similarRule && this.similarApprovalRules.has(presentation.similarRule)) {
       return Promise.resolve(true);

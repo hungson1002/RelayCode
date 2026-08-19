@@ -77,7 +77,7 @@ describe('RouterClient compatible chat responses', () => {
     const chunks: string[] = [];
     await client.streamChat('model', [{ role: 'user', content: 'test' }], (delta) => chunks.push(delta));
     expect(chunks).toEqual(['Xin chào']);
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true });
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true, max_tokens: 4096 });
     await expect(client.streamChat('model', [{ role: 'user', content: 'test' }], () => undefined)).rejects.toThrow(/không trả về nội dung/);
   });
 
@@ -95,7 +95,7 @@ describe('RouterClient compatible chat responses', () => {
 
     expect(response.content).toBe('Đang làm');
     expect(content).toEqual(['Đang làm']);
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true });
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true, max_tokens: 4096 });
   });
 });
 

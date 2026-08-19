@@ -66,6 +66,14 @@ export function tuningBody(tuning?: RequestTuning): Record<string, string> {
   };
 }
 
+function completionTokenBody(model: string, endpoint: string, limit = 4_096): Record<string, number> {
+  const usesOpenAiCompletionName = /api\.openai\.com/i.test(endpoint)
+    && /^(?:gpt-5|o[1-4])(?:$|[/_.-])/i.test(model);
+  return usesOpenAiCompletionName
+    ? { max_completion_tokens: limit }
+    : { max_tokens: limit };
+}
+
 async function emitCompleteResponseProgressively(
   content: string,
   onDelta: (delta: string) => void,
@@ -162,7 +170,7 @@ export class RouterClient {
     const response = await fetch(`${normalizeEndpoint(this.config.endpoint)}/chat/completions`, {
       method: 'POST',
       headers: { ...this.headers(), Accept: 'text/event-stream' },
-      body: JSON.stringify({ model, messages, stream: true, ...tuningBody(tuning) }),
+      body: JSON.stringify({ model, messages, stream: true, ...completionTokenBody(model, this.config.endpoint), ...tuningBody(tuning) }),
       signal
     });
     if (!response.ok) {
@@ -329,7 +337,7 @@ export class RouterClient {
     const response = await fetch(`${normalizeEndpoint(this.config.endpoint)}/chat/completions`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ model, messages, tools, tool_choice: 'auto', stream: true, ...tuningBody(tuning) }),
+      body: JSON.stringify({ model, messages, tools, tool_choice: 'auto', stream: true, ...completionTokenBody(model, this.config.endpoint), ...tuningBody(tuning) }),
       signal
     });
     if (!response.ok) throw new Error(await this.describeError(response));

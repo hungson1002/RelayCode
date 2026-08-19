@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { requiresWorkspaceMutation } from '../src/agentIntent';
+import { isGitOnlyRequest, requiresWorkspaceMutation } from '../src/agentIntent';
 
 describe('requiresWorkspaceMutation', () => {
   it('detects Vietnamese implementation requests', () => {
@@ -40,5 +40,17 @@ describe('requiresWorkspaceMutation', () => {
   it('still mutates when a presentation request names a workspace target', () => {
     expect(requiresWorkspaceMutation('Vẽ bảng trong giao diện hiện tại')).toBe(true);
     expect(requiresWorkspaceMutation('Viết mô tả vào file README')).toBe(true);
+  });
+});
+
+describe('isGitOnlyRequest', () => {
+  it('recognizes commit and push without turning on code validation', () => {
+    expect(isGitOnlyRequest('Kiểm tra status, commit và push code hiện tại')).toBe(true);
+    expect(isGitOnlyRequest('Commit các thay đổi rồi push lên origin/main')).toBe(true);
+  });
+
+  it('keeps validation for implementation requests that also mention Git', () => {
+    expect(isGitOnlyRequest('Sửa code, chạy test rồi commit')).toBe(false);
+    expect(isGitOnlyRequest('Fix the bug and push the result')).toBe(false);
   });
 });

@@ -257,7 +257,7 @@ describe('AgentRuntime completion verification', () => {
     expect(onDelta).toHaveBeenCalledWith('The inspection is complete.');
   });
 
-  it('forwards streamed Agent content before the tool step completes', async () => {
+  it('buffers Agent narration until the step outcome is known', async () => {
     const completeWithTools = vi.fn().mockImplementation(async (_model, _messages, _tools, _signal, onProgress) => {
       onProgress?.({ type: 'content', content: 'Đoạn đầu ' });
       onProgress?.({ type: 'content', content: 'đoạn sau.' });
@@ -269,10 +269,10 @@ describe('AgentRuntime completion verification', () => {
 
     await runtime.run('Trả lời ngay trong chat', 'test-model', { onDelta: (delta) => deltas.push(delta), onStatus: vi.fn() });
 
-    expect(deltas).toEqual(['Đoạn đầu ', 'đoạn sau.']);
+    expect(deltas).toEqual(['Đoạn đầu đoạn sau.']);
   });
 
-  it('does not duplicate streamed tool-step narration as separate commentary', async () => {
+  it('keeps tool-step narration concise and separate from the final answer', async () => {
     const streamedNarration = 'Mình đã kiểm tra cấu trúc workspace và sẽ cập nhật đúng file cần thiết, sau đó kiểm tra lại kết quả để bảo đảm thay đổi hoàn tất.';
     const completeWithTools = vi.fn().mockImplementation(async (_model, _messages, _tools, _signal, onProgress) => {
       if (completeWithTools.mock.calls.length === 1) {
@@ -289,9 +289,9 @@ describe('AgentRuntime completion verification', () => {
 
     await runtime.run('Inspect this workspace', 'test-model', { onDelta, onStatus: vi.fn(), onCommentary, onIntermediateStep });
 
-    expect(onCommentary).not.toHaveBeenCalled();
-    expect(onIntermediateStep).toHaveBeenCalledWith(streamedNarration);
-    expect(onDelta).toHaveBeenCalledWith(streamedNarration);
+    expect(onCommentary).toHaveBeenCalledWith(streamedNarration);
+    expect(onIntermediateStep).not.toHaveBeenCalled();
+    expect(onDelta).toHaveBeenCalledWith('Đã kiểm tra xong.');
   });
 
   it('bounds verbose model narration and keeps the final outcome', () => {
@@ -994,5 +994,40 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     controller.abort(new Error('Approval cancelled.'));
 
     await expect(run).rejects.toThrow('Approval cancelled.');
+  });
+});
+
+describe('AgentRuntime Git workflow', () => {
+  it('routes Git mutations away from the generic shell tool', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ id: 'git-shell', name: 'run_command', arguments: '{"command":"git commit -am \\\"bad\\\""}' }],
+        metrics
+      })
+      .mockResolvedValueOnce({ content: 'Git command was redirected safely.', toolCalls: [], metrics });
+    const commandRunner = vi.fn();
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined, false, [], { allow: [], deny: [] }, commandRunner);
+
+    await runtime.run('Commit and push the current code', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() });
+
+    expect(commandRunner).not.toHaveBeenCalled();
+    const toolResult = completeWithTools.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
+    expect(toolResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'tool', content: expect.stringContaining('dedicated git_status') })
+    ]));
+  });
+
+  it('exposes dedicated Git tools to the model', async () => {
+    const completeWithTools = vi.fn().mockResolvedValue({ content: 'Ready.', toolCalls: [], metrics });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Check Git status', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() });
+
+    const definitions = completeWithTools.mock.calls[0]?.[2] as Array<Record<string, unknown>>;
+    const names = definitions.map((item) => String((item.function as Record<string, unknown>)?.name ?? ''));
+    expect(names).toEqual(expect.arrayContaining(['git_status', 'git_diff', 'git_commit', 'git_push']));
   });
 });
