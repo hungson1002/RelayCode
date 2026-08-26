@@ -34,10 +34,29 @@ export interface ChatGptBridgeActivity {
   durationMs: number;
 }
 
+export interface ChatGptBridgeTranscriptTurn {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp?: number;
+}
+
+export interface ChatGptBridgeTranscript {
+  conversationId: string;
+  title?: string;
+  messages: ChatGptBridgeTranscriptTurn[];
+}
+
+export interface ChatGptBridgeSyncedSession {
+  sessionId: string;
+  title: string;
+  messageCount: number;
+}
+
 export interface ChatGptBridgeCallbacks {
   requestApproval(description: string): Promise<boolean>;
   registerChange(change: ChatGptBridgeChange): void;
   pendingChanges(): Array<{ id: string; path: string; added: number; removed: number; taskId: string }>;
+  syncChatSession(transcript: ChatGptBridgeTranscript): Promise<ChatGptBridgeSyncedSession>;
   onActivity(activity: ChatGptBridgeActivity): void;
   openActivityTimeline(): Promise<void>;
 }
@@ -215,13 +234,34 @@ export class ChatGptBridge implements vscode.Disposable {
       version: String(this.context.extension.packageJSON.version || '1.3.0'),
       title: 'RelayCode Workspace'
     }, {
-      instructions: 'Work only inside the open RelayCode workspace. Read before editing. File writes are applied to the RelayCode Review queue so the user can Accept or Undo them in VS Code. Use run_workspace_command only when file tools are insufficient.'
+      instructions: 'Work only inside the open RelayCode workspace. When the user explicitly asks to save or sync the current ChatGPT conversation, call sync_chat_session with a stable conversationId, a concise title, and the complete visible user/assistant transcript. Never sync conversation text without an explicit user request. Read before editing. File writes are applied to RelayCode Review.'
     });
     const outputSchema = {
       ok: z.boolean(),
       summary: z.string(),
       data: z.unknown().optional()
     };
+
+    server.registerTool('sync_chat_session', {
+      title: 'Sync ChatGPT conversation',
+      description: 'Use only when the user explicitly asks to save or sync this ChatGPT conversation into RelayCode history. Send a stable conversationId derived once for this chat, a concise history title, and the complete visible user/assistant transcript. Reuse the same conversationId on later syncs so the existing RelayCode history entry is updated.',
+      inputSchema: {
+        conversationId: z.string().trim().min(1).max(200),
+        title: z.string().trim().min(1).max(160).optional(),
+        messages: z.array(z.object({
+          role: z.enum(['user', 'assistant']),
+          content: z.string().min(1).max(100_000),
+          timestamp: z.number().int().nonnegative().optional()
+        })).min(1).max(200)
+      },
+      outputSchema,
+      annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false }
+    }, ({ conversationId, title, messages }) => this.track('sync_chat_session', { conversationId, title, messages }, async () => {
+      const totalCharacters = messages.reduce((total, message) => total + message.content.length, 0);
+      if (totalCharacters > 500_000) throw new Error('Conversation transcript is larger than 500,000 characters.');
+      const synced = await this.callbacks.syncChatSession({ conversationId, title, messages });
+      return this.ok(`Synced ${synced.messageCount} messages to RelayCode history as “${synced.title}”.`, synced);
+    }));
 
     server.registerTool('workspace_status', {
       title: 'Workspace status',
@@ -531,6 +571,9 @@ export class ChatGptBridge implements vscode.Disposable {
     if (!args || typeof args !== 'object') return args;
     const record = { ...(args as Record<string, unknown>) };
     if ('content' in record) record.content = '[redacted]';
+    if ('messages' in record) record.messages = '[redacted]';
+    if ('conversationId' in record) record.conversationId = '[redacted]';
+    if ('title' in record) record.title = '[redacted]';
     if ('oldText' in record) record.oldText = '[redacted]';
     if ('newText' in record) record.newText = '[redacted]';
     return record;

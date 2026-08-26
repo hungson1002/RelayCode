@@ -73,6 +73,8 @@ Chạy `/chatgpt` hoặc **RelayCode: Manage ChatGPT Web Bridge** để kết n�
 
 Khi ChatGPT Web dùng tool RelayCode, một timeline **ChatGPT Web** riêng sẽ xuất hiện trong lịch sử chat. Các thao tác đọc file, tìm code, sửa file, chạy lệnh và lỗi được ghi tại đây. Thay đổi file vẫn dùng quy trình **Review**, **Accept** và **Undo** giống Agent.
 
+Để lưu cả nội dung cuộc trò chuyện, hãy nói **“Đồng bộ chat này vào RelayCode”**. RelayCode chỉ nhận transcript khi bạn chủ động yêu cầu, sau đó lưu tiêu đề cùng các tin nhắn user/assistant thành một mục lịch sử riêng. Đồng bộ lại cùng cuộc trò chuyện sẽ cập nhật mục cũ thay vì tạo bản trùng.
+
 MCP chỉ chia sẻ hoạt động của tool, không chia sẻ toàn bộ cuộc trò chuyện ChatGPT. Xem [hướng dẫn Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) của OpenAI để thiết lập tài khoản và Developer mode.
 
 ## An toàn

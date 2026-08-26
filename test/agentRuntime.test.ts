@@ -294,6 +294,16 @@ describe('AgentRuntime completion verification', () => {
     expect(onDelta).toHaveBeenCalledWith('Đã kiểm tra xong.');
   });
 
+  it('removes leaked drafting and self-review from the final answer', () => {
+    const leaked = `Let's write the response.\n\nOutcome: Đã sửa thành công.\n\nRoot cause & Fix:\n\n- Bộ lọc asset khớp nhầm runtime.\n- Đã sửa điều kiện lọc và chạy test.\n\nLet's count words: about 40 words, perfectly within the limit, and clean format. Excellent.Đã sửa điều kiện lọc asset và xác nhận test thành công.`;
+
+    const finalAnswer = compactAgentFinalResponse(leaked);
+
+    expect(finalAnswer).toBe('Đã sửa điều kiện lọc asset và xác nhận test thành công.');
+    expect(finalAnswer).not.toContain("Let's");
+    expect(finalAnswer).not.toContain('Outcome:');
+  });
+
   it('bounds verbose model narration and keeps the final outcome', () => {
     const verbose = `${'First analysis and repeated internal planning. '.repeat(90)}
 

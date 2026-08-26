@@ -180,7 +180,7 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
     const release = await releaseResponse.json() as ReleaseResponse;
     const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
     const architecture = process.arch === 'arm64' ? 'arm64' : 'amd64';
-    const asset = release.assets.find((item) => item.name.endsWith(`-${platform}-${architecture}.zip`));
+    const asset = release.assets.find((item) => item.name.startsWith('tunnel-client-v') && item.name.endsWith(`-${platform}-${architecture}.zip`));
     const checksumAsset = release.assets.find((item) => item.name === 'SHA256SUMS.txt');
     if (!asset || !checksumAsset) throw new Error(`Không có tunnel-client cho ${platform}-${architecture}.`);
 
@@ -192,9 +192,26 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
     const actual = createHash('sha256').update(archive).digest('hex');
     if (!expected || expected.toLowerCase() !== actual) throw new Error('Checksum tunnel-client không khớp; đã dừng cài đặt.');
     await writeFile(archivePath, archive);
-    await execFileAsync('tar', ['-xf', archivePath, '-C', installDirectory], { windowsHide: true });
+    try {
+      await execFileAsync('tar', ['-xf', archivePath.replace(/\\/g, '/'), '-C', installDirectory.replace(/\\/g, '/')], { windowsHide: true });
+    } catch (tarError) {
+      if (process.platform !== 'win32') {
+        throw tarError;
+      }
+    }
     const executableName = process.platform === 'win32' ? 'tunnel-client.exe' : 'tunnel-client';
-    const binary = await this.findFile(installDirectory, executableName);
+    let binary = await this.findFile(installDirectory, executableName);
+    if (!binary && process.platform === 'win32') {
+      try {
+        await execFileAsync('powershell.exe', [
+          '-NoProfile', '-NonInteractive', '-Command',
+          `Expand-Archive -Path '${archivePath.replace(/'/g, "''")}' -DestinationPath '${installDirectory.replace(/'/g, "''")}' -Force`
+        ], { windowsHide: true });
+        binary = await this.findFile(installDirectory, executableName);
+      } catch {
+        // Bỏ qua lỗi powershell để ném lỗi "Không tìm thấy" ở dưới
+      }
+    }
     if (!binary) throw new Error(`Không tìm thấy ${executableName} sau khi giải nén.`);
     if (process.platform !== 'win32') await execFileAsync('chmod', ['+x', binary], { windowsHide: true });
     return binary;

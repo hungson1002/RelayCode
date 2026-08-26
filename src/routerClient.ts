@@ -28,7 +28,8 @@ export function compatibleTextContent(value: unknown): string {
   return value.map((part) => {
     if (typeof part === 'string') return part;
     if (!part || typeof part !== 'object') return '';
-    const record = part as { text?: unknown; content?: unknown };
+    const record = part as { type?: unknown; text?: unknown; content?: unknown };
+    if (typeof record.type === 'string' && /^(?:reasoning|reasoning_text|thinking|analysis)$/i.test(record.type)) return '';
     return typeof record.text === 'string'
       ? record.text
       : typeof record.content === 'string'

@@ -397,7 +397,7 @@ describe('Chat webview assets', () => {
     expect(providerSource).toContain("await this.deleteSession(message.id)");
     expect(providerSource).not.toContain("Hãy dừng tác vụ đang chạy trước khi xóa cuộc trò chuyện.");
     expect(providerSource).toContain('title: smartSessionTitleFromTurns(this.transcript)');
-    expect(providerSource).toContain("title: kind === 'chatgpt-web' ? 'ChatGPT Web' : smartSessionTitleFromTurns(turns) || title");
+    expect(providerSource).toContain("title: kind === 'chatgpt-web' ? title || smartSessionTitleFromTurns(turns) : smartSessionTitleFromTurns(turns) || title");
     expect(providerSource).toContain('.sort((left, right) => right.updatedAt - left.updatedAt)');
   });
 
@@ -966,7 +966,9 @@ describe('Chat webview assets', () => {
   it('renders ChatGPT Web tool use as an in-chat timeline instead of a floating picker', () => {
     expect(CHAT_VIEW_CONTROLLER).toContain('function appendChatGptWebActivity(activity, immediate = false)');
     expect(CHAT_VIEW_CONTROLLER).toContain("session.kind === 'chatgpt-web'");
-    expect(CHAT_VIEW_CONTROLLER).toContain("if (data.sessionKind === 'chatgpt-web') appendChatGptWebIntro()");
+    expect(CHAT_VIEW_CONTROLLER).toContain("if (data.sessionKind === 'chatgpt-web') {");
+    expect(CHAT_VIEW_CONTROLLER).toContain("appendChatGptWebIntro(data.sessionTitle || 'ChatGPT Web', hasTranscript)");
+    expect(CHAT_VIEW_CONTROLLER).toContain("title.querySelector('b').textContent = session.title || 'ChatGPT Web'");
     expect(CHAT_VIEW_CONTROLLER).toContain("data.type === 'chatGptWebActivity'");
     expect(CHAT_VIEW_STYLES).toContain('.chatgpt-web-activity{');
     expect(CHAT_VIEW_STYLES).toContain('.chatgpt-web-intro{');

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { createHash } from 'node:crypto';
 import { relative, resolve } from 'node:path';
 import { AgentRuntime, compactProgressCommentary } from './agentRuntime';
 import { AgentHarness, type AgentHarnessEvent } from './agentHarness';
@@ -34,7 +35,12 @@ import { IntegratedTerminalManager } from './integratedTerminalManager';
 import { ScheduledTaskManager, type ScheduledAgentTask } from './scheduledTaskManager';
 import { HookManager } from './hookManager';
 import { parseContextMentions } from './contextMentions';
-import { ChatGptBridge, type ChatGptBridgeActivity } from './chatGptBridge';
+import {
+  ChatGptBridge,
+  type ChatGptBridgeActivity,
+  type ChatGptBridgeSyncedSession,
+  type ChatGptBridgeTranscript
+} from './chatGptBridge';
 
 const API_KEY_SECRET = 'nineRouter.apiKey';
 const DISCONNECTED_STATE = 'nineRouter.manuallyDisconnected';
@@ -43,6 +49,7 @@ const PERMISSION_MODE_STATE = 'nineRouter.permissionMode';
 const COMPOSER_PREFERENCES_STATE = 'nineRouter.composerPreferences';
 const CHAT_SESSIONS_STATE = 'nineRouter.chatSessions';
 const CHATGPT_WEB_SESSION_ID = 'relaycode-chatgpt-web';
+const CHATGPT_WEB_SYNC_SESSION_PREFIX = 'relaycode-chatgpt-web:';
 const PROVIDER_KIND_STATE = 'nineRouter.providerKind';
 const PENDING_CHANGES_STATE = 'nineRouter.pendingChanges';
 const FAVORITE_MODELS_STATE = 'nineRouter.favoriteModels';
@@ -249,6 +256,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         removed: change.removed,
         taskId: change.taskId
       })),
+      syncChatSession: (transcript) => this.syncChatGptWebSession(transcript),
       onActivity: (activity) => this.onChatGptBridgeActivity(activity),
       openActivityTimeline: () => this.openChatGptWebTimeline()
     });
@@ -383,6 +391,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       return;
     }
     await this.loadSession(CHATGPT_WEB_SESSION_ID);
+  }
+
+  private async syncChatGptWebSession(transcript: ChatGptBridgeTranscript): Promise<ChatGptBridgeSyncedSession> {
+    const now = Date.now();
+    const turns: StoredTurn[] = transcript.messages
+      .map((message, index) => ({
+        role: message.role,
+        content: message.content.trim(),
+        timestamp: message.timestamp ?? now - (transcript.messages.length - index) * 1_000
+      }))
+      .filter((message) => Boolean(message.content));
+    if (!turns.length) throw new Error('Conversation transcript does not contain any visible messages.');
+
+    const conversationKey = transcript.conversationId.trim();
+    const digest = createHash('sha256').update(conversationKey).digest('hex').slice(0, 20);
+    const sessionId = `${CHATGPT_WEB_SYNC_SESSION_PREFIX}${digest}`;
+    const title = transcript.title?.trim() || smartSessionTitleFromTurns(turns);
+    const sessions = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
+    const session: StoredSession = {
+      id: sessionId,
+      title,
+      updatedAt: now,
+      mode: 'agent',
+      model: '',
+      turns,
+      kind: 'chatgpt-web',
+      summary: `Đã đồng bộ ${turns.length} tin nhắn từ ChatGPT Web.`
+    };
+    await this.context.globalState.update(
+      CHAT_SESSIONS_STATE,
+      [session, ...sessions.filter((item) => item.id !== sessionId)].slice(0, 30)
+    );
+    await this.post({ type: 'sessions', sessions: this.sessionSummaries() });
+    if (this.currentSessionId === sessionId) await this.loadSession(sessionId);
+    this.interaction.notify(`Đã đồng bộ “${title}” với ${turns.length} tin nhắn.`, 'success');
+    return { sessionId, title, messageCount: turns.length };
   }
 
   private async recordChatGptWebActivity(activity: ChatGptBridgeActivity): Promise<void> {
@@ -3006,7 +3050,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     return this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, [])
       .map(({ id, title, updatedAt, turns, kind }) => ({
         id,
-        title: kind === 'chatgpt-web' ? 'ChatGPT Web' : smartSessionTitleFromTurns(turns) || title,
+        title: kind === 'chatgpt-web' ? title || smartSessionTitleFromTurns(turns) : smartSessionTitleFromTurns(turns) || title,
         updatedAt,
         kind
       }))
@@ -3096,7 +3140,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           })))
         : []
     })));
-    await this.post({ type: 'restoreSession', turns, mode: session.mode, model: session.model, sessionKind: session.kind });
+    await this.post({
+      type: 'restoreSession',
+      turns,
+      mode: session.mode,
+      model: session.model,
+      sessionKind: session.kind,
+      sessionTitle: session.title
+    });
     await this.postChangesState();
   }
 

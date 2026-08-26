@@ -73,6 +73,7 @@ describe('ChatGPT Web MCP bridge', () => {
 
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      'sync_chat_session',
       'workspace_status',
       'read_workspace_file',
       'search_workspace',
@@ -117,12 +118,47 @@ describe('ChatGPT Web MCP bridge', () => {
     try {
       await client.connect(new StreamableHTTPClientTransport(new URL(status.url!)));
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(11);
+      expect(listed.tools).toHaveLength(12);
       expect(listed.tools.some((tool) => tool.name === 'list_pending_changes')).toBe(true);
     } finally {
       await client.close().catch(() => undefined);
       await bridge.stop();
     }
+  });
+
+  it('syncs an explicitly supplied ChatGPT transcript into RelayCode history', async () => {
+    const syncChatSession = vi.fn(async () => ({
+      sessionId: 'relaycode-chatgpt-web:abc123',
+      title: 'Kiểm tra đồng bộ chat',
+      messageCount: 2
+    }));
+    const bridge = createBridge(vi.fn(), { syncChatSession });
+    const server = (bridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'relaycode-sync-test', version: '1.0.0' });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: 'sync_chat_session',
+      arguments: {
+        conversationId: 'chat-sync-test',
+        title: 'Kiểm tra đồng bộ chat',
+        messages: [
+          { role: 'user', content: 'Đồng bộ chat này.' },
+          { role: 'assistant', content: 'Được.' }
+        ]
+      }
+    });
+    expect(result.isError).not.toBe(true);
+    expect(syncChatSession).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: 'chat-sync-test',
+      messages: expect.arrayContaining([expect.objectContaining({ role: 'user' })])
+    }));
+    expect(result.structuredContent).toMatchObject({ ok: true, data: { messageCount: 2 } });
+
+    await client.close();
+    await server.close();
   });
 
   it('routes a ChatGPT file write into the RelayCode review callback', async () => {
@@ -148,7 +184,11 @@ describe('ChatGPT Web MCP bridge', () => {
 
 function createBridge(
   onActivity = vi.fn(),
-  overrides: Partial<{ requestApproval: () => Promise<boolean>; registerChange: (change: unknown) => void }> = {}
+  overrides: Partial<{
+    requestApproval: () => Promise<boolean>;
+    registerChange: (change: unknown) => void;
+    syncChatSession: (transcript: unknown) => Promise<{ sessionId: string; title: string; messageCount: number }>;
+  }> = {}
 ): ChatGptBridge {
   const context = {
     extension: { packageJSON: { version: '1.3.0' } },
@@ -165,6 +205,11 @@ function createBridge(
     requestApproval: overrides.requestApproval ?? vi.fn(async () => true),
     registerChange: overrides.registerChange ?? vi.fn(),
     pendingChanges: vi.fn(() => []),
+    syncChatSession: overrides.syncChatSession ?? vi.fn(async () => ({
+      sessionId: 'relaycode-chatgpt-web:test',
+      title: 'ChatGPT Web',
+      messageCount: 0
+    })),
     onActivity,
     openActivityTimeline: vi.fn(async () => undefined)
   });

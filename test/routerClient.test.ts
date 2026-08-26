@@ -52,6 +52,7 @@ describe('compatibleTextContent', () => {
 
   it('ignores unsupported metadata-only content', () => {
     expect(compatibleTextContent([{ type: 'reasoning', value: 'hidden' }, null])).toBe('');
+    expect(compatibleTextContent([{ type: 'reasoning', text: 'hidden' }, { type: 'text', text: 'visible' }])).toBe('visible');
     expect(compatibleTextContent(undefined)).toBe('');
   });
 });

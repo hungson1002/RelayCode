@@ -78,7 +78,10 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
     setMode(data.mode || defaultMode);
     $('messages').replaceChildren();
     changeSummary = null;
-    if (data.sessionKind === 'chatgpt-web') appendChatGptWebIntro();
+    if (data.sessionKind === 'chatgpt-web') {
+      const hasTranscript = (data.turns || []).some((turn) => !turn.chatGptActivity);
+      appendChatGptWebIntro(data.sessionTitle || 'ChatGPT Web', hasTranscript);
+    }
     for (const [index, turn] of (data.turns || []).entries()) {
       if (turn.chatGptActivity) appendChatGptWebActivity(turn.chatGptActivity, true);
       else appendMessage(turn.role, turn.content, Boolean(turn.error), turn.timestamp, turn.attachments || [], index, turn.artifact || null);

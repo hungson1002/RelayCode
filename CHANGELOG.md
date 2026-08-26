@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.7
+
+- Added explicit, on-request ChatGPT Web transcript sync into separately titled RelayCode history sessions.
+- Hardened Windows tunnel-client release asset selection and archive extraction fallback.
+- Filtered leaked model reasoning, drafting, self-review and duplicate answer blocks from visible Agent responses.
+
 ## 2.0.5
 
 - Improved local chat-history titles with typo normalization, focused topic summaries and preference for the latest concrete change request.

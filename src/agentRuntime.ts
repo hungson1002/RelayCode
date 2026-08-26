@@ -9,7 +9,7 @@ import { validateCommandPolicy } from './safetyPolicy';
 import { countLineChanges } from './diffHunks';
 import { isGitOnlyRequest, requiresWorkspaceMutation } from './agentIntent';
 import { runShellCommand, shellRuntimeInstruction } from './commandRuntime';
-import { sanitizeModelText } from './modelText';
+import { sanitizeModelText, sanitizeVisibleModelText } from './modelText';
 import { searchWeb, WEB_SEARCH_TOOL } from './webSearch';
 import { WorkspaceSandbox } from './workspaceSandbox';
 
@@ -85,11 +85,11 @@ function clipNaturalText(text: string, limit: number, fromEnd = false): string {
 }
 
 export function compactProgressCommentary(content: string): string {
-  return clipNaturalText(sanitizeModelText(content).replace(/\s+/g, ' ').trim(), 620);
+  return clipNaturalText(sanitizeVisibleModelText(content).replace(/\s+/g, ' ').trim(), 620);
 }
 
 export function compactAgentFinalResponse(content: string): string {
-  let text = sanitizeModelText(content).trim().replace(/\n{3,}/g, '\n\n');
+  let text = sanitizeVisibleModelText(content).replace(/\n{3,}/g, '\n\n');
   text = text
     .replace(/\n*\s*(?:Mọi thứ đã được tối ưu hóa[^.!?]*[.!?]\s*)?Tôi sẵn sàng hỗ trợ thêm[^.!?]*[.!?]?\s*$/i, '')
     .replace(/\n*\s*(?:Everything is now fully optimized[^.!?]*[.!?]\s*)?I(?:'m| am) ready to help with anything else[^.!?]*[.!?]?\s*$/i, '')

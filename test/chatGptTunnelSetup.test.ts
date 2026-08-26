@@ -48,7 +48,8 @@ describe('ChatGPT Web setup wizard', () => {
     expect(providerSource).toContain("const CHATGPT_WEB_SESSION_ID = 'relaycode-chatgpt-web'");
     expect(providerSource).toContain('private async recordChatGptWebActivity(activity: ChatGptBridgeActivity)');
     expect(providerSource).toContain("kind: 'chatgpt-web'");
-    expect(providerSource).toContain("title: kind === 'chatgpt-web' ? 'ChatGPT Web'");
+    expect(providerSource).toContain("title: kind === 'chatgpt-web' ? title || smartSessionTitleFromTurns(turns)");
+    expect(providerSource).toContain('private async syncChatGptWebSession(transcript: ChatGptBridgeTranscript)');
     expect(providerSource).toContain("type: 'chatGptWebActivity', activity");
     expect(providerSource).not.toContain("message: `**ChatGPT Web · ${activity.tool}**");
   });

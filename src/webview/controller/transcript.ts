@@ -147,9 +147,11 @@ function renderHistory(sessions = []) {
     const row = document.createElement('div'); row.className = 'history-item-row';
     const button = document.createElement('button'); button.type = 'button'; button.className = 'history-item' + (session.kind === 'chatgpt-web' ? ' chatgpt-web-history-item' : '');
     const title = document.createElement('span');
-    if (session.kind === 'chatgpt-web') title.innerHTML = '<i aria-hidden="true">' + uiIcon('globe') + '</i><b>ChatGPT Web</b>';
-    else title.textContent = session.title;
-    button.title = session.kind === 'chatgpt-web' ? 'ChatGPT Web' : session.title;
+    if (session.kind === 'chatgpt-web') {
+      title.innerHTML = '<i aria-hidden="true">' + uiIcon('globe') + '</i><b></b>';
+      title.querySelector('b').textContent = session.title || 'ChatGPT Web';
+    } else title.textContent = session.title;
+    button.title = session.title || 'ChatGPT Web';
     const updatedAt = new Date(session.updatedAt);
     const time = document.createElement('time'); time.dateTime = updatedAt.toISOString(); time.textContent = updatedAt.toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     button.append(title, time);
@@ -231,11 +233,14 @@ function appendChatGptWebActivity(activity, immediate = false) {
   return null;
 }
 
-function appendChatGptWebIntro() {
+function appendChatGptWebIntro(sessionTitle = 'ChatGPT Web', hasTranscript = false) {
   const intro = document.createElement('header');
   intro.className = 'chatgpt-web-intro';
-  intro.innerHTML = '<span aria-hidden="true">' + uiIcon('globe') + '</span><div><strong>ChatGPT Web</strong><p></p></div>';
-  intro.querySelector('p').textContent = uiCopy('Hoạt động công cụ trong project. Nội dung trò chuyện trên ChatGPT không được MCP chia sẻ.', 'Tool activity in this project. MCP does not share the ChatGPT conversation text.');
+  intro.innerHTML = '<span aria-hidden="true">' + uiIcon('globe') + '</span><div><strong></strong><p></p></div>';
+  intro.querySelector('strong').textContent = sessionTitle || 'ChatGPT Web';
+  intro.querySelector('p').textContent = hasTranscript
+    ? uiCopy('Bản sao cuộc trò chuyện được đồng bộ theo yêu cầu từ ChatGPT Web.', 'Conversation copy synced on request from ChatGPT Web.')
+    : uiCopy('Hoạt động công cụ trong project. Nội dung trò chuyện chỉ xuất hiện sau khi bạn yêu cầu đồng bộ.', 'Tool activity in this project. Conversation text appears only after you request a sync.');
   $('messages').append(intro);
 }
 

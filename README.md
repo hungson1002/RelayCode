@@ -73,6 +73,8 @@ Run `/chatgpt` or **RelayCode: Manage ChatGPT Web Bridge** to connect ChatGPT th
 
 When ChatGPT Web uses a RelayCode tool, a dedicated **ChatGPT Web** timeline appears in chat history. File reads, searches, edits, commands, and failures are recorded there. File changes use the same **Review**, **Accept**, and **Undo** workflow as Agent changes.
 
+To save the conversation itself, ask ChatGPT to **“Sync this chat to RelayCode.”** RelayCode receives the transcript only after an explicit request, then stores the title and user/assistant messages as a separate history entry. Syncing the same conversation again updates that entry instead of creating a duplicate.
+
 MCP shares tool activity, not the full ChatGPT conversation. See OpenAI's [Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) for account and Developer mode setup.
 
 ## Safety
