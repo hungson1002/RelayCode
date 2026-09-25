@@ -42,9 +42,9 @@ describe('Chat webview assets', () => {
   });
 
   it('starts a fresh thread in the configured default mode', () => {
-    expect(providerSource).toContain("get<'chat' | 'agent'>('defaultMode', 'chat')");
+    expect(providerSource).toContain("get<'chat' | 'agent'>('defaultMode', 'agent')");
     expect(providerSource).toContain('mode: defaultMode');
-    expect(extensionManifest.contributes.configuration.properties['nineRouter.defaultMode'].default).toBe('chat');
+    expect(extensionManifest.contributes.configuration.properties['nineRouter.defaultMode'].default).toBe('agent');
     expect(CHAT_VIEW_CONTROLLER).toContain("let mode = 'chat';");
     expect(CHAT_VIEW_CONTROLLER).toContain('setMode(defaultMode);');
     expect(CHAT_VIEW_CONTROLLER).toContain('setMode(data.mode || defaultMode);');

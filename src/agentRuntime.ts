@@ -458,6 +458,11 @@ export class AgentRuntime {
     }
     let pendingToolCalls: AgentToolCall[] = resume?.pendingToolCalls ?? [];
     let nextToolIndex = resume?.nextToolIndex ?? 0;
+    let inFlightToolCallId: string | undefined;
+    let interruptedToolCallId = resume?.inFlightToolCallId
+      && resume.pendingToolCalls[resume.nextToolIndex]?.id === resume.inFlightToolCallId
+      ? resume.inFlightToolCallId
+      : undefined;
     if (!pendingToolCalls.length) normalizeCompletedToolHistory(messages);
     const checkpoint = async (step: number, lastStatus: string) => {
       await callbacks.onCheckpoint?.({
@@ -472,6 +477,7 @@ export class AgentRuntime {
         validationFailureCount,
         pendingToolCalls,
         nextToolIndex,
+        inFlightToolCallId,
         lastStatus,
         updatedAt: Date.now()
       });
@@ -593,56 +599,67 @@ export class AgentRuntime {
           argumentError = `ERROR: Invalid JSON arguments for ${call.name}: ${error instanceof Error ? error.message : String(error)}.`;
         }
         const toolStatus = this.toolStatus(call.name, args);
-        callbacks.onStatus(toolStatus);
-        await checkpoint(step, toolStatus);
+        const wasInterrupted = interruptedToolCallId === call.id
+          || (!resume?.inFlightToolCallId
+            && resume?.pendingToolCalls[resume.nextToolIndex]?.id === call.id
+            && resume.lastStatus === toolStatus);
+        callbacks.onStatus(wasInterrupted ? `${call.name} có thể đã chạy trước khi IDE bị gián đoạn · đang kiểm tra trạng thái` : toolStatus);
         let result: string;
         let attempt = 0;
         const commandMutationCountBefore = this.commandMutationCount;
-        while (true) {
-          attempt++;
-          try {
-            result = argumentError || await this.execute(call.name, args, callbacks, activeModel, signal);
-          } catch (error) {
-            if (signal?.aborted) {
-              throw signal.reason instanceof Error ? signal.reason : error;
+        if (wasInterrupted) {
+          result = `ERROR: RelayCode was interrupted while ${call.name} was running. The operation may have completed fully or partially. Inspect the current workspace and task status first; do not repeat this operation unless the inspection proves it is still needed.`;
+          interruptedToolCallId = undefined;
+        } else {
+          inFlightToolCallId = call.id;
+          await checkpoint(step, toolStatus);
+          while (true) {
+            attempt++;
+            try {
+              result = argumentError || await this.execute(call.name, args, callbacks, activeModel, signal);
+            } catch (error) {
+              if (signal?.aborted) {
+                throw signal.reason instanceof Error ? signal.reason : error;
+              }
+              result = `ERROR: ${error instanceof Error ? error.message : String(error)}`;
             }
-            result = `ERROR: ${error instanceof Error ? error.message : String(error)}`;
-          }
-          if (!/^ERROR:?/i.test(result)) break;
-          const failureKey = `${call.name}:${result.replace(/\s+/g, ' ').slice(0, 500)}`;
-          const failureCount = (toolFailureCounts.get(failureKey) ?? 0) + 1;
-          toolFailureCounts.set(failureKey, failureCount);
-          const extensionFailure = this.isExtensionRuntimeFailure(result);
-          if (!extensionFailure) {
-            if (failureCount >= 6) {
-              throw new Error(`Agent đã thử sửa lỗi ${call.name} ${failureCount} lần nhưng cùng lỗi vẫn còn.\n\n${result.replace(/^ERROR:\s*/i, '')}`);
+            if (!/^ERROR:?/i.test(result)) break;
+            const failureKey = `${call.name}:${result.replace(/\s+/g, ' ').slice(0, 500)}`;
+            const failureCount = (toolFailureCounts.get(failureKey) ?? 0) + 1;
+            toolFailureCounts.set(failureKey, failureCount);
+            const extensionFailure = this.isExtensionRuntimeFailure(result);
+            if (!extensionFailure) {
+              if (failureCount >= 6) {
+                throw new Error(`Agent đã thử sửa lỗi ${call.name} ${failureCount} lần nhưng cùng lỗi vẫn còn.\n\n${result.replace(/^ERROR:\s*/i, '')}`);
+              }
+              repairRequested = true;
+              result += `\nRelayCode will return this project/tool-call error to the Agent for automatic repair (attempt ${failureCount}/6). Inspect the actual code or arguments and do not repeat the identical failing command.`;
+              break;
             }
-            repairRequested = true;
-            result += `\nRelayCode will return this project/tool-call error to the Agent for automatic repair (attempt ${failureCount}/6). Inspect the actual code or arguments and do not repeat the identical failing command.`;
+            if (!callbacks.onToolFailure) throw new Error(result.replace(/^ERROR:\s*/i, ''));
+            const decision = await waitForAbortable(callbacks.onToolFailure({
+              id: call.id,
+              tool: call.name,
+              arguments: args,
+              message: result.replace(/^ERROR:\s*/i, ''),
+              model: activeModel,
+              attempt
+            }), signal);
+            if (decision.action === 'retry') {
+              repairRequested = true;
+              result += '\nNgười dùng yêu cầu Agent phân tích lỗi và tạo một tool call đã sửa.';
+            }
+            if (decision.action === 'change-model') {
+              activeModel = decision.model;
+              repairRequested = true;
+              result += `\nĐã chuyển sang model ${activeModel}; Agent sẽ lập lại bước hiện tại mà không chạy lại các tool đã thành công.`;
+            } else {
+              if (decision.action === 'skip') result += '\nNgười dùng đã chọn bỏ qua tool lỗi này.';
+            }
             break;
           }
-          if (!callbacks.onToolFailure) throw new Error(result.replace(/^ERROR:\s*/i, ''));
-          const decision = await waitForAbortable(callbacks.onToolFailure({
-            id: call.id,
-            tool: call.name,
-            arguments: args,
-            message: result.replace(/^ERROR:\s*/i, ''),
-            model: activeModel,
-            attempt
-          }), signal);
-          if (decision.action === 'retry') {
-            repairRequested = true;
-            result += '\nNgười dùng yêu cầu Agent phân tích lỗi và tạo một tool call đã sửa.';
-          }
-          if (decision.action === 'change-model') {
-            activeModel = decision.model;
-            repairRequested = true;
-            result += `\nĐã chuyển sang model ${activeModel}; Agent sẽ lập lại bước hiện tại mà không chạy lại các tool đã thành công.`;
-          } else {
-            if (decision.action === 'skip') result += '\nNgười dùng đã chọn bỏ qua tool lỗi này.';
-          }
-          break;
         }
+        inFlightToolCallId = undefined;
         if (call.name === 'generate_image' && /^ERROR:?/i.test(result)) {
           callbacks.onStatus(`Tạo ảnh thất bại: ${String(args.path ?? 'image.png').slice(0, 140)}`);
         }
@@ -660,7 +677,6 @@ export class AgentRuntime {
         }
         messages.push({ role: 'tool', tool_call_id: call.id, content: result.slice(0, 30_000) });
         nextToolIndex++;
-        await checkpoint(step, /^(ERROR|DENIED):?/i.test(result) ? `${call.name} chưa hoàn thành` : `${call.name} đã hoàn thành`);
         if (repairRequested) {
           // A model turn with multiple tool calls must receive one result for
           // every call before the next turn. Mark unprocessed calls as skipped
@@ -678,8 +694,10 @@ export class AgentRuntime {
             role: 'user',
             content: 'The previous tool call failed. Inspect its exact error and issue a corrected tool call appropriate for the current OS and shell. Reuse completed work; do not restart the project or repeat the identical failing call.'
           });
+          await checkpoint(step, `${call.name} chưa hoàn thành · đã bỏ qua các thao tác phụ thuộc`);
           break;
         }
+        await checkpoint(step, /^(ERROR|DENIED):?/i.test(result) ? `${call.name} chưa hoàn thành` : `${call.name} đã hoàn thành`);
       }
       if (repairRequested) continue;
       pendingToolCalls = [];

@@ -40,5 +40,9 @@ describe('active Agent run persistence', () => {
       id: 'session-1',
       turns: [{ role: 'user', timestamp: 100 }]
     }])).toBe(false);
+    expect(activeRunAlreadyFinalized(run, [{
+      id: 'session-1',
+      turns: [{ role: 'assistant', timestamp: 150, error: true }]
+    }])).toBe(false);
   });
 });

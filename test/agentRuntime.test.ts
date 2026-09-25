@@ -712,6 +712,58 @@ Mọi thứ đã được tối ưu hóa hoàn hảo. Tôi sẵn sàng hỗ tr�
     expect(completeWithTools.mock.calls[1]?.[0]).toBe('antigravity/gemini-3.5-flash-low');
   });
 
+  it.each([
+    { checkpointStatus: 'Running npm run deploy', inFlightToolCallId: 'deploy-1' },
+    { checkpointStatus: 'Đang chạy lệnh: npm run deploy', inFlightToolCallId: undefined }
+  ])('does not repeat a tool that may have run before interruption ($checkpointStatus)', async ({ checkpointStatus, inFlightToolCallId }) => {
+    const interruptedCall = { id: 'deploy-1', name: 'run_command', arguments: '{"command":"npm run deploy"}' };
+    const completeWithTools = vi.fn().mockResolvedValue({ content: 'I checked the workspace and continued safely.', toolCalls: [], metrics });
+    const client = {
+      listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools
+    } as unknown as ProviderClient;
+    const commandRunner = vi.fn().mockResolvedValue('This must not be executed again.');
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined, false, [], { allow: [], deny: [] }, commandRunner);
+    const checkpoint: AgentRunCheckpoint = {
+      version: 1,
+      model: 'test-model',
+      messages: [
+        { role: 'system', content: 'Old runtime instructions' },
+        { role: 'user', content: 'Deploy this project' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: interruptedCall.id, type: 'function', function: { name: interruptedCall.name, arguments: interruptedCall.arguments } }]
+        }
+      ],
+      step: 2,
+      successfulMutations: 0,
+      completionWithoutActionCount: 0,
+      pendingToolCalls: [interruptedCall],
+      nextToolIndex: 0,
+      inFlightToolCallId,
+      lastStatus: checkpointStatus,
+      updatedAt: Date.now()
+    };
+    const saved: AgentRunCheckpoint[] = [];
+
+    await runtime.run('Deploy this project', 'test-model', {
+      onDelta: vi.fn(),
+      onStatus: vi.fn(),
+      onCheckpoint: (value) => { saved.push(structuredClone(value)); }
+    }, undefined, checkpoint);
+
+    expect(commandRunner).not.toHaveBeenCalled();
+    const sentMessages = completeWithTools.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
+    expect(sentMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'tool',
+        tool_call_id: interruptedCall.id,
+        content: expect.stringContaining('may have completed fully or partially')
+      })
+    ]));
+    expect(saved.some((value) => value.inFlightToolCallId === undefined)).toBe(true);
+  });
+
   it('continues beyond the former 16-step ceiling until the model completes', async () => {
     let round = 0;
     const completeWithTools = vi.fn(async () => {

@@ -6,7 +6,7 @@ export interface ActiveRunIdentity {
 
 export interface StoredSessionIdentity {
   id: string;
-  turns: Array<{ role: 'user' | 'assistant'; timestamp: number }>;
+  turns: Array<{ role: 'user' | 'assistant'; timestamp: number; error?: boolean }>;
 }
 
 export function activeRunAlreadyFinalized(
@@ -15,7 +15,7 @@ export function activeRunAlreadyFinalized(
 ): boolean {
   if (!run.sessionId) return false;
   const session = sessions.find((item) => item.id === run.sessionId);
-  return Boolean(session?.turns.some((turn) => turn.role === 'assistant' && turn.timestamp >= run.startedAt));
+  return Boolean(session?.turns.some((turn) => turn.role === 'assistant' && !turn.error && turn.timestamp >= run.startedAt));
 }
 
 export class ActiveRunStateCoordinator<T> {

@@ -11,6 +11,15 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(async (key: string, value: unknown) => { mocks.state.set(key, value); })
 }));
 
+vi.mock('../src/commandRuntime', () => ({
+  runShellCommand: vi.fn(async () => 'command completed')
+}));
+
+vi.mock('../src/workspaceSnapshot', () => ({
+  captureWorkspaceSnapshot: vi.fn(async () => new Map()),
+  diffWorkspaceSnapshots: vi.fn(() => [])
+}));
+
 vi.mock('vscode', () => ({
   workspace: {
     isTrusted: true,
@@ -54,6 +63,7 @@ vi.mock('vscode', () => ({
 }));
 
 import { ChatGptBridge } from '../src/chatGptBridge';
+import { runShellCommand } from '../src/commandRuntime';
 
 describe('ChatGPT Web MCP bridge', () => {
   beforeEach(() => {
@@ -118,12 +128,98 @@ describe('ChatGPT Web MCP bridge', () => {
     try {
       await client.connect(new StreamableHTTPClientTransport(new URL(status.url!)));
       const listed = await client.listTools();
-      expect(listed.tools).toHaveLength(12);
-      expect(listed.tools.some((tool) => tool.name === 'list_pending_changes')).toBe(true);
+      expect(listed.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+        'list_pending_changes',
+        'workspace_command_status',
+        'list_workspace_commands'
+      ]));
     } finally {
       await client.close().catch(() => undefined);
       await bridge.stop();
     }
+  });
+
+  it('recovers a command task after reload and does not run an identical retry again', async () => {
+    let releaseApproval!: (allow: boolean) => void;
+    const requestApproval = vi.fn(() => new Promise<boolean>((resolve) => { releaseApproval = resolve; }));
+    const firstBridge = createBridge(vi.fn(), { requestApproval });
+    const firstServer = (firstBridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
+    const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
+    const firstClient = new Client({ name: 'relaycode-task-start-test', version: '1.0.0' });
+    await firstServer.connect(firstServerTransport);
+    await firstClient.connect(firstClientTransport);
+
+    const started = await firstClient.callTool({
+      name: 'start_workspace_command',
+      arguments: { command: 'npm run build' }
+    });
+    const taskId = (started.structuredContent as { data: { taskId: string } }).data.taskId;
+    expect(mocks.state.get('nineRouter.chatGptBridge.commandTasks')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: taskId, state: 'waiting_for_approval' })
+    ]));
+
+    const recoveredBridge = createBridge();
+    const recoveredServer = (recoveredBridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
+    const [recoveredClientTransport, recoveredServerTransport] = InMemoryTransport.createLinkedPair();
+    const recoveredClient = new Client({ name: 'relaycode-task-recovery-test', version: '1.0.0' });
+    await recoveredServer.connect(recoveredServerTransport);
+    await recoveredClient.connect(recoveredClientTransport);
+
+    const status = await recoveredClient.callTool({ name: 'workspace_command_status', arguments: { taskId } });
+    expect(status.structuredContent).toMatchObject({
+      ok: true,
+      data: { taskId, status: 'interrupted', error: expect.stringContaining('was not restarted') }
+    });
+    const retried = await recoveredClient.callTool({
+      name: 'start_workspace_command',
+      arguments: { command: 'npm run build' }
+    });
+    expect(retried.structuredContent).toMatchObject({ ok: true, data: { taskId, status: 'interrupted', reused: true } });
+    expect(runShellCommand).not.toHaveBeenCalled();
+
+    releaseApproval(false);
+    await vi.waitFor(() => expect(mocks.state.get('nineRouter.chatGptBridge.commandTasks')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: taskId, state: 'failed' })
+    ])));
+    await firstClient.close();
+    await firstServer.close();
+    await recoveredClient.close();
+    await recoveredServer.close();
+  });
+
+  it('returns a completed command instead of rerunning it unless a fresh run is explicit', async () => {
+    const bridge = createBridge();
+    const server = (bridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'relaycode-command-dedup-test', version: '1.0.0' });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const first = await client.callTool({ name: 'run_workspace_command', arguments: { command: 'npm run build' } });
+    const firstTaskId = (first.structuredContent as { data: { taskId: string } }).data.taskId;
+    await vi.waitFor(() => expect(mocks.state.get('nineRouter.chatGptBridge.commandTasks')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: firstTaskId, state: 'completed' })
+    ])));
+
+    const retried = await client.callTool({ name: 'run_workspace_command', arguments: { command: 'npm run build' } });
+    expect(retried.structuredContent).toMatchObject({ ok: true, data: { taskId: firstTaskId, status: 'completed', reused: true } });
+    expect(runShellCommand).toHaveBeenCalledTimes(1);
+
+    const explicitFreshRun = await client.callTool({
+      name: 'run_workspace_command',
+      arguments: { command: 'npm run build', forceNewRun: true }
+    });
+    const secondTaskId = (explicitFreshRun.structuredContent as { data: { taskId: string } }).data.taskId;
+    expect(secondTaskId).not.toBe(firstTaskId);
+    await vi.waitFor(() => {
+      expect(runShellCommand).toHaveBeenCalledTimes(2);
+      expect(mocks.state.get('nineRouter.chatGptBridge.commandTasks')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: secondTaskId, state: 'completed' })
+      ]));
+    });
+
+    await client.close();
+    await server.close();
   });
 
   it('syncs an explicitly supplied ChatGPT transcript into RelayCode history', async () => {
@@ -176,6 +272,67 @@ describe('ChatGPT Web MCP bridge', () => {
     expect(requestApproval).toHaveBeenCalledOnce();
     expect(registerChange).toHaveBeenCalledWith(expect.objectContaining({ existed: false, added: 1, removed: 0 }));
     expect(result.structuredContent).toMatchObject({ ok: true, data: { review: 'pending' } });
+
+    await client.close();
+    await server.close();
+  });
+
+  it('treats a repeated patch as successful when its replacement is already present', async () => {
+    const path = 'chatgpt-patch-retry.txt';
+    const fsPath = `${process.cwd()}\\${path}`;
+    mocks.files.set(fsPath, new TextEncoder().encode('const result = 1;\r\nnext();\r\n'));
+    const requestApproval = vi.fn(async () => true);
+    const registerChange = vi.fn();
+    const bridge = createBridge(vi.fn(), { requestApproval, registerChange });
+    const server = (bridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'relaycode-patch-retry-test', version: '1.0.0' });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const arguments_ = { path, oldText: 'const result = 1;\nnext();', newText: 'const result = 2;\nnext();' };
+    const result = await client.callTool({
+      name: 'apply_workspace_patch',
+      arguments: arguments_
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ ok: true, data: { path, review: 'pending' } });
+    expect(mocks.files.get(fsPath)).toEqual(new TextEncoder().encode('const result = 2;\r\nnext();\r\n'));
+
+    const repeated = await client.callTool({ name: 'apply_workspace_patch', arguments: arguments_ });
+    expect(repeated.isError).not.toBe(true);
+    expect(repeated.structuredContent).toMatchObject({ ok: true, data: { path, alreadyApplied: true, added: 0, removed: 0 } });
+    expect(requestApproval).toHaveBeenCalledOnce();
+    expect(registerChange).toHaveBeenCalledOnce();
+    expect(vi.mocked((await import('vscode')).workspace.fs.writeFile)).toHaveBeenCalledOnce();
+
+    await client.close();
+    await server.close();
+  });
+
+  it('explains a stale patch context without changing the workspace file', async () => {
+    const path = 'chatgpt-patch-stale.txt';
+    const fsPath = `${process.cwd()}\\${path}`;
+    mocks.files.set(fsPath, new TextEncoder().encode('const result = 3;\n'));
+    const bridge = createBridge();
+    const server = (bridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'relaycode-patch-stale-test', version: '1.0.0' });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const result = await client.callTool({
+      name: 'apply_workspace_patch',
+      arguments: { path, oldText: 'const result = 1;', newText: 'const result = 2;' }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text', text: expect.stringContaining('re-read it and create a fresh patch') })
+    ]));
+    expect(mocks.files.get(fsPath)).toEqual(new TextEncoder().encode('const result = 3;\n'));
+    expect(vi.mocked((await import('vscode')).workspace.fs.writeFile)).not.toHaveBeenCalled();
 
     await client.close();
     await server.close();

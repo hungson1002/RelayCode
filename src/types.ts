@@ -91,6 +91,7 @@ export interface AgentRunCheckpoint {
   validationFailureCount?: number;
   pendingToolCalls: AgentToolCall[];
   nextToolIndex: number;
+  inFlightToolCallId?: string;
   lastStatus: string;
   updatedAt: number;
 }

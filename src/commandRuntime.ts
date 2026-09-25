@@ -21,6 +21,7 @@ export interface ShellInvocation {
 }
 
 const MAX_CAPTURED_OUTPUT = 30_000;
+const WINDOWS_LOGICAL_CHAIN_NOTICE = 'Windows PowerShell 5.1 does not support && or || natively; RelayCode adapts top-level command chains before execution.';
 
 export function shellRuntimeInstruction(workspaceRoot: string): string {
   if (process.platform === 'win32') {
@@ -28,8 +29,9 @@ export function shellRuntimeInstruction(workspaceRoot: string): string {
       'Runtime environment: Windows using Windows PowerShell (powershell.exe), not Bash.',
       `Workspace and default working directory: ${workspaceRoot}.`,
       'All run_command and run_tests commands must use PowerShell syntax.',
-      'Do not use Bash-only forms such as mkdir -p, rm -rf, cp, mv, touch, export, VAR=value command, heredocs, /dev/null, or &&.',
-      'Use the file tools for creating, moving and deleting workspace files. For directories use New-Item -ItemType Directory -Force; separate commands with ; and explicitly inspect native exit codes when needed.'
+      'Do not use Bash-only forms such as mkdir -p, rm -rf, cp, mv, touch, export, VAR=value command, heredocs or /dev/null.',
+      'Top-level && and || between commands are supported and adapted for Windows PowerShell 5.1 while preserving short-circuit behavior. Use PowerShell syntax for all other operations.',
+      'Use the file tools for creating, moving and deleting workspace files. For directories use New-Item -ItemType Directory -Force; use ; only when commands should run unconditionally.'
     ].join('\n');
   }
   return [
@@ -56,10 +58,12 @@ export function validateShellCompatibility(command: string): string | undefined 
       [/(?:^|[;&|]\s*)export\s+[A-Za-z_][A-Za-z0-9_]*=/i, 'export is Bash syntax. In PowerShell use $env:NAME = value.'],
       [/(?:^|[;&|]\s*)[A-Za-z_][A-Za-z0-9_]*=[^;\r\n]+\s+\S+/i, 'Inline NAME=value command syntax is not supported by PowerShell. Set $env:NAME first.'],
       [/<<\s*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?/i, 'Bash heredoc syntax is not supported by PowerShell. Use a here-string or write_file.'],
-      [/(?:^|\s)\/dev\/null(?:\s|$)/i, '/dev/null does not exist on Windows. Use $null.'],
-      [/&&|\|\|/, 'Windows PowerShell 5.1 does not support && or ||. Use PowerShell conditionals or separate checked commands.']
+      [/(?:^|\s)\/dev\/null(?:\s|$)/i, '/dev/null does not exist on Windows. Use $null.']
     ];
-    return incompatibilities.find(([pattern]) => pattern.test(value))?.[1];
+    const incompatibility = incompatibilities.find(([pattern]) => pattern.test(value))?.[1];
+    if (incompatibility) return incompatibility;
+    if (splitWindowsCommandChain(value)) return WINDOWS_LOGICAL_CHAIN_NOTICE;
+    return undefined;
   }
   if (/\b(?:New-Item|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Test-Path)\b|\$env:/i.test(value)) {
     return 'This command uses PowerShell syntax, but the current runtime uses a POSIX shell.';
@@ -67,8 +71,149 @@ export function validateShellCompatibility(command: string): string | undefined 
   return undefined;
 }
 
+type CommandChainOperator = '&&' | '||';
+type CommandChainNode =
+  | { type: 'command'; command: string }
+  | { type: CommandChainOperator; left: CommandChainNode; right: CommandChainNode };
+
+function splitWindowsCommandChain(command: string): { commands: string[]; operators: CommandChainOperator[] } | undefined {
+  const commands: string[] = [];
+  const operators: CommandChainOperator[] = [];
+  let start = 0;
+  let quote: "'" | '"' | undefined;
+  let hereStringQuote: "'" | '"' | undefined;
+  let inComment = false;
+  let depth = 0;
+
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index]!;
+    const next = command[index + 1];
+
+    if (hereStringQuote) {
+      if (index === 0 || command[index - 1] === '\n') {
+        const lineEnd = command.indexOf('\n', index);
+        const line = command.slice(index, lineEnd < 0 ? command.length : lineEnd).trim();
+        if (line === `${hereStringQuote}@`) hereStringQuote = undefined;
+      }
+      continue;
+    }
+    if (inComment) {
+      if (character === '\n') inComment = false;
+      continue;
+    }
+    if (quote) {
+      if (character === '`') {
+        index++;
+      } else if (quote === "'" && character === "'" && next === "'") {
+        index++;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (character === '@' && (next === "'" || next === '"') && (command[index + 2] === '\n' || command[index + 2] === '\r')) {
+      hereStringQuote = next;
+      index++;
+      continue;
+    }
+    if (character === '`') {
+      index++;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === '#' && (index === 0 || /\s/.test(command[index - 1]!))) {
+      inComment = true;
+      continue;
+    }
+    if (character === '(' || character === '[' || character === '{') depth++;
+    else if (character === ')' || character === ']' || character === '}') depth = Math.max(0, depth - 1);
+
+    if (depth === 0 && ((character === '&' && next === '&') || (character === '|' && next === '|'))) {
+      const part = command.slice(start, index).trim();
+      if (!part) return undefined;
+      commands.push(part);
+      operators.push(character === '&' ? '&&' : '||');
+      index++;
+      start = index + 1;
+    }
+  }
+
+  if (!operators.length) return undefined;
+  const lastCommand = command.slice(start).trim();
+  if (!lastCommand) return undefined;
+  commands.push(lastCommand);
+  return { commands, operators };
+}
+
+function translateWindowsCommandChain(command: string): string | undefined {
+  const chain = splitWindowsCommandChain(command);
+  if (!chain) return undefined;
+
+  const values: CommandChainNode[] = [{ type: 'command', command: chain.commands[0]! }];
+  const operators: CommandChainOperator[] = [];
+  const precedence = (operator: CommandChainOperator) => operator === '&&' ? 2 : 1;
+  const reduce = () => {
+    const operator = operators.pop()!;
+    const right = values.pop()!;
+    const left = values.pop()!;
+    values.push({ type: operator, left, right });
+  };
+
+  for (let index = 0; index < chain.operators.length; index++) {
+    const operator = chain.operators[index]!;
+    while (operators.length && precedence(operators.at(-1)!) >= precedence(operator)) reduce();
+    operators.push(operator);
+    values.push({ type: 'command', command: chain.commands[index + 1]! });
+  }
+  while (operators.length) reduce();
+
+  let variableIndex = 0;
+  const indent = (value: string) => value.split('\n').map((line) => `  ${line}`).join('\n');
+  const emit = (node: CommandChainNode): { script: string; result: string } => {
+    const result = `$__relaycodeChainResult${++variableIndex}`;
+    if (node.type === 'command') {
+      const commandBody = node.command.split('\n').map((line) => `  ${line}`).join('\n');
+      return {
+        result,
+        script: [
+          'try {',
+          commandBody,
+          `  ${result} = $?`,
+          '} catch {',
+          '  [Console]::Error.WriteLine(($_ | Out-String))',
+          `  ${result} = $false`,
+          '}'
+        ].join('\n')
+      };
+    }
+
+    const left = emit(node.left);
+    const right = emit(node.right);
+    const condition = node.type === '&&' ? left.result : `-not (${left.result})`;
+    return {
+      result,
+      script: [
+        left.script,
+        `if (${condition}) {`,
+        indent(right.script),
+        `  ${result} = ${right.result}`,
+        '} else {',
+        `  ${result} = ${node.type === '&&' ? '$false' : '$true'}`,
+        '}'
+      ].join('\n')
+    };
+  };
+
+  const translated = emit(values[0]!);
+  return `${translated.script}\nif (${translated.result}) { $global:LASTEXITCODE = 0 } else { $global:LASTEXITCODE = 1 }`;
+}
+
 export function buildShellInvocation(command: string): ShellInvocation {
   if (process.platform === 'win32') {
+    const windowsCommand = translateWindowsCommandChain(command) ?? command;
     const script = [
       "$ErrorActionPreference = 'Stop'",
       "$ProgressPreference = 'SilentlyContinue'",
@@ -77,7 +222,7 @@ export function buildShellInvocation(command: string): ShellInvocation {
       '$OutputEncoding = [Console]::OutputEncoding',
       'try {',
       '  & {',
-      command,
+      windowsCommand,
       '  }',
       '  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
       '} catch {',
@@ -109,7 +254,10 @@ export function runShellCommand(
 ): Promise<string> {
   return new Promise((resolvePromise, reject) => {
     const compatibilityError = validateShellCompatibility(request.command);
-    if (compatibilityError) {
+    const adaptsWindowsChain = process.platform === 'win32'
+      && Boolean(splitWindowsCommandChain(request.command))
+      && compatibilityError === WINDOWS_LOGICAL_CHAIN_NOTICE;
+    if (compatibilityError && !adaptsWindowsChain) {
       reject(new Error(`Shell syntax mismatch: ${compatibilityError}`));
       return;
     }

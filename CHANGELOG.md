@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.9
+
+- Preserved long-running Agent progress across provider timeouts and IDE restarts, and prevented uncertain in-flight tools from being replayed automatically.
+- Persisted ChatGPT Web command task IDs and results across extension restarts; identical retries reuse the existing task unless a fresh run is explicitly requested.
+- Made workspace patches line-ending safe on Windows and idempotent when the replacement is already present.
+- Adapted top-level `&&` and `||` command chains for Windows PowerShell 5.1.
+
 ## 2.0.8
 
 - Added durable plans, milestone acceptance criteria and progress recovery for long-running RelayCode Goals, following Codex's plan, verify and repair workflow.
