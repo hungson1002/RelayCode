@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolve } from 'node:path';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -279,7 +280,7 @@ describe('ChatGPT Web MCP bridge', () => {
 
   it('treats a repeated patch as successful when its replacement is already present', async () => {
     const path = 'chatgpt-patch-retry.txt';
-    const fsPath = `${process.cwd()}\\${path}`;
+    const fsPath = resolve(process.cwd(), path);
     mocks.files.set(fsPath, new TextEncoder().encode('const result = 1;\r\nnext();\r\n'));
     const requestApproval = vi.fn(async () => true);
     const registerChange = vi.fn();
@@ -313,7 +314,7 @@ describe('ChatGPT Web MCP bridge', () => {
 
   it('explains a stale patch context without changing the workspace file', async () => {
     const path = 'chatgpt-patch-stale.txt';
-    const fsPath = `${process.cwd()}\\${path}`;
+    const fsPath = resolve(process.cwd(), path);
     mocks.files.set(fsPath, new TextEncoder().encode('const result = 3;\n'));
     const bridge = createBridge();
     const server = (bridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
