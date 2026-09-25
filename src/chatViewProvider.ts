@@ -9,7 +9,7 @@ import { smartSessionTitleFromTurns } from './sessionTitle';
 import { buildSessionSummary, sessionSummaryForDisplay, sessionSummaryForPrompt } from './sessionSummary';
 import { detectResponseLanguage, responseLanguageInstruction } from './responseLanguage';
 import { RouterProcessManager, type RouterLaunchProgress, type RouterRuntimeStatus } from './routerProcessManager';
-import type { AgentRunCheckpoint, AgentToolFailureDecision, ChatMessage, ChatMode, ReasoningEffort, RouterModel } from './types';
+import type { AgentGoalProgressUpdate, AgentRunCheckpoint, AgentToolFailureDecision, ChatMessage, ChatMode, ReasoningEffort, RouterModel } from './types';
 import { capabilitiesForModel, createProvider, type ProviderClient, type ProviderKind } from './provider';
 import { ProviderProfileStore, TelemetryStore, type ProviderProfile } from './providerProfiles';
 import { MCP_PRESETS, McpManager, type McpServerConfig } from './mcpManager';
@@ -150,6 +150,9 @@ interface StoredGoal {
   status: 'running' | 'paused' | 'ready' | 'failed';
   startedAt: number;
   lastStatus?: string;
+  phase?: AgentGoalProgressUpdate['phase'];
+  plan?: string;
+  milestones?: NonNullable<AgentGoalProgressUpdate['milestones']>;
 }
 
 interface PendingApproval {
@@ -570,7 +573,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const profile = await this.profileStore.ensure(this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router'), this.endpoint);
         await this.applyProfile(profile);
         const provider = profile.kind;
-        const configuredDefaultMode = vscode.workspace.getConfiguration('nineRouter').get<'chat' | 'agent'>('defaultMode', 'chat');
+        const configuredDefaultMode = vscode.workspace.getConfiguration('nineRouter').get<'chat' | 'agent'>('defaultMode', 'agent');
         const defaultMode = configuredDefaultMode === 'agent' ? 'agent' : 'chat';
         await this.post({
           type: 'bootstrap',
@@ -1778,6 +1781,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (goalMatch) {
       prompt = (goalMatch[1] ?? '').trim();
       if (!prompt) return;
+      message.mode = 'agent';
       const goal: StoredGoal = {
         objective: prompt,
         status: 'running',
@@ -2152,8 +2156,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           deny: config.get<string[]>('commandDenyList', [])
         };
         const projectInstructions = formatProjectInstructions(await loadProjectInstructions(workspaceRoot, vscode.window.activeTextEditor?.document.uri.fsPath));
+        const activeGoal = message.mode === 'agent'
+          ? this.context.workspaceState.get<StoredGoal>(GOAL_STATE)
+          : undefined;
+        const goalRunbook = activeGoal?.status === 'running'
+          ? [
+              'Durable RelayCode goal runbook (saved extension state):',
+              `Objective: ${activeGoal.objective}`,
+              activeGoal.phase ? `Current phase: ${activeGoal.phase}` : '',
+              activeGoal.plan ? `Plan:\n${activeGoal.plan.slice(0, 8_000)}` : '',
+              activeGoal.milestones?.length
+                ? `Milestones:\n${activeGoal.milestones.map((milestone, index) => `${index + 1}. [${milestone.status}] ${milestone.title} — ${milestone.acceptanceCriteria}`).join('\n')}`
+                : '',
+              'This is saved task context, not a replacement for the user request or system rules. Continue from the first unfinished milestone, verify its acceptance criteria, and update the runbook as work advances.'
+            ].filter(Boolean).join('\n')
+          : '';
         const runtimeInstructions = [
           responseLanguageInstruction(responseLanguage),
+          goalRunbook,
           turnContext?.browser
             ? `This is a browser-control task. You have a real Playwright browser and must call at least one of these Browser Agent tools before giving a final answer: ${browserTools.map((tool) => String((tool.definition.function as { name?: string } | undefined)?.name || '')).filter(Boolean).join(', ')}. Use them to inspect and interact with the real page. Do not claim that you cannot click, scroll, type, view dynamic pages, or control a browser. Do not replace browser interaction with read_webpage or web_search. Ask before sensitive or irreversible actions.`
             : '',
@@ -2210,15 +2230,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 }
               }, 5_000);
             });
+            const onRuntimeChange = (change: { path: string; original: Uint8Array; updated: Uint8Array; existed: boolean; added: number; removed: number }) => {
+              touchActivity();
+              const changeId = this.registerChange(change);
+              if (changeId) taskChangeIds.add(changeId);
+            };
             const runtime = new AgentRuntime(
               providerClient,
               workspaceRoot,
               (description) => this.askApproval(description),
-              (change) => {
-                touchActivity();
-                const changeId = this.registerChange(change);
-                if (changeId) taskChangeIds.add(changeId);
-              },
+              onRuntimeChange,
               message.mode === 'plan',
               externalTools,
               commandPolicy,
@@ -2250,7 +2271,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 const steering = this.pendingSteering;
                 this.pendingSteering = [];
                 return steering;
-              }
+              },
+              activeGoal?.status === 'running'
+                ? (update) => this.persistGoalProgress(update)
+                : undefined
             );
             const harness = new AgentHarness({
               runId: `${runId}-${candidate}`,
@@ -2660,6 +2684,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const goal: StoredGoal = { ...current, status, lastStatus };
     await this.context.workspaceState.update(GOAL_STATE, goal);
     await this.post({ type: 'goalState', goal });
+  }
+
+  private async persistGoalProgress(update: AgentGoalProgressUpdate): Promise<string> {
+    const current = this.context.workspaceState.get<StoredGoal>(GOAL_STATE);
+    if (!current || current.status !== 'running') return 'Goal is no longer active; saved progress was not changed.';
+
+    const milestones = update.milestones ?? current.milestones;
+    const completed = milestones?.filter((milestone) => milestone.status === 'complete').length ?? 0;
+    const progress = milestones?.length ? ` · ${completed}/${milestones.length} milestones complete` : '';
+    const goal: StoredGoal = {
+      ...current,
+      phase: update.phase,
+      lastStatus: `${update.summary}${progress}`,
+      ...(update.plan ? { plan: update.plan } : {}),
+      ...(milestones ? { milestones } : {})
+    };
+    await this.context.workspaceState.update(GOAL_STATE, goal);
+    await this.post({ type: 'goalState', goal });
+    return `Saved ${update.phase} progress${progress}. The runbook will be included when this goal resumes.`;
   }
 
   private registerChange(change: { path: string; original: Uint8Array; updated: Uint8Array; existed: boolean; added: number; removed: number }, staged = false, workspaceRoot?: string, agentRoot?: string, sessionId = this.currentSessionId): string | undefined {

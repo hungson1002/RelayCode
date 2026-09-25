@@ -152,7 +152,7 @@ $('uiLanguage').addEventListener('change', () => {
   vscode.postMessage({ type: 'setLanguage', language: $('uiLanguage').value });
 });
 let mode = 'chat';
-let defaultMode = 'chat';
+let defaultMode = 'agent';
 let composerPreferences = { models: {}, reasoningEffort: 'medium', serviceTier: 'default' };
 let modelSelectionSource = 'auto';
 let lastAutoModel = '';

@@ -10,6 +10,7 @@ import { countLineChanges } from './diffHunks';
 import { runShellCommand } from './commandRuntime';
 import { validateCommandPolicy } from './safetyPolicy';
 import { ChatGptTunnelSetup } from './chatGptTunnelSetup';
+import { captureWorkspaceSnapshot, diffWorkspaceSnapshots, type FileSnapshot } from './workspaceSnapshot';
 
 const BRIDGE_TOKEN_SECRET = 'nineRouter.chatGptBridge.pathToken';
 const BRIDGE_ACTIVITY_STATE = 'nineRouter.chatGptBridge.activity';
@@ -74,11 +75,23 @@ type ToolResult = {
   isError?: boolean;
 };
 
+type WorkspaceCommandTask = {
+  id: string;
+  command: string;
+  tool: 'run_workspace_command' | 'start_workspace_command';
+  state: 'waiting_for_approval' | 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  output?: string;
+  error?: string;
+};
+
 export class ChatGptBridge implements vscode.Disposable {
   private server: http.Server | undefined;
   private localUrl: string | undefined;
   private activities: ChatGptBridgeActivity[];
   private readonly tunnelSetup: ChatGptTunnelSetup;
+  private readonly commandTasks = new Map<string, WorkspaceCommandTask>();
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -234,7 +247,7 @@ export class ChatGptBridge implements vscode.Disposable {
       version: String(this.context.extension.packageJSON.version || '1.3.0'),
       title: 'RelayCode Workspace'
     }, {
-      instructions: 'Work only inside the open RelayCode workspace. When the user explicitly asks to save or sync the current ChatGPT conversation, call sync_chat_session with a stable conversationId, a concise title, and the complete visible user/assistant transcript. Never sync conversation text without an explicit user request. Read before editing. File writes are applied to RelayCode Review.'
+      instructions: 'Work only inside the open RelayCode workspace. When the user explicitly asks to save or sync the current ChatGPT conversation, call sync_chat_session with a stable conversationId, a concise title, and the complete visible user/assistant transcript. Never sync conversation text without an explicit user request. Read before editing. File writes are applied to RelayCode Review. Both workspace command tools return a taskId immediately; poll workspace_command_status for approval, completion and output instead of repeating the command. If a tool response is interrupted or times out, inspect workspace_status, list_pending_changes and list_workspace_commands before repeating a write or command; continue from current workspace state.'
     });
     const outputSchema = {
       ok: z.boolean(),
@@ -422,31 +435,138 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('run_workspace_command', {
       title: 'Run workspace command',
-      description: 'Run a non-interactive shell command in the workspace after explicit approval in VS Code. File changes made by the command are added to RelayCode Review.',
+      description: 'Start a non-interactive workspace command after explicit approval in VS Code. Returns immediately with a taskId; poll workspace_command_status for approval, completion and output. Repeating this tool starts another command, so poll the taskId instead. File changes are added to RelayCode Review.',
       inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120) },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
-    }, ({ command, timeoutSeconds }) => this.track('run_workspace_command', { command }, async () => {
-      const root = this.requiredWorkspaceRoot();
-      const configuration = vscode.workspace.getConfiguration('nineRouter');
-      const policyError = validateCommandPolicy(command, {
-        allow: configuration.get<string[]>('commandAllowList', []),
-        deny: configuration.get<string[]>('commandDenyList', [])
+    }, ({ command, timeoutSeconds }) => this.track('run_workspace_command', { command }, () => this.startWorkspaceCommand(command, timeoutSeconds, 'run_workspace_command')));
+
+    server.registerTool('start_workspace_command', {
+      title: 'Start workspace command',
+      description: 'Start a non-interactive workspace command and return immediately with a taskId. Poll workspace_command_status instead of keeping a long-running MCP request open. Commands still require explicit approval in VS Code and file changes are added to RelayCode Review.',
+      inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120) },
+      outputSchema,
+      annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
+    }, ({ command, timeoutSeconds }) => this.track('start_workspace_command', { command }, () => this.startWorkspaceCommand(command, timeoutSeconds, 'start_workspace_command')));
+
+    server.registerTool('workspace_command_status', {
+      title: 'Workspace command status',
+      description: 'Read the state and latest output of a task returned by either workspace command tool. This is safe to repeat and does not start the command again.',
+      inputSchema: { taskId: z.string().min(1).max(160) },
+      outputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false }
+    }, ({ taskId }) => {
+      const task = this.commandTasks.get(taskId);
+      if (!task) return this.fail('Command task was not found or has expired.', { taskId });
+      return this.ok(`Workspace command is ${task.state}.`, {
+        taskId: task.id,
+        status: task.state,
+        command: task.command,
+        startedAt: task.startedAt,
+        completedAt: task.completedAt,
+        output: task.output,
+        error: task.error
       });
-      if (policyError) throw new Error(policyError);
-      if (!await this.callbacks.requestApproval(`ChatGPT Web muốn chạy: ${command}`)) throw new Error('Denied by user.');
-      const before = await this.captureSnapshot(root);
-      let output: string;
-      try {
-        output = await runShellCommand({ command, cwd: root, timeoutMs: timeoutSeconds * 1000 });
-      } finally {
-        const after = await this.captureSnapshot(root);
-        this.registerSnapshotChanges(before, after);
-      }
-      return this.ok('Command completed.', { command, output });
-    }));
+    });
+
+    server.registerTool('list_workspace_commands', {
+      title: 'List workspace commands',
+      description: 'List recent workspace command tasks and their taskIds. Use after a tool response timeout to recover a taskId before starting the command again.',
+      outputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false }
+    }, () => {
+      this.pruneCommandTasks();
+      const tasks = [...this.commandTasks.values()]
+        .sort((left, right) => right.startedAt - left.startedAt)
+        .map(({ id, tool, command, state, startedAt, completedAt }) => ({
+          taskId: id,
+          tool,
+          command,
+          status: state,
+          startedAt,
+          completedAt
+        }));
+      return this.ok(`${tasks.length} workspace command task(s).`, { tasks });
+    });
 
     return server;
+  }
+
+  private async startWorkspaceCommand(
+    command: string,
+    timeoutSeconds: number,
+    tool: WorkspaceCommandTask['tool']
+  ): Promise<ToolResult> {
+    const root = this.requiredWorkspaceRoot();
+    const configuration = vscode.workspace.getConfiguration('nineRouter');
+    const policyError = validateCommandPolicy(command, {
+      allow: configuration.get<string[]>('commandAllowList', []),
+      deny: configuration.get<string[]>('commandDenyList', [])
+    });
+    if (policyError) throw new Error(policyError);
+    this.pruneCommandTasks();
+    const task: WorkspaceCommandTask = {
+      id: `workspace-command-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`,
+      command,
+      tool,
+      state: 'waiting_for_approval',
+      startedAt: Date.now()
+    };
+    this.commandTasks.set(task.id, task);
+    void this.executeWorkspaceCommandTask(task, root, timeoutSeconds).catch(() => undefined);
+    return this.ok('Workspace command started. Check its taskId with workspace_command_status; do not start it again.', {
+      taskId: task.id,
+      status: task.state,
+      command
+    });
+  }
+
+  private async executeWorkspaceCommandTask(task: WorkspaceCommandTask, root: string, timeoutSeconds: number): Promise<void> {
+    let before: FileSnapshot | undefined;
+    try {
+      if (!await this.callbacks.requestApproval(`ChatGPT Web wants to run: ${task.command}`)) {
+        throw new Error('Denied by user.');
+      }
+      task.state = 'running';
+      before = await this.captureSnapshot(root);
+      let commandFailed = false;
+      try {
+        task.output = await runShellCommand({ command: task.command, cwd: root, timeoutMs: timeoutSeconds * 1000 });
+      } catch (error) {
+        task.error = this.errorText(error);
+        commandFailed = true;
+      } finally {
+        const after = await this.captureSnapshot(root, [...before.keys()]);
+        this.registerSnapshotChanges(before, after);
+      }
+      task.state = commandFailed ? 'failed' : 'completed';
+    } catch (error) {
+      task.error = this.errorText(error);
+      task.state = 'failed';
+    } finally {
+      task.completedAt = Date.now();
+      const ok = task.state === 'completed';
+      await this.recordActivity({
+        id: `chatgpt-command-${task.id}`,
+        tool: task.tool,
+        summary: ok ? 'Workspace command completed.' : `Workspace command failed: ${task.error || 'see task status'}`,
+        ok,
+        timestamp: task.startedAt,
+        durationMs: task.completedAt - task.startedAt
+      }).catch(() => undefined);
+    }
+  }
+
+  private pruneCommandTasks(): void {
+    const expiredBefore = Date.now() - 30 * 60_000;
+    for (const [id, task] of this.commandTasks) {
+      if (task.completedAt && task.completedAt < expiredBefore) this.commandTasks.delete(id);
+    }
+    if (this.commandTasks.size < 40) return;
+    for (const [id, task] of this.commandTasks) {
+      if (task.completedAt) this.commandTasks.delete(id);
+      if (this.commandTasks.size < 30) break;
+    }
   }
 
   private async track(tool: string, args: unknown, action: () => Promise<ToolResult>): Promise<ToolResult> {
@@ -499,29 +619,12 @@ export class ChatGptBridge implements vscode.Disposable {
     }
   }
 
-  private async captureSnapshot(root: string): Promise<Map<string, Uint8Array>> {
-    const snapshot = new Map<string, Uint8Array>();
-    const uris = await vscode.workspace.findFiles('**/*', '**/{.git,node_modules,dist,out,build,coverage,.next,target,.venv,venv,__pycache__}/**', 2500);
-    let total = 0;
-    for (const uri of uris) {
-      if (!this.isInside(root, uri.fsPath)) continue;
-      try {
-        const bytes = await vscode.workspace.fs.readFile(uri);
-        if (bytes.byteLength > 2_000_000 || total + bytes.byteLength > 32_000_000) continue;
-        total += bytes.byteLength;
-        snapshot.set(resolve(uri.fsPath), bytes);
-      } catch { /* Ignore transient files. */ }
-    }
-    return snapshot;
+  private captureSnapshot(root: string, includePaths: string[] = []): Promise<FileSnapshot> {
+    return captureWorkspaceSnapshot(root, includePaths);
   }
 
-  private registerSnapshotChanges(before: Map<string, Uint8Array>, after: Map<string, Uint8Array>): void {
-    for (const path of new Set([...before.keys(), ...after.keys()])) {
-      const original = before.get(path) ?? new Uint8Array();
-      const updated = after.get(path) ?? new Uint8Array();
-      if (this.bytesEqual(original, updated)) continue;
-      this.callbacks.registerChange({ path, original, updated, existed: before.has(path), ...countLineChanges(original, updated) });
-    }
+  private registerSnapshotChanges(before: FileSnapshot, after: FileSnapshot): void {
+    for (const change of diffWorkspaceSnapshots(before, after)) this.callbacks.registerChange(change);
   }
 
   private workspaceUri(input: string): vscode.Uri {
@@ -577,11 +680,6 @@ export class ChatGptBridge implements vscode.Disposable {
     if ('oldText' in record) record.oldText = '[redacted]';
     if ('newText' in record) record.newText = '[redacted]';
     return record;
-  }
-
-  private bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-    if (left.byteLength !== right.byteLength) return false;
-    return left.every((value, index) => value === right[index]);
   }
 
   private errorText(error: unknown): string {

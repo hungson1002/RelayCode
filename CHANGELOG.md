@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.8
+
+- Added durable plans, milestone acceptance criteria and progress recovery for long-running RelayCode Goals, following Codex's plan, verify and repair workflow.
+- Made ChatGPT Web workspace commands resumable by returning task IDs immediately and exposing status and active-task recovery.
+- Limited workspace change snapshots to tracked and non-ignored files to prevent generated or ignored files from flooding Review.
+- Restarted the ChatGPT Web tunnel client with backoff after unexpected exits.
+
 ## 2.0.7
 
 - Added explicit, on-request ChatGPT Web transcript sync into separately titled RelayCode history sessions.

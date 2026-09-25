@@ -63,6 +63,22 @@ export type AgentToolFailureDecision =
   | { action: 'skip' }
   | { action: 'change-model'; model: string };
 
+export type AgentGoalPhase = 'planning' | 'implementation' | 'validation' | 'repair';
+export type AgentGoalMilestoneState = 'pending' | 'active' | 'complete' | 'blocked';
+
+export interface AgentGoalMilestone {
+  title: string;
+  acceptanceCriteria: string;
+  status: AgentGoalMilestoneState;
+}
+
+export interface AgentGoalProgressUpdate {
+  phase: AgentGoalPhase;
+  summary: string;
+  plan: string;
+  milestones: AgentGoalMilestone[];
+}
+
 export interface AgentRunCheckpoint {
   version: 1;
   model: string;

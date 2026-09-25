@@ -30,6 +30,11 @@ export interface ChatGptTunnelStatus {
 
 export class ChatGptTunnelSetup implements vscode.Disposable {
   private runtime: ChildProcessWithoutNullStreams | undefined;
+  private restartTimer: NodeJS.Timeout | undefined;
+  private restartAttempt = 0;
+  private disposed = false;
+  private readonly intentionalStops = new WeakSet<ChildProcessWithoutNullStreams>();
+  private lastRuntimeLaunch: { binary: string; apiKey: string } | undefined;
 
   public constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -91,6 +96,7 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
 
   public async forget(): Promise<void> {
     this.stopRuntime();
+    this.lastRuntimeLaunch = undefined;
     await this.context.globalState.update(TUNNEL_ID_STATE, undefined);
     await this.context.globalState.update(CLIENT_PATH_STATE, undefined);
     await this.context.secrets.delete(API_KEY_SECRET);
@@ -123,6 +129,8 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
   }
 
   public dispose(): void {
+    this.disposed = true;
+    this.lastRuntimeLaunch = undefined;
     this.stopRuntime();
   }
 
@@ -231,14 +239,27 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
   }
 
   private async startRuntime(binary: string, apiKey: string): Promise<void> {
+    this.lastRuntimeLaunch = { binary, apiKey };
+    this.restartAttempt = 0;
     this.stopRuntime();
+    await this.launchRuntime(binary, apiKey);
+  }
+
+  private async launchRuntime(binary: string, apiKey: string): Promise<void> {
     const child = spawn(binary, ['run', '--profile', PROFILE], {
       env: { ...process.env, CONTROL_PLANE_API_KEY: apiKey }, windowsHide: true, stdio: 'pipe'
     });
     let errorOutput = '';
     child.stdout.on('data', () => undefined);
     child.stderr.on('data', (chunk) => { errorOutput = (errorOutput + String(chunk)).slice(-2000); });
-    child.on('exit', () => { if (this.runtime === child) this.runtime = undefined; });
+    child.on('exit', () => {
+      if (this.runtime === child) this.runtime = undefined;
+      if (!this.intentionalStops.has(child) && !this.disposed) this.scheduleRuntimeRestart();
+    });
+    child.on('error', () => {
+      if (this.runtime === child) this.runtime = undefined;
+      if (!this.intentionalStops.has(child) && !this.disposed) this.scheduleRuntimeRestart();
+    });
     this.runtime = child;
     await new Promise<void>((resolvePromise, reject) => {
       const timer = setTimeout(resolvePromise, 900);
@@ -251,9 +272,26 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
   }
 
   private stopRuntime(): void {
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = undefined;
     const current = this.runtime;
     this.runtime = undefined;
-    if (current && current.exitCode === null) current.kill();
+    if (current && current.exitCode === null) {
+      this.intentionalStops.add(current);
+      current.kill();
+    }
+  }
+
+  private scheduleRuntimeRestart(): void {
+    if (this.restartTimer || this.disposed || !this.lastRuntimeLaunch) return;
+    const delay = Math.min(60_000, 1_000 * (2 ** Math.min(this.restartAttempt, 6)));
+    this.restartAttempt++;
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = undefined;
+      const launch = this.lastRuntimeLaunch;
+      if (!launch || this.disposed) return;
+      void this.launchRuntime(launch.binary, launch.apiKey).catch(() => this.scheduleRuntimeRestart());
+    }, delay);
   }
 
   private async download(url: string): Promise<Uint8Array> {
