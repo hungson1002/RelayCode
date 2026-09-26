@@ -38,6 +38,7 @@ import { parseContextMentions } from './contextMentions';
 import {
   ChatGptBridge,
   type ChatGptBridgeActivity,
+  type ChatGptBridgeApprovalOptions,
   type ChatGptBridgeSyncedSession,
   type ChatGptBridgeTranscript
 } from './chatGptBridge';
@@ -46,6 +47,7 @@ const API_KEY_SECRET = 'nineRouter.apiKey';
 const DISCONNECTED_STATE = 'nineRouter.manuallyDisconnected';
 const DEFAULT_MODEL_STATE = 'nineRouter.defaultModel';
 const PERMISSION_MODE_STATE = 'nineRouter.permissionMode';
+const CHATGPT_ALWAYS_APPROVED_COMMANDS_STATE = 'nineRouter.chatGptBridge.alwaysApprovedCommands';
 const COMPOSER_PREFERENCES_STATE = 'nineRouter.composerPreferences';
 const CHAT_SESSIONS_STATE = 'nineRouter.chatSessions';
 const CHATGPT_WEB_SESSION_ID = 'relaycode-chatgpt-web';
@@ -159,6 +161,7 @@ interface PendingApproval {
   resolve: (allow: boolean) => void;
   similarRule?: string;
   key: string;
+  allowAlways: boolean;
 }
 
 interface ApprovalPresentation {
@@ -183,6 +186,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private approvals = new Map<string, PendingApproval>();
   private pendingApprovalByKey = new Map<string, Promise<boolean>>();
   private readonly similarApprovalRules = new Set<string>();
+  private chatGptCommandApprovalWrites: Promise<void> = Promise.resolve();
   private toolFailureResolvers = new Map<string, (decision: AgentToolFailureDecision) => void>();
   private changes = new Map<string, ChangeState>();
   private changesVisible = false;
@@ -250,7 +254,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.mcpManager = new McpManager(context, this.interaction);
     context.subscriptions.push(this.mcpManager.onDidChange(() => void this.postMcpServers()));
     this.chatGptBridge = new ChatGptBridge(context, {
-      requestApproval: (description) => this.askApproval(description),
+      requestApproval: (description, options) => this.askApproval(description, options),
       registerChange: (change) => { this.registerChange(change, false, undefined, undefined, CHATGPT_WEB_SESSION_ID); },
       pendingChanges: () => [...this.changes.entries()].map(([id, change]) => ({
         id,
@@ -632,7 +636,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.post({ type: 'providerKeyState', provider: message.provider, hasApiKey, requestId: message.requestId });
       } else if (message.type === 'approval') {
         const approval = this.approvals.get(message.id);
-        if (message.decision === 'always') {
+        if (message.decision === 'always' && approval?.allowAlways) {
           await this.context.globalState.update(PERMISSION_MODE_STATE, 'edit');
           await this.post({ type: 'permissionMode', mode: 'edit' });
         }
@@ -2546,31 +2550,86 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     });
   }
 
-  private askApproval(description: string): Promise<boolean> {
+  private askApproval(description: string, options: ChatGptBridgeApprovalOptions = {}): Promise<boolean> {
     const permission = this.context.globalState.get<string>(PERMISSION_MODE_STATE, 'ask');
-    const highRiskGitAction = /\b(?:commit|push)\b/i.test(description);
-    if (permission === 'full' && !highRiskGitAction) return Promise.resolve(true);
-    if (permission === 'edit' && !highRiskGitAction && !/chạy|test/i.test(description)) return Promise.resolve(true);
     const presentation = approvalPresentation(description);
-    if (presentation.similarRule && this.similarApprovalRules.has(presentation.similarRule)) {
+    const highRiskGitAction = /\b(?:commit|push)\b/i.test(presentation.command ?? description);
+    if (!options.requireExplicit && permission === 'full' && !highRiskGitAction) return Promise.resolve(true);
+    if (!options.requireExplicit && permission === 'edit' && !highRiskGitAction && presentation.kind !== 'command' && !/test/i.test(description)) return Promise.resolve(true);
+    if (!options.requireExplicit && presentation.similarRule && this.similarApprovalRules.has(presentation.similarRule)) {
       return Promise.resolve(true);
     }
     const key = [presentation.kind, presentation.message, presentation.command || ''].join('|').trim();
     const existing = this.pendingApprovalByKey.get(key);
     if (existing) return existing;
+
+    const commandApprovalHash = options.alwaysAllowExactCommand && presentation.kind === 'command' && presentation.command
+      ? createHash('sha256').update(`${resolve(options.commandScope || '')}\0${presentation.command.trim()}`).digest('hex')
+      : undefined;
+    const rememberedCommands = this.context.workspaceState.get<unknown>(CHATGPT_ALWAYS_APPROVED_COMMANDS_STATE, []);
+    if (commandApprovalHash && Array.isArray(rememberedCommands) && rememberedCommands.includes(commandApprovalHash)) {
+      return Promise.resolve(true);
+    }
+
+    if (options.requireExplicit && presentation.kind === 'command') {
+      const id = `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      let resolvePending!: (allow: boolean) => void;
+      const pending = new Promise<boolean>((resolve) => { resolvePending = resolve; });
+      this.approvals.set(id, { resolve: resolvePending, key, allowAlways: false });
+      this.pendingApprovalByKey.set(key, pending);
+      const finish = (allow: boolean) => {
+        const approval = this.approvals.get(id);
+        if (!approval) return;
+        this.approvals.delete(id);
+        if (this.pendingApprovalByKey.get(key) === pending) this.pendingApprovalByKey.delete(key);
+        approval.resolve(allow);
+      };
+      void this.showApprovalPrompt(description, presentation, Boolean(commandApprovalHash), options.commandScope).then(async (decision) => {
+        if (!this.approvals.has(id)) return;
+        if (decision === 'always' && commandApprovalHash) {
+          try {
+            await this.rememberChatGptCommand(commandApprovalHash);
+          } catch {
+            const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
+            void vscode.window.showErrorMessage(language === 'vi'
+              ? 'Không lưu được quyền đã nhớ; command đã bị từ chối.'
+              : 'Could not save the remembered approval; the command was denied.');
+            finish(false);
+            return;
+          }
+        }
+        finish(decision === 'once' || decision === 'always');
+      }, () => finish(false));
+      return pending;
+    }
+
     const id = `approval-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const pending = new Promise<boolean>((resolve) => {
-      this.approvals.set(id, { resolve, similarRule: presentation.similarRule, key });
-      void this.post({
+      const allowAlways = presentation.kind !== 'command';
+      this.approvals.set(id, { resolve, similarRule: presentation.similarRule, key, allowAlways });
+      const approvalMessage = {
         type: 'approval',
         id,
         kind: presentation.kind,
         title: presentation.title,
         message: presentation.message,
         command: presentation.command,
-        allowSimilar: Boolean(presentation.similarRule),
-        allowAlways: true
-      });
+        allowSimilar: !options.requireExplicit && Boolean(presentation.similarRule),
+        allowAlways
+      };
+      const fallBackToVsCodePrompt = () => {
+        if (!this.approvals.delete(id)) return;
+        void this.showApprovalPrompt(description, presentation).then((decision) => {
+          this.pendingApprovalByKey.delete(key);
+          resolve(decision === 'once' || decision === 'always');
+        }, () => {
+          this.pendingApprovalByKey.delete(key);
+          resolve(false);
+        });
+      };
+      void Promise.resolve(this.post(approvalMessage)).then((posted) => {
+        if (!posted || !this.view?.visible) fallBackToVsCodePrompt();
+      }, fallBackToVsCodePrompt);
       setTimeout(() => {
         if (this.approvals.delete(id)) {
           this.pendingApprovalByKey.delete(key);
@@ -2580,6 +2639,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     });
     this.pendingApprovalByKey.set(key, pending);
     return pending;
+  }
+
+  private async showApprovalPrompt(
+    description: string,
+    presentation: ApprovalPresentation,
+    allowExactCommandAlways = false,
+    commandScope?: string
+  ): Promise<'once' | 'always' | 'deny'> {
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
+    const allowLabel = language === 'vi' ? 'Cho phép một lần' : 'Allow once';
+    const alwaysLabel = language === 'vi'
+      ? 'Luôn cho phép đúng lệnh này trong workspace'
+      : 'Always allow this exact command in this workspace';
+    const denyLabel = language === 'vi' ? 'Từ chối' : 'Deny';
+    const message = presentation.command
+      ? language === 'vi' ? 'RelayCode cần bạn duyệt command trong workspace.' : 'RelayCode needs approval to run this workspace command.'
+      : language === 'vi' ? 'RelayCode cần bạn duyệt thao tác này.' : 'RelayCode needs your approval for this action.';
+    const detail = presentation.command
+      ? `${presentation.command}${commandScope ? `\n\nWorking directory: ${commandScope}` : ''}`
+      : description;
+    const choices = allowExactCommandAlways ? [allowLabel, alwaysLabel, denyLabel] : [allowLabel, denyLabel];
+    const choice = await vscode.window.showWarningMessage(message, { modal: true, detail }, ...choices);
+    if (choice === allowLabel) return 'once';
+    if (choice === alwaysLabel && allowExactCommandAlways) return 'always';
+    return 'deny';
+  }
+
+  public async clearRememberedChatGptCommands(): Promise<void> {
+    const language = normalizeUiLanguage(vscode.workspace.getConfiguration('nineRouter').get<unknown>('language', 'en'));
+    const clear = this.chatGptCommandApprovalWrites.then(() => this.context.workspaceState.update(CHATGPT_ALWAYS_APPROVED_COMMANDS_STATE, []));
+    this.chatGptCommandApprovalWrites = clear.catch(() => undefined);
+    await clear;
+    void vscode.window.showInformationMessage(language === 'vi'
+      ? 'Đã xóa các command ChatGPT Web được ghi nhớ cho workspace này.'
+      : 'Cleared remembered ChatGPT Web commands for this workspace.');
+  }
+
+  private rememberChatGptCommand(commandHash: string): Promise<void> {
+    const update = this.chatGptCommandApprovalWrites.then(async () => {
+      const stored = this.context.workspaceState.get<unknown>(CHATGPT_ALWAYS_APPROVED_COMMANDS_STATE, []);
+      const remembered = Array.isArray(stored) ? stored.filter((item): item is string => typeof item === 'string') : [];
+      if (!remembered.includes(commandHash)) {
+        await this.context.workspaceState.update(CHATGPT_ALWAYS_APPROVED_COMMANDS_STATE, [...remembered, commandHash]);
+      }
+    });
+    this.chatGptCommandApprovalWrites = update.catch(() => undefined);
+    return update;
   }
 
   private stopActiveTurn(): void {
@@ -4417,13 +4523,13 @@ function localizeUiPayload(value: unknown, language: 'vi' | 'en'): unknown {
 }
 
 function approvalPresentation(description: string): ApprovalPresentation {
-  const commandMatch = description.match(/^Agent muốn chạy(?: test)?:\s*([\s\S]+)$/iu);
+  const commandMatch = description.match(/^(?:Agent muốn chạy(?: test)?|ChatGPT Web wants to run):\s*([\s\S]+)$/iu);
   if (commandMatch) {
     const command = commandMatch[1]?.trim() ?? '';
     return {
       kind: 'command',
       title: 'Terminal',
-      message: description.includes('chạy test:')
+      message: /^(?:Agent muốn chạy test|ChatGPT Web wants to run test):/iu.test(description)
         ? 'RelayCode muốn chạy lệnh kiểm tra này.'
         : 'RelayCode muốn chạy lệnh này.',
       command,

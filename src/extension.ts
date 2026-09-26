@@ -18,6 +18,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('nineRouter.openTerminal', () => provider.openIntegratedTerminal()),
     vscode.commands.registerCommand('nineRouter.openBrowserPreview', () => provider.openBrowserPreview()),
     vscode.commands.registerCommand('nineRouter.manageChatGptBridge', () => provider.manageChatGptBridge()),
+    vscode.commands.registerCommand('nineRouter.clearRememberedChatGptCommands', () => provider.clearRememberedChatGptCommands()),
     vscode.commands.registerCommand('nineRouter.manageScheduledTasks', () => provider.manageScheduledTasks())
   );
 }

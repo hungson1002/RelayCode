@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.10
+
+- Added a visible VS Code approval dialog for ChatGPT Web commands, with one-time approval or workspace-scoped approval for the exact command.
+- Added a Command Palette action to clear remembered ChatGPT Web command approvals.
+- Clarified command task status and approval guidance, and redacted common credential patterns from ChatGPT Web tool results.
+
 ## 2.0.9
 
 - Preserved long-running Agent progress across provider timeouts and IDE restarts, and prevented uncertain in-flight tools from being replayed automatically.

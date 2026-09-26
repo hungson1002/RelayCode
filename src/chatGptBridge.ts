@@ -56,8 +56,14 @@ export interface ChatGptBridgeSyncedSession {
   messageCount: number;
 }
 
+export interface ChatGptBridgeApprovalOptions {
+  requireExplicit?: boolean;
+  alwaysAllowExactCommand?: boolean;
+  commandScope?: string;
+}
+
 export interface ChatGptBridgeCallbacks {
-  requestApproval(description: string): Promise<boolean>;
+  requestApproval(description: string, options?: ChatGptBridgeApprovalOptions): Promise<boolean>;
   registerChange(change: ChatGptBridgeChange): void;
   pendingChanges(): Array<{ id: string; path: string; added: number; removed: number; taskId: string }>;
   syncChatSession(transcript: ChatGptBridgeTranscript): Promise<ChatGptBridgeSyncedSession>;
@@ -264,7 +270,7 @@ export class ChatGptBridge implements vscode.Disposable {
       version: String(this.context.extension.packageJSON.version || '1.3.0'),
       title: 'RelayCode Workspace'
     }, {
-      instructions: 'Work only inside the open RelayCode workspace. On Windows, workspace commands use PowerShell 5.1 syntax; top-level && and || between commands are supported and automatically adapted, but do not use Bash-only forms such as export, VAR=value command, heredocs or /dev/null. When the user explicitly asks to save or sync the current ChatGPT conversation, call sync_chat_session with a stable conversationId, a concise title, and the complete visible user/assistant transcript. Never sync conversation text without an explicit user request. Read before editing. File writes are applied to RelayCode Review. Both workspace command tools return a durable taskId immediately; poll workspace_command_status for approval, completion and output instead of repeating the command. A repeated identical command returns its existing task and never starts it again. If the user explicitly requests a fresh execution after checking the prior result, set forceNewRun=true. If a tool response is interrupted or times out, inspect workspace_status, list_pending_changes and list_workspace_commands before taking further action; continue from current workspace state.'
+      instructions: 'Work only inside the open RelayCode workspace. Use workspace read/search tools for files; never read arbitrary paths outside this workspace. The workspace command tool can run tests/builds, Git operations, dependency installs and app/server process commands from the workspace after approval. On Windows, commands use PowerShell 5.1 syntax; top-level && and || are adapted, but Bash-only forms such as export, VAR=value, heredocs and /dev/null are unsupported. A new ChatGPT Web shell command opens a visible RelayCode approval dialog with Allow once, Always allow this exact command in this workspace, or Deny. Choosing Always remembers only the exact command for this workspace; it does not authorize other commands. The command task tool only creates a task. Poll workspace_command_status: waiting_for_approval means nothing has run, and only completed tasks provide final output. Never claim a command or test passed before completed. Do not repeat a command while its task is waiting or running; after interruption, inspect workspace_status, list_pending_changes and list_workspace_commands first. Command approval is separate from Accept in RelayCode Review. File edits and command-produced file changes stay pending in Review; do not say they are accepted. Never commit, push, change branches, reset, checkout, stash, rebase, force-push, delete files, install dependencies or restart a process unless the user explicitly requested that action and RelayCode approved its command. Do not control the VS Code UI. Never return secret values from source, config, diffs or command output; RelayCode redacts common credential patterns in tool responses. Read before editing. If the user explicitly asks to save or sync this ChatGPT conversation, call sync_chat_session with a stable conversationId, concise title and the complete visible transcript; never sync without that request.'
     });
     const outputSchema = {
       ok: z.boolean(),
@@ -475,7 +481,7 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('run_workspace_command', {
       title: 'Run workspace command',
-      description: 'Start a non-interactive workspace command after explicit approval in VS Code. Returns immediately with a durable taskId; poll workspace_command_status for approval, completion and output. An identical repeat returns the existing task without starting a second command. Set forceNewRun=true only when the user explicitly asks to execute it again after checking the previous result. File changes are added to RelayCode Review.',
+      description: 'Request RelayCode approval for a non-interactive command started in the open workspace. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status for approval, completion and output. Repeating an identical command never starts it twice. Use forceNewRun=true only after checking the previous result and when the user explicitly asks to run it again. Command approval is separate from accepting file changes in RelayCode Review.',
       inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120), forceNewRun: z.boolean().optional() },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
@@ -483,7 +489,7 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('start_workspace_command', {
       title: 'Start workspace command',
-      description: 'Start a non-interactive workspace command and return immediately with a durable taskId. Poll workspace_command_status instead of keeping a long-running MCP request open. Identical repeats return the existing task without restarting it; set forceNewRun=true only when the user explicitly requests a fresh execution. Commands require explicit approval in VS Code and file changes are added to RelayCode Review.',
+      description: 'Request RelayCode approval for a non-interactive command started in the open workspace. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status instead of keeping a long-running MCP request open. Identical repeats return the existing task without restarting it; set forceNewRun=true only when the user explicitly requests a fresh execution. Command approval is separate from accepting file changes in RelayCode Review.',
       inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120), forceNewRun: z.boolean().optional() },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
@@ -571,9 +577,15 @@ export class ChatGptBridge implements vscode.Disposable {
   }
 
   private workspaceCommandTaskResult(task: WorkspaceCommandTask, reused: boolean): ToolResult {
-    const summary = reused
-      ? `A matching workspace command task already exists (${task.state}); it was not started again. Check taskId ${task.id} before deciding whether a fresh run is needed.`
-      : 'Workspace command started. Check its taskId with workspace_command_status; do not start it again.';
+    const summary = task.state === 'waiting_for_approval'
+      ? `The command task ${reused ? 'already exists' : 'was created'} and is waiting for RelayCode approval; no command has run. Poll taskId ${task.id}.`
+      : task.state === 'running'
+        ? `The command task is running; poll taskId ${task.id} for its final result.`
+        : task.state === 'completed'
+          ? `The command task completed. Check taskId ${task.id} for its output.`
+          : task.state === 'interrupted'
+            ? `The previous command task was interrupted and was not restarted. Inspect taskId ${task.id} and workspace state before taking action.`
+            : `The command task failed. Check taskId ${task.id} for its error before deciding whether a fresh run is needed.`;
     return this.ok(summary, {
       taskId: task.id,
       status: task.state,
@@ -589,7 +601,11 @@ export class ChatGptBridge implements vscode.Disposable {
   private async executeWorkspaceCommandTask(task: WorkspaceCommandTask, root: string, timeoutSeconds: number): Promise<void> {
     let before: FileSnapshot | undefined;
     try {
-      if (!await this.callbacks.requestApproval(`ChatGPT Web wants to run: ${task.command}`)) {
+      if (!await this.callbacks.requestApproval(`ChatGPT Web wants to run: ${task.command}`, {
+        requireExplicit: true,
+        alwaysAllowExactCommand: true,
+        commandScope: root
+      })) {
         throw new Error('Denied by user.');
       }
       task.state = 'running';
@@ -659,20 +675,24 @@ export class ChatGptBridge implements vscode.Disposable {
       await this.recordActivity({ id: `chatgpt-${started}-${Math.random().toString(36).slice(2)}`, tool, summary: result.structuredContent.summary, ok: true, timestamp: started, durationMs: Date.now() - started });
       return result;
     } catch (error) {
-      const summary = this.errorText(error);
+      const summary = redactPotentialSecrets(this.errorText(error));
       await this.recordActivity({ id: `chatgpt-${started}-${Math.random().toString(36).slice(2)}`, tool, summary, ok: false, timestamp: started, durationMs: Date.now() - started });
       return this.fail(summary, { arguments: this.redactArgs(args) });
     }
   }
 
   private ok(summary: string, data?: unknown): ToolResult {
-    const structuredContent = data === undefined ? { ok: true, summary } : { ok: true, summary, data };
-    return { structuredContent, content: [{ type: 'text', text: data === undefined ? summary : `${summary}\n${JSON.stringify(data, null, 2)}` }] };
+    const safeSummary = redactPotentialSecrets(summary);
+    const safeData = sanitizeToolOutput(data);
+    const structuredContent = data === undefined ? { ok: true, summary: safeSummary } : { ok: true, summary: safeSummary, data: safeData };
+    return { structuredContent, content: [{ type: 'text', text: data === undefined ? safeSummary : `${safeSummary}\n${JSON.stringify(safeData, null, 2)}` }] };
   }
 
   private fail(summary: string, data?: unknown): ToolResult {
-    const structuredContent = data === undefined ? { ok: false, summary } : { ok: false, summary, data };
-    return { structuredContent, content: [{ type: 'text', text: summary }], isError: true };
+    const safeSummary = redactPotentialSecrets(summary);
+    const safeData = sanitizeToolOutput(data);
+    const structuredContent = data === undefined ? { ok: false, summary: safeSummary } : { ok: false, summary: safeSummary, data: safeData };
+    return { structuredContent, content: [{ type: 'text', text: safeSummary }], isError: true };
   }
 
   private async recordActivity(activity: ChatGptBridgeActivity): Promise<void> {
@@ -768,6 +788,23 @@ export class ChatGptBridge implements vscode.Disposable {
   private errorText(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
+}
+
+function sanitizeToolOutput(value: unknown): unknown {
+  if (typeof value === 'string') return redactPotentialSecrets(value);
+  if (Array.isArray(value)) return value.map(sanitizeToolOutput);
+  if (value && typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeToolOutput(item)]));
+  }
+  return value;
+}
+
+function redactPotentialSecrets(value: string): string {
+  return value
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gi, '[REDACTED PRIVATE KEY]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi, '$1 [REDACTED]')
+    .replace(/((?:["']?(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|password|passwd|private[_-]?key|refresh[_-]?token|secret|token)["']?)\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;#]+)/gi, '$1"[REDACTED]"')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})\b/g, '[REDACTED]');
 }
 
 function normalizeLineEndings(value: string): string {
