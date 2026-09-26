@@ -247,6 +247,62 @@ export function buildShellInvocation(command: string): ShellInvocation {
   };
 }
 
+export function validateShellCommandSyntax(command: string): Promise<string | undefined> {
+  const compatibilityError = validateShellCompatibility(command);
+  const adaptsWindowsChain = process.platform === 'win32'
+    && Boolean(splitWindowsCommandChain(command))
+    && compatibilityError === WINDOWS_LOGICAL_CHAIN_NOTICE;
+  if (compatibilityError && !adaptsWindowsChain) return Promise.resolve(compatibilityError);
+  if (process.platform !== 'win32') return Promise.resolve(undefined);
+
+  const invocation = buildShellInvocation(command);
+  const encodedSource = invocation.args.at(-1);
+  if (!encodedSource) return Promise.resolve('Could not prepare the Windows PowerShell syntax check.');
+  const source = Buffer.from(encodedSource, 'base64').toString('utf16le');
+  const sourceBase64 = Buffer.from(source, 'utf8').toString('base64');
+  const parserScript = [
+    '$sourceBase64 = [Console]::In.ReadToEnd()',
+    '$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sourceBase64.Trim()))',
+    '$tokens = $null',
+    '$parseErrors = $null',
+    '[System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors) | Out-Null',
+    'if ($parseErrors.Count -gt 0) {',
+    '  $parseErrors | Select-Object -First 3 | ForEach-Object { [Console]::Error.WriteLine($_.Message) }',
+    '  exit 1',
+    '}'
+  ].join('\n');
+  const parserCommand = Buffer.from(parserScript, 'utf16le').toString('base64');
+  const parserArgs = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', parserCommand];
+
+  return new Promise((resolveResult) => {
+    const child = spawn(invocation.executable, parserArgs, {
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    let output = '';
+    let settled = false;
+    let timeout: NodeJS.Timeout | undefined;
+    const finish = (result: string | undefined) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      resolveResult(result);
+    };
+    const append = (chunk: Buffer) => { output = (output + chunk.toString('utf8')).slice(-2_000); };
+    child.stdout.on('data', append);
+    child.stderr.on('data', append);
+    child.on('error', (error) => finish(`Could not validate Windows PowerShell syntax; the command was not run. ${error.message}`));
+    child.on('close', (code) => finish(code === 0
+      ? undefined
+      : `Windows PowerShell syntax error; the command was not run: ${output.trim().slice(0, 900) || 'PowerShell rejected the script.'}`));
+    child.stdin.end(sourceBase64);
+    timeout = setTimeout(() => {
+      child.kill();
+      finish('Windows PowerShell syntax validation timed out; the command was not run.');
+    }, 5_000);
+  });
+}
+
 export function runShellCommand(
   request: ShellCommandRequest,
   onOutput?: (event: ShellOutputEvent) => void,

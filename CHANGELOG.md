@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.11
+
+- Routed ChatGPT Web approval prompts into RelayCode Chat and restored pending approval cards after the webview reconnects.
+- Applied Full Access to standard ChatGPT Web workspace operations while keeping high-risk Git actions behind explicit approval.
+- Rejected malformed Windows PowerShell commands before creating approval tasks or running them.
+- Made stale or ambiguous workspace patches return safe no-op statuses and suppressed repeated no-op activity.
+
 ## 2.0.10
 
 - Added a visible VS Code approval dialog for ChatGPT Web commands, with one-time approval or workspace-scoped approval for the exact command.

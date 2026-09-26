@@ -2,7 +2,7 @@
   "name": "relaycode-huxon",
   "displayName": "RelayCode — AI Coding Agent",
   "description": "A focused AI coding workspace with Agent, Chat, Plan, multi-provider routing, MCP tools and safe reviewable changes.",
-  "version": "2.0.10",
+  "version": "2.0.11",
   "publisher": "huxon",
   "icon": "media/icon.png",
   "license": "MIT",

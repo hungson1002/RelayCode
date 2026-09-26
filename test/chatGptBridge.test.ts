@@ -13,7 +13,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/commandRuntime', () => ({
-  runShellCommand: vi.fn(async () => 'command completed')
+  runShellCommand: vi.fn(async () => 'command completed'),
+  validateShellCommandSyntax: vi.fn(async () => undefined)
 }));
 
 vi.mock('../src/workspaceSnapshot', () => ({
@@ -64,7 +65,7 @@ vi.mock('vscode', () => ({
 }));
 
 import { ChatGptBridge } from '../src/chatGptBridge';
-import { runShellCommand } from '../src/commandRuntime';
+import { runShellCommand, validateShellCommandSyntax } from '../src/commandRuntime';
 
 describe('ChatGPT Web MCP bridge', () => {
   beforeEach(() => {
@@ -316,7 +317,9 @@ describe('ChatGPT Web MCP bridge', () => {
     const path = 'chatgpt-patch-stale.txt';
     const fsPath = resolve(process.cwd(), path);
     mocks.files.set(fsPath, new TextEncoder().encode('const result = 3;\n'));
-    const bridge = createBridge();
+    const onActivity = vi.fn();
+    const requestApproval = vi.fn(async () => true);
+    const bridge = createBridge(onActivity, { requestApproval });
     const server = (bridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'relaycode-patch-stale-test', version: '1.0.0' });
@@ -328,12 +331,50 @@ describe('ChatGPT Web MCP bridge', () => {
       arguments: { path, oldText: 'const result = 1;', newText: 'const result = 2;' }
     });
 
-    expect(result.isError).toBe(true);
-    expect(result.content).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'text', text: expect.stringContaining('re-read it and create a fresh patch') })
-    ]));
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      data: { path, status: 'stale_context', patchApplied: false, noEditMade: true, requiresFreshRead: true, repeated: false }
+    });
+    const repeated = await client.callTool({
+      name: 'apply_workspace_patch',
+      arguments: { path, oldText: 'const result = 1;', newText: 'const result = 2;' }
+    });
+    expect(repeated.structuredContent).toMatchObject({
+      ok: true,
+      data: { status: 'stale_context', noEditMade: true, repeated: true }
+    });
+    expect(onActivity).toHaveBeenCalledOnce();
+    expect(requestApproval).not.toHaveBeenCalled();
     expect(mocks.files.get(fsPath)).toEqual(new TextEncoder().encode('const result = 3;\n'));
     expect(vi.mocked((await import('vscode')).workspace.fs.writeFile)).not.toHaveBeenCalled();
+
+    await client.close();
+    await server.close();
+  });
+
+  it('rejects invalid shell syntax before creating a task or asking for approval', async () => {
+    vi.mocked(validateShellCommandSyntax).mockResolvedValue('Windows PowerShell syntax error: Missing expression after in.');
+    const onActivity = vi.fn();
+    const requestApproval = vi.fn(async () => true);
+    const bridge = createBridge(onActivity, { requestApproval });
+    const server = (bridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'relaycode-invalid-command-test', version: '1.0.0' });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const arguments_ = { command: 'foreach ( in ()) { Write-Output "bad" }' };
+    const result = await client.callTool({ name: 'run_workspace_command', arguments: arguments_ });
+    const repeated = await client.callTool({ name: 'run_workspace_command', arguments: arguments_ });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ ok: true, data: { status: 'invalid', started: false, repeated: false } });
+    expect(repeated.structuredContent).toMatchObject({ ok: true, data: { status: 'invalid', started: false, repeated: true } });
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(runShellCommand).not.toHaveBeenCalled();
+    expect(mocks.state.get('nineRouter.chatGptBridge.commandTasks')).toBeUndefined();
+    expect(onActivity).toHaveBeenCalledOnce();
 
     await client.close();
     await server.close();

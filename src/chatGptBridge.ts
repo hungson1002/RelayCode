@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 import { countLineChanges } from './diffHunks';
-import { runShellCommand } from './commandRuntime';
+import { runShellCommand, validateShellCommandSyntax } from './commandRuntime';
 import { validateCommandPolicy } from './safetyPolicy';
 import { ChatGptTunnelSetup } from './chatGptTunnelSetup';
 import { captureWorkspaceSnapshot, diffWorkspaceSnapshots, type FileSnapshot } from './workspaceSnapshot';
@@ -102,6 +102,8 @@ export class ChatGptBridge implements vscode.Disposable {
   private readonly tunnelSetup: ChatGptTunnelSetup;
   private readonly commandTasks = new Map<string, WorkspaceCommandTask>();
   private commandTasksWriteQueue: Promise<void> = Promise.resolve();
+  private readonly repeatedNoopCalls = new Map<string, number>();
+  private readonly suppressedToolActivity = new WeakSet<ToolResult>();
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -420,7 +422,7 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('apply_workspace_patch', {
       title: 'Apply workspace patch',
-      description: 'Replace exactly one matching text block in a workspace file. Ignore LF versus CRLF differences when matching and preserve the file line endings when writing. If oldText is gone and newText already exists exactly once, report that the patch is already applied instead of failing or writing again. Otherwise re-read the current file and create a fresh patch when the context no longer matches. The edit appears in RelayCode Review and can be accepted or undone.',
+      description: 'Replace exactly one matching text block in a workspace file. Ignore LF versus CRLF differences when matching and preserve the file line endings when writing. If oldText is gone and newText already exists exactly once, report that the patch is already applied instead of writing again. If context is stale or ambiguous, the tool returns status=stale_context or ambiguous_context without asking approval; re-read the file and make a fresh patch. Never retry the same stale patch. A valid edit appears in RelayCode Review and can be accepted or undone.',
       inputSchema: { path: z.string().min(1), oldText: z.string().min(1).max(500_000), newText: z.string().max(500_000) },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: true }
@@ -442,10 +444,28 @@ export class ChatGptBridge implements vscode.Disposable {
         });
       }
       if (occurrences !== 1) {
-        const reason = occurrences === 0
-          ? `No matching oldText remains in ${path}, even after normalizing line endings. The file changed since this patch was prepared; re-read it and create a fresh patch. No edit was made.`
-          : `Expected one oldText match in ${path} after normalizing line endings, found ${occurrences}. Re-read the file and provide more unique context. No edit was made.`;
-        throw new Error(reason);
+        const status = occurrences === 0 ? 'stale_context' : 'ambiguous_context';
+        const fingerprint = createHash('sha256')
+          .update(`${path}\0${normalizedOldText}\0${normalizedCurrent.text}`)
+          .digest('hex');
+        const repeated = this.isRepeatedNoopCall(`patch:${fingerprint}`);
+        const summary = occurrences === 0
+          ? repeated
+            ? `Patch not applied to ${path}: this exact stale context was already rejected. Re-read the current file and create a new patch; do not retry this oldText.`
+            : `Patch not applied to ${path}: oldText no longer matches the current file. Re-read it and create a fresh patch; no approval was requested and no edit was made.`
+          : repeated
+            ? `Patch not applied to ${path}: this ambiguous context was already rejected. Re-read the current file and provide more unique surrounding lines.`
+            : `Patch not applied to ${path}: oldText matches ${occurrences} places. Re-read the current file and provide more unique surrounding lines; no approval was requested and no edit was made.`;
+        const result = this.ok(summary, {
+          path,
+          status,
+          patchApplied: false,
+          noEditMade: true,
+          requiresFreshRead: true,
+          repeated
+        });
+        if (repeated) this.suppressedToolActivity.add(result);
+        return result;
       }
       if (!await this.callbacks.requestApproval(`ChatGPT Web muốn sửa ${path}`)) throw new Error('Denied by user.');
       const normalizedStart = normalizedCurrent.text.indexOf(normalizedOldText);
@@ -481,7 +501,7 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('run_workspace_command', {
       title: 'Run workspace command',
-      description: 'Request RelayCode approval for a non-interactive command started in the open workspace. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status for approval, completion and output. Repeating an identical command never starts it twice. Use forceNewRun=true only after checking the previous result and when the user explicitly asks to run it again. Command approval is separate from accepting file changes in RelayCode Review.',
+      description: 'Check the command syntax for the current shell before requesting RelayCode approval. If the result has data.status=invalid, no task was created, no approval was requested and nothing ran: correct the command and do not repeat it unchanged. For a valid non-interactive command, RelayCode asks for approval inside RelayCode Chat. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status for approval, completion and output. Repeating an identical command never starts it twice. Use forceNewRun=true only after checking the previous result and when the user explicitly asks to run it again. Command approval is separate from accepting file changes in RelayCode Review.',
       inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120), forceNewRun: z.boolean().optional() },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
@@ -489,7 +509,7 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('start_workspace_command', {
       title: 'Start workspace command',
-      description: 'Request RelayCode approval for a non-interactive command started in the open workspace. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status instead of keeping a long-running MCP request open. Identical repeats return the existing task without restarting it; set forceNewRun=true only when the user explicitly requests a fresh execution. Command approval is separate from accepting file changes in RelayCode Review.',
+      description: 'Check the command syntax for the current shell before requesting RelayCode approval. If the result has data.status=invalid, no task was created, no approval was requested and nothing ran: correct the command and do not repeat it unchanged. For a valid non-interactive command, RelayCode asks for approval inside RelayCode Chat. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status instead of keeping a long-running MCP request open. Identical repeats return the existing task without restarting it; set forceNewRun=true only when the user explicitly requests a fresh execution. Command approval is separate from accepting file changes in RelayCode Review.',
       inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120), forceNewRun: z.boolean().optional() },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
@@ -558,6 +578,19 @@ export class ChatGptBridge implements vscode.Disposable {
         && ((task.state === 'waiting_for_approval' || task.state === 'running') || Date.now() - task.startedAt < COMMAND_TASK_RETENTION_MS))
       : undefined;
     if (existing) return this.workspaceCommandTaskResult(existing, true);
+    const syntaxError = await validateShellCommandSyntax(normalizedCommand);
+    if (syntaxError) {
+      const fingerprint = createHash('sha256').update(`${root}\0${normalizedCommand}\0${syntaxError}`).digest('hex');
+      const repeated = this.isRepeatedNoopCall(`command:${fingerprint}`);
+      const result = this.ok(
+        repeated
+          ? 'Command not started: this exact syntax problem was already reported. Correct it before asking RelayCode to run it again.'
+          : `Command not started; no approval was requested and nothing ran. Correct the shell syntax first. ${syntaxError}`,
+        { status: 'invalid', started: false, command: normalizedCommand, error: syntaxError, repeated }
+      );
+      if (repeated) this.suppressedToolActivity.add(result);
+      return result;
+    }
     const task: WorkspaceCommandTask = {
       id: `workspace-command-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`,
       command: normalizedCommand,
@@ -672,7 +705,9 @@ export class ChatGptBridge implements vscode.Disposable {
     const started = Date.now();
     try {
       const result = await action();
-      await this.recordActivity({ id: `chatgpt-${started}-${Math.random().toString(36).slice(2)}`, tool, summary: result.structuredContent.summary, ok: true, timestamp: started, durationMs: Date.now() - started });
+      if (!this.suppressedToolActivity.has(result)) {
+        await this.recordActivity({ id: `chatgpt-${started}-${Math.random().toString(36).slice(2)}`, tool, summary: result.structuredContent.summary, ok: true, timestamp: started, durationMs: Date.now() - started });
+      }
       return result;
     } catch (error) {
       const summary = redactPotentialSecrets(this.errorText(error));
@@ -699,6 +734,21 @@ export class ChatGptBridge implements vscode.Disposable {
     this.activities = [activity, ...this.activities].slice(0, MAX_ACTIVITY);
     await this.context.workspaceState.update(BRIDGE_ACTIVITY_STATE, this.activities);
     this.callbacks.onActivity(activity);
+  }
+
+  private isRepeatedNoopCall(fingerprint: string): boolean {
+    const now = Date.now();
+    for (const [key, timestamp] of this.repeatedNoopCalls) {
+      if (now - timestamp > 5 * 60_000) this.repeatedNoopCalls.delete(key);
+    }
+    const repeated = this.repeatedNoopCalls.has(fingerprint);
+    this.repeatedNoopCalls.set(fingerprint, now);
+    while (this.repeatedNoopCalls.size > 300) {
+      const oldest = this.repeatedNoopCalls.keys().next().value;
+      if (!oldest) break;
+      this.repeatedNoopCalls.delete(oldest);
+    }
+    return repeated;
   }
 
   private workspaceDiagnostics(): Array<{ path: string; line: number; severity: string; message: string }> {

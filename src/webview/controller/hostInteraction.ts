@@ -82,7 +82,9 @@ export const CHAT_CONTROLLER_HOST_INTERACTION = String.raw`  } else if (data.typ
         always.className = 'permission-always';
         always.setAttribute('role', 'menuitem');
         const alwaysLabel = document.createElement('span');
-        alwaysLabel.textContent = language === 'en' ? 'Always allow file edits' : 'Luôn cho phép sửa file';
+        alwaysLabel.textContent = data.rememberExactCommand
+          ? language === 'en' ? 'Always allow this exact command in this workspace' : 'Luôn cho phép đúng lệnh này trong workspace'
+          : language === 'en' ? 'Always allow file edits' : 'Luôn cho phép sửa file';
         const alwaysInfo = document.createElement('span');
         alwaysInfo.innerHTML = uiIcon('check');
         always.append(alwaysLabel, alwaysInfo);
@@ -105,8 +107,7 @@ export const CHAT_CONTROLLER_HOST_INTERACTION = String.raw`  } else if (data.typ
     deny.addEventListener('click', () => finishApproval('deny'));
     item.addEventListener('click', (event) => event.stopPropagation());
     $('messages').append(item);
-    if (messagesPinnedToBottom) scrollMessagesToBottom();
-    else updateRunningScrollIndicator();
+    scrollMessagesToBottom();
   } else if (data.type === 'toolFailure') {
     const item = document.createElement('article'); item.className = 'tool-failure-card';
     item.dataset.toolFailureId = data.id;

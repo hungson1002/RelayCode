@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildShellInvocation, runShellCommand, shellRuntimeInstruction, validateShellCompatibility } from '../src/commandRuntime';
+import { buildShellInvocation, runShellCommand, shellRuntimeInstruction, validateShellCommandSyntax, validateShellCompatibility } from '../src/commandRuntime';
 
 describe('command runtime', () => {
   it('describes the actual shell and workspace to the Agent', () => {
@@ -20,6 +20,12 @@ describe('command runtime', () => {
   it.runIf(process.platform === 'win32')('rejects Bash syntax before starting PowerShell', () => {
     expect(validateShellCompatibility('mkdir -p src/components')).toContain('New-Item');
     expect(validateShellCompatibility('npm test && npm run build')).toContain('does not support');
+  });
+
+  it.runIf(process.platform === 'win32')('checks PowerShell syntax before asking to run a command', async () => {
+    await expect(validateShellCommandSyntax('foreach ( in ()) { Write-Output "bad" }')).resolves.toMatch(/syntax error/i);
+    await expect(validateShellCommandSyntax('$items = @(1, 2); foreach ($item in $items) { Write-Output $item }')).resolves.toBeUndefined();
+    await expect(validateShellCommandSyntax('npm test && npm run build')).resolves.toBeUndefined();
   });
 
   it('rejects commands that require interactive input', () => {
