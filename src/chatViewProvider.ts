@@ -257,6 +257,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     context.subscriptions.push(this.mcpManager.onDidChange(() => void this.postMcpServers()));
     this.chatGptBridge = new ChatGptBridge(context, {
       requestApproval: (description, options) => this.askApproval(description, options),
+      isFullAccess: () => this.context.globalState.get<string>(PERMISSION_MODE_STATE, 'ask') === 'full',
       registerChange: (change) => { this.registerChange(change, false, undefined, undefined, CHATGPT_WEB_SESSION_ID); },
       pendingChanges: () => [...this.changes.entries()].map(([id, change]) => ({
         id,
@@ -382,6 +383,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   public async manageChatGptBridge(): Promise<void> {
     await this.chatGptBridge.manage();
+  }
+
+  public async manageClaudeWebBridge(): Promise<void> {
+    await this.chatGptBridge.manageClaudeWebBridge();
   }
 
   private onChatGptBridgeActivity(activity: ChatGptBridgeActivity): void {
@@ -2568,11 +2573,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private askApproval(description: string, options: ChatGptBridgeApprovalOptions = {}): Promise<boolean> {
     const permission = this.context.globalState.get<string>(PERMISSION_MODE_STATE, 'ask');
     const presentation = approvalPresentation(description);
-    const highRiskGitAction = /\b(?:commit|push)\b/i.test(presentation.command ?? description);
-    // Full access includes ChatGPT Web commands. Explicit command approval is
-    // still required for high-risk Git actions such as commit and push.
-    if (permission === 'full' && !highRiskGitAction) return Promise.resolve(true);
-    if (!options.requireExplicit && permission === 'edit' && !highRiskGitAction && presentation.kind !== 'command' && !/test/i.test(description)) return Promise.resolve(true);
+    // Full Access means exactly that: all workspace operations are approved,
+    // including Git commit/push. Other permission modes keep their normal gates.
+    if (permission === 'full') return Promise.resolve(true);
+    if (!options.requireExplicit && permission === 'edit' && presentation.kind !== 'command' && !/test/i.test(description)) return Promise.resolve(true);
     if (!options.requireExplicit && presentation.similarRule && this.similarApprovalRules.has(presentation.similarRule)) {
       return Promise.resolve(true);
     }
@@ -3650,6 +3654,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       await this.chatGptBridge.manage();
       return true;
     }
+    if (command === '/claude') {
+      await this.chatGptBridge.manageClaudeWebBridge();
+      return true;
+    }
     if (command === '/diagnostics') {
       await this.diagnostics();
       return true;
@@ -3839,7 +3847,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     await this.post({
       type: 'notice',
-        message: '**Lệnh nhanh**\n\n• `/new` tạo cuộc chat mới\n• `/skills` chọn skill bằng `$`\n• `/models` chọn model\n• `/plan` chuyển sang Plan\n• `/summary` xem tóm tắt phiên\n• `/review` xem thay đổi\n• `/status` xem trạng thái runtime\n• `/diagnostics` kiểm tra kết nối\n• `/mcp` mở công cụ MCP\n• `/chatgpt` quản lý kết nối ChatGPT Web\n• `/settings` mở cấu hình\n• `/logs` mở log Agent\n• `/export` xuất gói chẩn đoán'
+        message: '**Lệnh nhanh**\n\n• `/new` tạo cuộc chat mới\n• `/skills` chọn skill bằng `$`\n• `/models` chọn model\n• `/plan` chuyển sang Plan\n• `/summary` xem tóm tắt phiên\n• `/review` xem thay đổi\n• `/status` xem trạng thái runtime\n• `/diagnostics` kiểm tra kết nối\n• `/mcp` mở công cụ MCP\n• `/chatgpt` quản lý kết nối ChatGPT Web\n• `/claude` tạo URL MCP cho Claude Web\n• `/settings` mở cấu hình\n• `/logs` mở log Agent\n• `/export` xuất gói chẩn đoán'
     });
     return true;
   }

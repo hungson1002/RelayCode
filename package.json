@@ -2,7 +2,7 @@
   "name": "relaycode-huxon",
   "displayName": "RelayCode — AI Coding Agent",
   "description": "A focused AI coding workspace with Agent, Chat, Plan, multi-provider routing, MCP tools and safe reviewable changes.",
-  "version": "2.0.11",
+  "version": "2.0.12",
   "publisher": "huxon",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -51,7 +51,8 @@
     "onView:nineRouter.chatView",
     "onCommand:nineRouter.openChat",
     "onCommand:nineRouter.configure",
-    "onCommand:nineRouter.openDashboard"
+    "onCommand:nineRouter.openDashboard",
+    "onCommand:nineRouter.manageClaudeWebBridge"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -103,6 +104,12 @@
         "title": "Manage ChatGPT Web Bridge",
         "category": "RelayCode",
         "icon": "$(link)"
+      },
+      {
+        "command": "nineRouter.manageClaudeWebBridge",
+        "title": "Manage Claude Web Bridge",
+        "category": "RelayCode",
+        "icon": "$(globe)"
       },
       {
         "command": "nineRouter.clearRememberedChatGptCommands",

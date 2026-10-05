@@ -144,7 +144,7 @@ describe('ChatGPT Web MCP bridge', () => {
   it('recovers a command task after reload and does not run an identical retry again', async () => {
     let releaseApproval!: (allow: boolean) => void;
     const requestApproval = vi.fn(() => new Promise<boolean>((resolve) => { releaseApproval = resolve; }));
-    const firstBridge = createBridge(vi.fn(), { requestApproval });
+    const firstBridge = createBridge(vi.fn(), { requestApproval, isFullAccess: () => false });
     const firstServer = (firstBridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
     const [firstClientTransport, firstServerTransport] = InMemoryTransport.createLinkedPair();
     const firstClient = new Client({ name: 'relaycode-task-start-test', version: '1.0.0' });
@@ -153,14 +153,14 @@ describe('ChatGPT Web MCP bridge', () => {
 
     const started = await firstClient.callTool({
       name: 'start_workspace_command',
-      arguments: { command: 'npm run build' }
+      arguments: { command: 'git push origin main' }
     });
     const taskId = (started.structuredContent as { data: { taskId: string } }).data.taskId;
     expect(mocks.state.get('nineRouter.chatGptBridge.commandTasks')).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: taskId, state: 'waiting_for_approval' })
     ]));
 
-    const recoveredBridge = createBridge();
+    const recoveredBridge = createBridge(vi.fn(), { isFullAccess: () => false });
     const recoveredServer = (recoveredBridge as unknown as { createMcpServer(): import('@modelcontextprotocol/sdk/server/mcp.js').McpServer }).createMcpServer();
     const [recoveredClientTransport, recoveredServerTransport] = InMemoryTransport.createLinkedPair();
     const recoveredClient = new Client({ name: 'relaycode-task-recovery-test', version: '1.0.0' });
@@ -174,7 +174,7 @@ describe('ChatGPT Web MCP bridge', () => {
     });
     const retried = await recoveredClient.callTool({
       name: 'start_workspace_command',
-      arguments: { command: 'npm run build' }
+      arguments: { command: 'git push origin main' }
     });
     expect(retried.structuredContent).toMatchObject({ ok: true, data: { taskId, status: 'interrupted', reused: true } });
     expect(runShellCommand).not.toHaveBeenCalled();
@@ -385,6 +385,7 @@ function createBridge(
   onActivity = vi.fn(),
   overrides: Partial<{
     requestApproval: () => Promise<boolean>;
+    isFullAccess: () => boolean;
     registerChange: (change: unknown) => void;
     syncChatSession: (transcript: unknown) => Promise<{ sessionId: string; title: string; messageCount: number }>;
   }> = {}
@@ -402,6 +403,7 @@ function createBridge(
   };
   return new ChatGptBridge(context as never, {
     requestApproval: overrides.requestApproval ?? vi.fn(async () => true),
+    isFullAccess: overrides.isFullAccess ?? vi.fn(() => true),
     registerChange: overrides.registerChange ?? vi.fn(),
     pendingChanges: vi.fn(() => []),
     syncChatSession: overrides.syncChatSession ?? vi.fn(async () => ({

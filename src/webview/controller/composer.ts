@@ -539,6 +539,7 @@ function renderComposerMenu() {
     ['/terminal', uiCopy('Mở terminal tương tác của workspace', 'Open the interactive workspace terminal'), 'Terminal', 'terminal'],
     ['/browser', uiCopy('Điều khiển browser thật bằng Playwright', 'Control a real browser with Playwright'), 'Browser Agent', 'globe'],
     ['/chatgpt', uiCopy('Kết nối project với ChatGPT Web', 'Connect this project to ChatGPT Web'), 'ChatGPT Web', 'link'],
+    ['/claude', uiCopy('Tạo URL MCP cho Claude Web', 'Build the MCP URL for Claude Web'), 'Claude Web', 'globe'],
     ['/pr', uiCopy('Review GitHub pull request', 'Review a GitHub pull request'), 'GitHub PR', 'gitDiff'],
     ['/schedule', uiCopy('Quản lý tác vụ Agent định kỳ', 'Manage scheduled Agent tasks'), 'Scheduled tasks', 'clockCounterClockwise'],
     ['/plugins', uiCopy('Mở plugin và skill đã cài', 'Open installed plugins and skills'), 'Plugins', 'cube'],

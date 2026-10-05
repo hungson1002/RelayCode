@@ -64,6 +64,7 @@ export interface ChatGptBridgeApprovalOptions {
 
 export interface ChatGptBridgeCallbacks {
   requestApproval(description: string, options?: ChatGptBridgeApprovalOptions): Promise<boolean>;
+  isFullAccess(): boolean;
   registerChange(change: ChatGptBridgeChange): void;
   pendingChanges(): Array<{ id: string; path: string; added: number; removed: number; taskId: string }>;
   syncChatSession(transcript: ChatGptBridgeTranscript): Promise<ChatGptBridgeSyncedSession>;
@@ -219,6 +220,76 @@ export class ChatGptBridge implements vscode.Disposable {
     }
   }
 
+  public async manageClaudeWebBridge(): Promise<void> {
+    let current = this.status();
+    if (!current.running) {
+      current = await this.start();
+      await vscode.workspace.getConfiguration('nineRouter').update('chatGptBridge.autoStart', true, vscode.ConfigurationTarget.Global);
+    }
+    const localMcpUrl = current.url!;
+    const choices: Array<vscode.QuickPickItem & { id: string }> = [
+      { id: 'build', label: '$(globe) Build Claude connector URL', description: 'Paste the public forwarded URL for port 43119' },
+      { id: 'copy-local', label: '$(copy) Copy local MCP URL', description: localMcpUrl },
+      { id: 'open-claude', label: '$(link-external) Open Claude Connectors', description: 'Add a custom connector in Claude Web' },
+      { id: 'activity', label: '$(history) Open web bridge timeline', description: `${current.activityCount} tool calls in RelayCode history` }
+    ];
+    const picked = await vscode.window.showQuickPick(choices, {
+      title: 'Claude Web MCP',
+      placeHolder: 'Forward port 43119, make it Public, then build the connector URL.'
+    });
+    if (!picked) return;
+    if (picked.id === 'copy-local') {
+      await vscode.env.clipboard.writeText(localMcpUrl);
+      void vscode.window.showInformationMessage('Copied the local RelayCode MCP URL.');
+    } else if (picked.id === 'open-claude') {
+      await vscode.env.openExternal(vscode.Uri.parse('https://claude.ai/settings/connectors'));
+    } else if (picked.id === 'activity') {
+      await this.callbacks.openActivityTimeline();
+    } else if (picked.id === 'build') {
+      await this.buildClaudeConnectorUrl(localMcpUrl);
+    }
+  }
+
+  private async buildClaudeConnectorUrl(localMcpUrl: string): Promise<void> {
+    const forwarded = await vscode.window.showInputBox({
+      title: 'Claude Web MCP',
+      prompt: 'Paste the public forwarded address for port 43119. RelayCode will add the /mcp/<token> path.',
+      placeHolder: 'https://example-43119.app.github.dev',
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        try {
+          const parsed = new URL(value.trim());
+          if (parsed.protocol !== 'https:') return 'Claude Web needs a public HTTPS URL.';
+          return undefined;
+        } catch {
+          return 'Enter a valid public HTTPS URL.';
+        }
+      }
+    }).then((value) => value?.trim());
+    if (!forwarded) return;
+    const connectorUrl = this.claudeConnectorUrl(forwarded, localMcpUrl);
+    await vscode.env.clipboard.writeText(connectorUrl);
+    const guide = [
+      'Copied the Claude connector URL.',
+      '',
+      'In Claude Web:',
+      '1. Open Settings or Customize -> Connectors.',
+      '2. Add custom connector.',
+      '3. Paste the copied URL.',
+      '4. Use no authentication for this quick test.',
+      '',
+      'Keep the forwarded port public only while testing. RelayCode still asks before edits or commands run.'
+    ].join('\n');
+    const picked = await vscode.window.showInformationMessage('Claude connector URL copied.', { modal: true, detail: guide }, 'Open Claude');
+    if (picked === 'Open Claude') await vscode.env.openExternal(vscode.Uri.parse('https://claude.ai/settings/connectors'));
+  }
+
+  private claudeConnectorUrl(publicForwardedUrl: string, localMcpUrl: string): string {
+    const forwarded = new URL(publicForwardedUrl.trim());
+    const local = new URL(localMcpUrl);
+    return `${forwarded.origin}${local.pathname}`;
+  }
+
   private async configureTunnel(localMcpUrl: string): Promise<void> {
     try {
       await this.tunnelSetup.configure(localMcpUrl);
@@ -272,7 +343,7 @@ export class ChatGptBridge implements vscode.Disposable {
       version: String(this.context.extension.packageJSON.version || '1.3.0'),
       title: 'RelayCode Workspace'
     }, {
-      instructions: 'Work only inside the open RelayCode workspace. Use workspace read/search tools for files; never read arbitrary paths outside this workspace. The workspace command tool can run tests/builds, Git operations, dependency installs and app/server process commands from the workspace after approval. On Windows, commands use PowerShell 5.1 syntax; top-level && and || are adapted, but Bash-only forms such as export, VAR=value, heredocs and /dev/null are unsupported. A new ChatGPT Web shell command opens a visible RelayCode approval dialog with Allow once, Always allow this exact command in this workspace, or Deny. Choosing Always remembers only the exact command for this workspace; it does not authorize other commands. The command task tool only creates a task. Poll workspace_command_status: waiting_for_approval means nothing has run, and only completed tasks provide final output. Never claim a command or test passed before completed. Do not repeat a command while its task is waiting or running; after interruption, inspect workspace_status, list_pending_changes and list_workspace_commands first. Command approval is separate from Accept in RelayCode Review. File edits and command-produced file changes stay pending in Review; do not say they are accepted. Never commit, push, change branches, reset, checkout, stash, rebase, force-push, delete files, install dependencies or restart a process unless the user explicitly requested that action and RelayCode approved its command. Do not control the VS Code UI. Never return secret values from source, config, diffs or command output; RelayCode redacts common credential patterns in tool responses. Read before editing. If the user explicitly asks to save or sync this ChatGPT conversation, call sync_chat_session with a stable conversationId, concise title and the complete visible transcript; never sync without that request.'
+      instructions: 'Work only inside the open RelayCode workspace. Use workspace read/search tools for files; never read arbitrary paths outside this workspace. In Full Access, the workspace command tool can run valid non-interactive commands immediately inside the open workspace, including Git commit/push; other permission modes retain approval. On Windows, commands use PowerShell 5.1 syntax; top-level && and || are adapted, but Bash-only forms such as export, VAR=value, heredocs and /dev/null are unsupported. In Full Access, ChatGPT Web workspace commands start without an approval dialog, including Git commit/push. Other permission modes use the RelayCode approval flow. The command task tool only creates a task. Poll workspace_command_status: waiting_for_approval means nothing has run, and only completed tasks provide final output. Never claim a command or test passed before completed. Do not repeat a command while its task is waiting or running; after interruption, inspect workspace_status, list_pending_changes and list_workspace_commands first. Any required high-risk Git approval is separate from Accept in RelayCode Review. File edits and command-produced file changes stay pending in Review; do not say they are accepted. Never commit, push, change branches, reset, checkout, stash, rebase, force-push, delete files, install dependencies or restart a process unless the user explicitly requested that action and RelayCode approved its command. Do not control the VS Code UI. Never return secret values from source, config, diffs or command output; RelayCode redacts common credential patterns in tool responses. Read before editing. If the user explicitly asks to save or sync this ChatGPT conversation, call sync_chat_session with a stable conversationId, concise title and the complete visible transcript; never sync without that request.'
     });
     const outputSchema = {
       ok: z.boolean(),
@@ -501,7 +572,7 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('run_workspace_command', {
       title: 'Run workspace command',
-      description: 'Check the command syntax for the current shell before requesting RelayCode approval. If the result has data.status=invalid, no task was created, no approval was requested and nothing ran: correct the command and do not repeat it unchanged. For a valid non-interactive command, RelayCode asks for approval inside RelayCode Chat. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status for approval, completion and output. Repeating an identical command never starts it twice. Use forceNewRun=true only after checking the previous result and when the user explicitly asks to run it again. Command approval is separate from accepting file changes in RelayCode Review.',
+      description: 'Check shell syntax, then run valid non-interactive commands inside the open workspace. In Full Access, commands start immediately without approval, including Git commit/push; other permission modes retain approval. Command allow/deny policy validation always applies. The initial call creates a durable taskId; poll workspace_command_status for completion and output. Repeating an identical command never starts it twice. Use forceNewRun=true only after checking the previous result and when the user explicitly asks to run it again.',
       inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120), forceNewRun: z.boolean().optional() },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
@@ -509,7 +580,7 @@ export class ChatGptBridge implements vscode.Disposable {
 
     server.registerTool('start_workspace_command', {
       title: 'Start workspace command',
-      description: 'Check the command syntax for the current shell before requesting RelayCode approval. If the result has data.status=invalid, no task was created, no approval was requested and nothing ran: correct the command and do not repeat it unchanged. For a valid non-interactive command, RelayCode asks for approval inside RelayCode Chat. This supports tests/builds, Git, dependency installation and app/server process commands; do not target files outside the workspace. The first use of a command shows Allow once, Always allow this exact command in this workspace, or Deny; a previously remembered exact command in the same workspace may proceed without another prompt. The initial call only creates a durable taskId; while status is waiting_for_approval, the command has not run. Poll workspace_command_status instead of keeping a long-running MCP request open. Identical repeats return the existing task without restarting it; set forceNewRun=true only when the user explicitly requests a fresh execution. Command approval is separate from accepting file changes in RelayCode Review.',
+      description: 'Check shell syntax, then start valid non-interactive commands inside the open workspace. In Full Access, commands start immediately without approval, including Git commit/push; other permission modes retain approval. Command allow/deny policy validation always applies. Poll workspace_command_status instead of keeping a long-running MCP request open. Identical repeats return the existing task without restarting it; set forceNewRun=true only when the user explicitly requests a fresh execution.',
       inputSchema: { command: z.string().min(1).max(20_000), timeoutSeconds: z.number().int().min(5).max(900).default(120), forceNewRun: z.boolean().optional() },
       outputSchema,
       annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
@@ -591,11 +662,14 @@ export class ChatGptBridge implements vscode.Disposable {
       if (repeated) this.suppressedToolActivity.add(result);
       return result;
     }
+    const fullAccess = this.callbacks.isFullAccess();
     const task: WorkspaceCommandTask = {
       id: `workspace-command-${Date.now().toString(36)}-${randomBytes(6).toString('hex')}`,
       command: normalizedCommand,
       tool,
-      state: 'waiting_for_approval',
+      // Full Access starts every valid workspace command immediately. Other
+      // permission modes retain the normal approval flow.
+      state: fullAccess ? 'running' : 'waiting_for_approval',
       startedAt: Date.now()
     };
     this.commandTasks.set(task.id, task);
@@ -634,15 +708,17 @@ export class ChatGptBridge implements vscode.Disposable {
   private async executeWorkspaceCommandTask(task: WorkspaceCommandTask, root: string, timeoutSeconds: number): Promise<void> {
     let before: FileSnapshot | undefined;
     try {
-      if (!await this.callbacks.requestApproval(`ChatGPT Web wants to run: ${task.command}`, {
-        requireExplicit: true,
-        alwaysAllowExactCommand: true,
-        commandScope: root
-      })) {
-        throw new Error('Denied by user.');
+      if (!this.callbacks.isFullAccess()) {
+        if (!await this.callbacks.requestApproval(`ChatGPT Web wants to run: ${task.command}`, {
+          requireExplicit: true,
+          alwaysAllowExactCommand: true,
+          commandScope: root
+        })) {
+          throw new Error('Denied by user.');
+        }
+        task.state = 'running';
+        await this.persistCommandTasks();
       }
-      task.state = 'running';
-      await this.persistCommandTasks();
       before = await this.captureSnapshot(root);
       let commandFailed = false;
       try {

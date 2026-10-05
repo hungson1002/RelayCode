@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.12
+- Full Access now runs workspace commands without approval prompts, including Git commit and push.
+- Updated ChatGPT Web command task state and tool instructions to match Full Access behavior.
+
 ## 2.0.11
 
 - Routed ChatGPT Web approval prompts into RelayCode Chat and restored pending approval cards after the webview reconnects.

@@ -34,6 +34,20 @@ describe('ChatGPT Web setup wizard', () => {
     expect(bridgeSource).not.toContain('private async showActivity()');
   });
 
+  it('offers a simple Claude Web connector URL flow without changing the ChatGPT tunnel', () => {
+    const extensionSource = readFileSync(resolve('src/extension.ts'), 'utf8');
+    const composerSource = readFileSync(resolve('src/webview/controller/composer.ts'), 'utf8');
+    const packageSource = readFileSync(resolve('package.json'), 'utf8');
+    expect(bridgeSource).toContain('public async manageClaudeWebBridge()');
+    expect(bridgeSource).toContain('Build Claude connector URL');
+    expect(bridgeSource).toContain('private claudeConnectorUrl(publicForwardedUrl: string, localMcpUrl: string): string');
+    expect(providerSource).toContain('public async manageClaudeWebBridge()');
+    expect(providerSource).toContain("if (command === '/claude')");
+    expect(extensionSource).toContain("nineRouter.manageClaudeWebBridge");
+    expect(composerSource).toContain("['/claude'");
+    expect(packageSource).toContain('"command": "nineRouter.manageClaudeWebBridge"');
+  });
+
   it('keeps the final ChatGPT step visible as an exact field-by-field checklist', () => {
     expect(source).toContain("'Tunnel đã kết nối · Còn 1 bước trong ChatGPT'");
     expect(source).toContain("'1. Mở Plugin → nhấn dấu + → Plugin mới.'");
