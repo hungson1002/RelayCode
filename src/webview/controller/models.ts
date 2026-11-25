@@ -30,6 +30,7 @@ function setMode(next, remember = false) {
     button.setAttribute('aria-selected', String(button.dataset.mode === mode));
   });
   updateComposerPlaceholder();
+  if (typeof renderStarterPrompts === 'function') renderStarterPrompts();
   const rememberedModel = composerPreferences.models?.[mode];
   if (rememberedModel && [...$('model').options].some((option) => option.value === rememberedModel)) {
     modelSelectionSource = 'manual';
@@ -402,7 +403,9 @@ function renderModelMenu(query = '') {
       $('model').dispatchEvent(new Event('change'));
       if (pendingToolFailureId) {
         vscode.postMessage({ type: 'resolveToolFailure', id: pendingToolFailureId, action: 'change-model', model: option.value });
-        document.querySelector('[data-tool-failure-id="' + pendingToolFailureId + '"]')?.remove();
+        document.querySelectorAll('[data-tool-failure-id]').forEach((card) => {
+          if (card.dataset.toolFailureId === pendingToolFailureId) card.remove();
+        });
         pendingToolFailureId = '';
       }
       $('modelMenu').classList.add('hidden');

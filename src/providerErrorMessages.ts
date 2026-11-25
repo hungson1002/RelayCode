@@ -1,10 +1,5 @@
 export function localizeProviderError(raw: string, language: 'vi' | 'en'): string {
   const compact = raw.replace(/\s+/g, ' ').trim();
-  if (/image_url|unknown variant.*image|vision|image input/i.test(compact)) {
-    return language === 'en'
-      ? 'Model does not support image input. Choose a Vision model or resend without the image.'
-      : 'Model không hỗ trợ xem ảnh. Hãy chọn model có Vision hoặc gửi lại yêu cầu không kèm ảnh.';
-  }
   if (/HTTP 404\b/i.test(compact) && /<!doctype html|<html[\s>]|<head[\s>]/i.test(compact)) {
     return language === 'en'
       ? 'Endpoint not found (HTTP 404). Check the provider Base URL and API path.'
@@ -19,16 +14,6 @@ export function localizeProviderError(raw: string, language: 'vi' | 'en'): strin
     return language === 'en'
       ? 'Could not reach the endpoint. Check the URL, network connection, and whether the provider is running.'
       : 'Không thể kết nối tới endpoint. Hãy kiểm tra URL, mạng và provider có đang chạy hay không.';
-  }
-  if (/INVALID_MODEL_ID|invalid model (?:id|identifier)|model (?:not found|not supported)/i.test(compact)) {
-    return language === 'en'
-      ? 'HTTP 400 · This model ID is invalid or is no longer available from the provider. Choose another model.'
-      : 'HTTP 400 · ID model không hợp lệ hoặc model không còn được provider cung cấp. Hãy chọn model khác.';
-  }
-  if (/returned no completion choices/i.test(compact)) {
-    return language === 'en'
-      ? 'The provider accepted the request but returned no chat response for this model.'
-      : 'Provider đã nhận request nhưng không trả về phản hồi chat cho model này.';
   }
   if (/aborted due to timeout|timed? ?out|timeout/i.test(compact)) {
     return language === 'en'
@@ -49,6 +34,21 @@ export function localizeProviderError(raw: string, language: 'vi' | 'en'): strin
     return language === 'en'
       ? 'The provider denied access to this model or account.'
       : 'Provider từ chối quyền truy cập model hoặc tài khoản này.';
+  }
+  if (/image_url|unknown variant.*image|image input|(?:not support|unsupported|cannot|no)\b[^.]{0,40}\b(?:vision|image)|\b(?:vision|image)\b[^.]{0,40}\b(?:not supported|unsupported)/i.test(compact)) {
+    return language === 'en'
+      ? 'Model does not support image input. Choose a Vision model or resend without the image.'
+      : 'Model không hỗ trợ xem ảnh. Hãy chọn model có Vision hoặc gửi lại yêu cầu không kèm ảnh.';
+  }
+  if (/INVALID_MODEL_ID|invalid model (?:id|identifier)|model (?:not found|not supported)/i.test(compact)) {
+    return language === 'en'
+      ? 'HTTP 400 · This model ID is invalid or is no longer available from the provider. Choose another model.'
+      : 'HTTP 400 · ID model không hợp lệ hoặc model không còn được provider cung cấp. Hãy chọn model khác.';
+  }
+  if (/returned no completion choices/i.test(compact)) {
+    return language === 'en'
+      ? 'The provider accepted the request but returned no chat response for this model.'
+      : 'Provider đã nhận request nhưng không trả về phản hồi chat cho model này.';
   }
   if (/<(?:!doctype|html|head|body)[\s>]/i.test(compact)) {
     const status = compact.match(/HTTP \d{3}/i)?.[0];

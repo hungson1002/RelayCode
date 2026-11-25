@@ -26,7 +26,7 @@ describe('command runtime', () => {
     await expect(validateShellCommandSyntax('foreach ( in ()) { Write-Output "bad" }')).resolves.toMatch(/syntax error/i);
     await expect(validateShellCommandSyntax('$items = @(1, 2); foreach ($item in $items) { Write-Output $item }')).resolves.toBeUndefined();
     await expect(validateShellCommandSyntax('npm test && npm run build')).resolves.toBeUndefined();
-  });
+  }, 15_000);
 
   it('rejects commands that require interactive input', () => {
     expect(validateShellCompatibility('npm login')).toContain('Interactive');

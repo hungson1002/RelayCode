@@ -78,6 +78,22 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
     setMode(data.mode || defaultMode);
     $('messages').replaceChildren();
     changeSummary = null;
+    detachedAssistantResponseActions = null;
+    assistantBody = null;
+    assistantRawText = '';
+    assistantStreamTextNode = null;
+    assistantMarkdownRenderedLength = 0;
+    assistantActivity = null;
+    pendingActivityStatus = '';
+    activitySteps = new Map();
+    lastChangeCount = 0;
+    lastPendingChangeCount = 0;
+    latestChangesState = null;
+    knownChangeSnapshots = new Map();
+    resolvedChangeSnapshots = new Map();
+    changesHidden = false;
+    $('changeTray').classList.add('hidden');
+    $('collapsedChanges').classList.add('hidden');
     if (data.sessionKind === 'chatgpt-web') {
       const hasTranscript = (data.turns || []).some((turn) => !turn.chatGptActivity);
       appendChatGptWebIntro(data.sessionTitle || 'ChatGPT Web', hasTranscript);
@@ -266,6 +282,15 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
     const percent = Math.min(100, Math.round(((data.used || 0) / Math.max(1, data.limit || 1)) * 100));
     meter.querySelector('i').style.width = percent + '%';
     meter.classList.toggle('compacted', Boolean(data.compacted));
+    if (typeof updateContextBar === 'function') updateContextBar(data.used, data.limit, data.compacted);
+  } else if (data.type === 'workspacePathSuggestions') {
+    applyWorkspacePathSuggestions(data);
+  } else if (data.type === 'restoreComposerPrompt') {
+    $('prompt').value = data.prompt || '';
+    resizePrompt();
+    updateSendState();
+    $('prompt').focus();
+    $('prompt').setSelectionRange($('prompt').value.length, $('prompt').value.length);
   } else if (data.type === 'chatGptWebActivity') {
     appendChatGptWebActivity(data.activity);
   } else if (data.type === 'notice') {
@@ -294,6 +319,10 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
   } else if (data.type === 'activeTurnState') {
     document.querySelectorAll('.recovery-card').forEach((card) => card.remove());
     turnStartedAt = data.startedAt || Date.now();
+    if (!assistantBody || !assistantBody.isConnected) {
+      assistantBody = appendMessage('assistant', '', false, turnStartedAt);
+      assistantBody.closest('.message')?.classList.add('streaming');
+    }
     if (data.status) setWorkingStatus(data.status);
     else if (!workingStatus) workingStatus = uiCopy('Đang tiếp tục tác vụ', 'Resuming the task');
     if (!workingLabel) startWorkingLabel();
@@ -366,7 +395,7 @@ export const CHAT_CONTROLLER_HOST_LIFECYCLE = String.raw`window.addEventListener
     modelHealthMode = '';
     modelHealthFilter = 'all';
     modelHealthCheckComplete = false;
-    $('checkModels').textContent = uiCopy('Kiá»ƒm tra model', 'Check models');
+    $('checkModels').textContent = uiCopy('Kiểm tra model', 'Check models');
     $('checkModels').classList.remove('checking');
     applyProfileUi(data.profile);
     const nextProvider = data.profile?.kind || '9router';

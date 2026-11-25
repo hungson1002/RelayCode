@@ -41,6 +41,14 @@ describe('requiresWorkspaceMutation', () => {
     expect(requiresWorkspaceMutation('Vẽ bảng trong giao diện hiện tại')).toBe(true);
     expect(requiresWorkspaceMutation('Viết mô tả vào file README')).toBe(true);
   });
+
+  it('does not treat read-only project audits, attached files, or substring collisions as mutations', () => {
+    expect(requiresWorkspaceMutation('đọc toàn bộ dự án và kiểm tra lỗi, không sửa gì hết')).toBe(false);
+    expect(requiresWorkspaceMutation('đọc toàn bộ dự án và kiểm tra lỗi')).toBe(false);
+    expect(requiresWorkspaceMutation('What is the email address format in this config?')).toBe(false);
+    expect(requiresWorkspaceMutation('Explain the prefix function and editor layout')).toBe(false);
+    expect(requiresWorkspaceMutation('Hãy đọc file này và giải thích\n\n<file path="src/app.ts">\n// TODO: fix and delete old create helper\n</file>')).toBe(false);
+  });
 });
 
 describe('isGitOnlyRequest', () => {
@@ -52,5 +60,9 @@ describe('isGitOnlyRequest', () => {
   it('keeps validation for implementation requests that also mention Git', () => {
     expect(isGitOnlyRequest('Sửa code, chạy test rồi commit')).toBe(false);
     expect(isGitOnlyRequest('Fix the bug and push the result')).toBe(false);
+  });
+
+  it('does not treat UI add/badge requests as git-only commands', () => {
+    expect(isGitOnlyRequest('Add a status badge component to the header')).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 
 /**
@@ -28,15 +28,28 @@ export class WorkspaceSandbox {
   }
 
   private realPathIsInside(target: string): boolean {
-    if (!existsSync(this.root)) return pathIsInside(this.root, target);
-    const realRoot = realpathSync.native(this.root);
-    let existing = target;
-    while (!existsSync(existing)) {
-      const parent = dirname(existing);
-      if (parent === existing) return false;
-      existing = parent;
+    try {
+      if (!existsSync(this.root)) return pathIsInside(this.root, target);
+      const realRoot = realpathSync.native(this.root);
+      let existing = target;
+      while (true) {
+        try {
+          const stat = lstatSync(existing);
+          if (stat.isSymbolicLink()) {
+            // Never allow dangling or escaping symlinks/junctions.
+            if (!existsSync(existing)) return false;
+            return pathIsInside(realRoot, realpathSync.native(existing));
+          }
+          return pathIsInside(realRoot, realpathSync.native(existing));
+        } catch {
+          const parent = dirname(existing);
+          if (parent === existing) return false;
+          existing = parent;
+        }
+      }
+    } catch {
+      return false;
     }
-    return pathIsInside(realRoot, realpathSync.native(existing));
   }
 }
 

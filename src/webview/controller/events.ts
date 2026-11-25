@@ -36,9 +36,20 @@ $('historyToggle').addEventListener('click', (event) => {
   if (opening) {
     vscode.postMessage({ type: 'showAgentRecovery' });
     historyExpanded = false;
+    historySearchQuery = '';
+    $('historySearch').value = '';
     renderHistory(allSessions);
     openFloatingSurface('historyPanel');
+    requestAnimationFrame(() => $('historySearch').focus());
   } else $('historyPanel').classList.add('hidden');
+});
+$('historySearch').addEventListener('input', () => {
+  historySearchQuery = $('historySearch').value || '';
+  renderHistory(allSessions);
+});
+$('contextCompactBtn').addEventListener('click', () => {
+  if (running) return;
+  vscode.postMessage({ type: 'send', prompt: '/compact', mode, model: $('model').value, includeSelection: false });
 });
 $('historyPanel').addEventListener('click', (event) => event.stopPropagation());
 $('closeHistory').addEventListener('click', () => { historyExpanded = false; $('historyPanel').classList.add('hidden'); });
@@ -66,13 +77,20 @@ $('mcpAuth').addEventListener('change', updateMcpForm);
 $('saveMcp').addEventListener('click', () => {
   const transport = $('mcpTransport').value;
   let env = {};
-  try { env = $('mcpEnv').value.trim() ? JSON.parse($('mcpEnv').value) : {}; } catch { $('diagnosticsResult').textContent = uiCopy('Env MCP phải là JSON hợp lệ.', 'MCP environment values must be valid JSON.'); $('diagnosticsResult').className = 'diagnostics-result failure'; return; }
+  try { env = $('mcpEnv').value.trim() ? JSON.parse($('mcpEnv').value) : {}; } catch {
+    const errorMessage = uiCopy('Env MCP phải là JSON hợp lệ.', 'MCP environment values must be valid JSON.');
+    renderMcpOutcome({ message: errorMessage, tone: 'danger' });
+    return;
+  }
   vscode.postMessage({ type: 'saveMcpServer', token: $('mcpToken').value || undefined, server: { id: '', name: $('mcpName').value, transport, authMode: transport === 'http' ? $('mcpAuth').value : undefined, enabled: true, command: $('mcpCommand').value, args: $('mcpArgs').value.split(/\s+/).filter(Boolean), url: $('mcpUrl').value }, env });
 });
 updateMcpForm();
 $('zoomOut').addEventListener('click', () => setLightboxZoom(lightboxZoom - 0.25));
 $('zoomIn').addEventListener('click', () => setLightboxZoom(lightboxZoom + 0.25));
 $('resetZoom').addEventListener('click', resetLightboxView);
+$('openMediaExternal').addEventListener('click', () => {
+  if (currentLightboxMediaPath) vscode.postMessage({ type: 'openMediaExternal', path: currentLightboxMediaPath });
+});
 $('closeImage').addEventListener('click', closeImageLightbox);
 $('imageLightbox').addEventListener('click', (event) => { if (event.target === $('imageLightbox')) closeImageLightbox(); });
 $('lightboxViewport').addEventListener('pointerdown', (event) => {
@@ -102,6 +120,7 @@ $('lightboxViewport').addEventListener('wheel', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !$('imageLightbox').classList.contains('hidden')) {
     event.preventDefault();
+    event.stopImmediatePropagation();
     closeImageLightbox();
   }
 });
@@ -116,6 +135,8 @@ $('attach').addEventListener('click', (event) => {
     renderAddMenu();
     $('addMenu').classList.remove('hidden');
     $('attach').classList.add('active');
+    positionComposerPopup($('addMenu'));
+    requestAnimationFrame(() => positionComposerPopup($('addMenu')));
   } else {
     closeAddMenu();
   }
@@ -362,8 +383,26 @@ $('permissionMode').addEventListener('click', (e) => {
   $('permissionMode').setAttribute('aria-expanded', String(!isOpen));
   if (!isOpen) requestAnimationFrame(positionPermissionMenu);
 });
+function positionGoalRail() {
+  const rail = $('goalRail');
+  if (!rail || rail.classList.contains('hidden')) return;
+  rail.style.setProperty('--goal-rail-shift', '0px');
+  const rect = rail.getBoundingClientRect();
+  const edge = 8;
+  const viewportWidth = document.documentElement.clientWidth;
+  const shift = rect.left < edge
+    ? edge - rect.left
+    : rect.right > viewportWidth - edge
+      ? viewportWidth - edge - rect.right
+      : 0;
+  rail.style.setProperty('--goal-rail-shift', Math.round(shift) + 'px');
+}
 window.addEventListener('resize', () => {
+  if (typeof updateNarrowGuardBanner === 'function') updateNarrowGuardBanner();
   if (!$('permMenu').classList.contains('hidden')) positionPermissionMenu();
+  if (!$('goalRail').classList.contains('hidden')) positionGoalRail();
+  positionComposerPopup($('composerMenu'));
+  positionComposerPopup($('addMenu'));
   scheduleSettingsDropdownPosition();
 });
 $('configScroll').addEventListener('scroll', scheduleSettingsDropdownPosition, { passive: true });
@@ -380,16 +419,19 @@ document.querySelectorAll('#permMenu .perm-opt').forEach(opt => {
 $('configPanel').addEventListener('click', (event) => {
   event.stopPropagation();
   if (!$('providerPicker').contains(event.target)) {
+    if (typeof $('providerMenu').hidePopover === 'function' && $('providerMenu').matches(':popover-open')) $('providerMenu').hidePopover();
     $('providerMenu').classList.add('hidden');
     $('providerPicker').classList.remove('open');
     $('providerTrigger').setAttribute('aria-expanded', 'false');
   }
   if (!$('languagePicker').contains(event.target)) {
+    if (typeof $('languageMenu').hidePopover === 'function' && $('languageMenu').matches(':popover-open')) $('languageMenu').hidePopover();
     $('languageMenu').classList.add('hidden');
     $('languagePicker').classList.remove('open');
     $('languageTrigger').setAttribute('aria-expanded', 'false');
   }
   if (!$('profilePicker').contains(event.target)) {
+    if (typeof $('profileMenu').hidePopover === 'function' && $('profileMenu').matches(':popover-open')) $('profileMenu').hidePopover();
     $('profileMenu').classList.add('hidden');
     $('profilePicker').classList.remove('open');
     $('profileTrigger').setAttribute('aria-expanded', 'false');
@@ -471,6 +513,7 @@ $('goalDockTrigger').addEventListener('click', (event) => {
   $('goalRail').classList.toggle('hidden', !open);
   $('goalDock').classList.toggle('open', open);
   $('goalDockTrigger').setAttribute('aria-expanded', String(open));
+  if (open) requestAnimationFrame(positionGoalRail);
 });
 $('goalRail').addEventListener('click', (event) => event.stopPropagation());
 $('goalPause').addEventListener('click', () => {
@@ -561,15 +604,60 @@ $('prompt').addEventListener('input', () => {
 });
 $('prompt').addEventListener('focus', () => document.querySelector('.composer-shell')?.classList.add('prompt-focused'));
 $('prompt').addEventListener('blur', () => document.querySelector('.composer-shell')?.classList.remove('prompt-focused'));
-$('prompt').addEventListener('paste', (event) => {
-  const images = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'));
-  if (images.length) {
-    event.preventDefault();
-    for (const file of images) {
-      const reader = new FileReader();
-      reader.addEventListener('load', () => vscode.postMessage({ type: 'pasteImage', name: file.name || 'clipboard-image', mimeType: file.type, dataUrl: String(reader.result || '') }));
-      reader.readAsDataURL(file);
+function attachDroppedOrPastedFiles(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length) return false;
+  const localPaths = [];
+  const dataFiles = [];
+  for (const file of files) {
+    if (typeof file.path === 'string' && file.path.trim()) {
+      localPaths.push(file.path.trim());
+    } else if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
+      dataFiles.push(file);
     }
+  }
+  if (localPaths.length) {
+    vscode.postMessage({ type: 'attachLocalPaths', paths: localPaths });
+  }
+  for (const file of dataFiles) {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => vscode.postMessage({ type: 'pasteImage', name: file.name || 'clipboard-media', mimeType: file.type, dataUrl: String(reader.result || '') }));
+    reader.readAsDataURL(file);
+  }
+  return localPaths.length > 0 || dataFiles.length > 0;
+}
+let composerDragDepth = 0;
+const composerShell = document.querySelector('.composer-shell');
+composerShell?.addEventListener('dragenter', (event) => {
+  if (!event.dataTransfer?.types?.includes('Files')) return;
+  event.preventDefault();
+  composerDragDepth++;
+  composerShell.classList.add('drag-over');
+  $('composerDropzone').classList.remove('hidden');
+});
+composerShell?.addEventListener('dragover', (event) => {
+  if (!event.dataTransfer?.types?.includes('Files')) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+});
+composerShell?.addEventListener('dragleave', () => {
+  composerDragDepth = Math.max(0, composerDragDepth - 1);
+  if (composerDragDepth === 0) {
+    composerShell.classList.remove('drag-over');
+    $('composerDropzone').classList.add('hidden');
+  }
+});
+composerShell?.addEventListener('drop', (event) => {
+  event.preventDefault();
+  composerDragDepth = 0;
+  composerShell.classList.remove('drag-over');
+  $('composerDropzone').classList.add('hidden');
+  attachDroppedOrPastedFiles(event.dataTransfer?.files);
+});
+$('prompt').addEventListener('paste', (event) => {
+  const mediaFiles = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/') || (typeof file.path === 'string' && file.path.trim()));
+  if (mediaFiles.length && attachDroppedOrPastedFiles(mediaFiles)) {
+    event.preventDefault();
     return;
   }
   const pasted = event.clipboardData?.getData('text/plain') || '';

@@ -63,7 +63,10 @@ describe('workspace command managers', () => {
     mocks.showInputBox
       .mockResolvedValueOnce('Run the tests')
       .mockResolvedValueOnce('30');
-    const state: unknown[] = [];
+    let state: unknown[] = [];
+    mocks.update.mockImplementationOnce(async (_key: string, value: unknown[]) => {
+      state = value;
+    });
     const context = {
       workspaceState: {
         get: vi.fn(() => state),

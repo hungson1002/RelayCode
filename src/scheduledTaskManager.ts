@@ -33,11 +33,20 @@ export class ScheduledTaskManager implements vscode.Disposable {
     if (choice.action === 'add') {
       const prompt = await vscode.window.showInputBox({ title: 'Scheduled Agent task', prompt: 'Agent sẽ thực hiện yêu cầu này trong workspace', placeHolder: 'Ví dụ: chạy test và báo lỗi mới', validateInput: (value) => value.trim() ? undefined : 'Nhập yêu cầu' });
       if (!prompt) return undefined;
-      const intervalText = await vscode.window.showInputBox({ title: 'Run interval', prompt: 'Số phút giữa hai lần chạy (tối thiểu 15)', value: '60', validateInput: (value) => Number(value) >= 15 ? undefined : 'Nhập số từ 15 trở lên' });
+      const intervalText = await vscode.window.showInputBox({
+        title: 'Run interval',
+        prompt: 'Số phút giữa hai lần chạy (tối thiểu 15)',
+        value: '60',
+        validateInput: (value) => {
+          const parsed = Number(value);
+          return Number.isFinite(parsed) && parsed >= 15 && parsed <= 43_200 ? undefined : 'Nhập số từ 15 đến 43200';
+        }
+      });
       if (!intervalText) return undefined;
-      const intervalMinutes = Math.max(15, Number(intervalText));
-      tasks.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, prompt: prompt.trim(), intervalMinutes, enabled: true, nextRunAt: Date.now() + intervalMinutes * 60_000 });
-      await this.context.workspaceState.update(STATE, tasks);
+      const intervalMinutes = Math.min(43_200, Math.max(15, Math.floor(Number(intervalText))));
+      const latestTasks = this.tasks();
+      latestTasks.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, prompt: prompt.trim(), intervalMinutes, enabled: true, nextRunAt: Date.now() + intervalMinutes * 60_000 });
+      await this.context.workspaceState.update(STATE, latestTasks);
       return `Đã tạo tác vụ định kỳ mỗi ${intervalMinutes} phút: ${prompt.trim()}`;
     }
     const task = tasks.find((item) => item.id === choice.action);
@@ -52,11 +61,15 @@ export class ScheduledTaskManager implements vscode.Disposable {
       // The Agent run writes its own complete user/assistant turn to history.
       return undefined;
     }
-    if (action?.action === 'toggle') task.enabled = !task.enabled;
-    if (action?.action === 'delete') tasks.splice(tasks.indexOf(task), 1);
-    if (action?.action && action.action !== 'run') await this.context.workspaceState.update(STATE, tasks);
-    if (action?.action === 'toggle') return `${task.enabled ? 'Đã bật' : 'Đã tắt'} tác vụ định kỳ: ${task.prompt}`;
-    if (action?.action === 'delete') return `Đã xóa tác vụ định kỳ: ${task.prompt}`;
+    const freshTasks = this.tasks();
+    const targetIndex = freshTasks.findIndex((item) => item.id === task.id);
+    if (targetIndex < 0) return undefined;
+    const freshTask = freshTasks[targetIndex]!;
+    if (action?.action === 'toggle') freshTask.enabled = !freshTask.enabled;
+    if (action?.action === 'delete') freshTasks.splice(targetIndex, 1);
+    if (action?.action && action.action !== 'run') await this.context.workspaceState.update(STATE, freshTasks);
+    if (action?.action === 'toggle') return `${freshTask.enabled ? 'Đã bật' : 'Đã tắt'} tác vụ định kỳ: ${freshTask.prompt}`;
+    if (action?.action === 'delete') return `Đã xóa tác vụ định kỳ: ${freshTask.prompt}`;
     return undefined;
   }
 
@@ -65,20 +78,22 @@ export class ScheduledTaskManager implements vscode.Disposable {
   }
 
   private tasks(): ScheduledAgentTask[] {
-    return this.context.workspaceState.get<ScheduledAgentTask[]>(STATE, []);
+    return this.context.workspaceState.get<ScheduledAgentTask[]>(STATE, []).map((task) => ({ ...task }));
   }
 
   private async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
     try {
-    const now = Date.now();
-    const tasks = this.tasks();
-    const due = tasks.find((task) => task.enabled && task.nextRunAt <= now);
-    if (!due) return;
-    due.nextRunAt = now + due.intervalMinutes * 60_000;
-    await this.context.workspaceState.update(STATE, tasks);
-    await this.run(due);
+      const now = Date.now();
+      const tasks = this.tasks();
+      const due = tasks
+        .filter((task) => task.enabled && task.nextRunAt <= now)
+        .sort((left, right) => left.nextRunAt - right.nextRunAt)[0];
+      if (!due) return;
+      due.nextRunAt = now + due.intervalMinutes * 60_000;
+      await this.context.workspaceState.update(STATE, tasks);
+      await this.run(due);
     } finally {
       this.ticking = false;
     }

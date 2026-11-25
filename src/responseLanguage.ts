@@ -3,14 +3,18 @@ export type ResponseLanguage = 'vi' | 'en' | 'same';
 const VIETNAMESE_WORDS = [
   'tôi', 'bạn', 'mình', 'chúng', 'không', 'với', 'sao', 'hãy', 'giúp', 'làm', 'sửa',
   'cho', 'này', 'của', 'và', 'được', 'một', 'như', 'nào', 'có', 'đang', 'trong', 'bằng',
-  'tiếng', 'xin', 'chào', 'về', 'thế', 'này'
+  'tiếng', 'xin', 'chào', 'về', 'thế'
 ];
 
-const ENGLISH_WORDS = [
-  'the', 'and', 'you', 'please', 'what', 'how', 'can', 'help', 'fix', 'create', 'explain',
-  'why', 'is', 'are', 'does', 'do', 'with', 'for', 'this', 'that', 'from', 'in', 'on',
-  'to', 'a', 'an', 'my', 'me', 'thanks', 'thank', 'hello', 'hi', 'show', 'make', 'remove',
-  'add', 'update', 'change', 'write', 'run', 'check'
+const ENGLISH_STRONG_WORDS = [
+  'the', 'and', 'you', 'please', 'what', 'how', 'can', 'help', 'explain',
+  'why', 'is', 'are', 'does', 'with', 'for', 'this', 'that', 'from',
+  'my', 'thanks', 'thank', 'hello', 'show', 'make', 'write', 'should', 'could', 'would'
+];
+
+const ENGLISH_SOFT_WORDS = [
+  'do', 'in', 'on', 'to', 'a', 'an', 'me', 'hi', 'fix', 'create', 'remove',
+  'add', 'update', 'change', 'run', 'check'
 ];
 
 function wordCount(text: string, words: string[]): number {
@@ -28,11 +32,16 @@ export function detectResponseLanguage(prompt: string, fallback: 'vi' | 'en' = '
   if (!text) return fallback;
 
   const vietnamese = wordCount(text, VIETNAMESE_WORDS);
-  const english = wordCount(text, ENGLISH_WORDS);
+  const englishStrong = wordCount(text, ENGLISH_STRONG_WORDS);
+  const englishSoft = wordCount(text, ENGLISH_SOFT_WORDS);
+  const english = englishStrong + englishSoft;
   const hasVietnameseDiacritics = /[ăâđêôơưĂÂĐÊÔƠƯà-ỹÀ-Ỹ]/u.test(text);
+  const hasNonLatinScript = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff\u0e00-\u0e7f]/u.test(text);
 
   if (hasVietnameseDiacritics || vietnamese >= 2 || (vietnamese >= 1 && english === 0)) return 'vi';
-  if (english >= 1) return 'en';
+  if (hasNonLatinScript) return 'same';
+  if (englishStrong >= 2 || (englishStrong >= 1 && english >= 2)) return 'en';
+  if (englishStrong >= 1 && text.split(/\s+/).length <= 4) return 'en';
   return 'same';
 }
 

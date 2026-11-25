@@ -71,9 +71,10 @@ export class LocalRuntimeManager {
       onProgress(`Đang khởi động ${label} local server…`);
       if (kind === 'ollama') {
         const child = spawn('ollama', ['serve'], { detached: true, windowsHide: true, stdio: 'ignore' });
+        child.on('error', () => undefined);
         child.unref();
       } else {
-        await execFileAsync('lms', ['server', 'start'], { windowsHide: true, timeout: 30_000 }).catch(() => undefined);
+        await execFileAsync('lms', ['server', 'start'], { windowsHide: true, shell: process.platform === 'win32', timeout: 30_000 }).catch(() => undefined);
       }
       for (let attempt = 0; attempt < 10; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 700));
@@ -100,12 +101,13 @@ export class LocalRuntimeManager {
             placeHolder: kind === 'ollama' ? 'Ví dụ: qwen2.5-coder:7b' : 'Ví dụ: openai/gpt-oss-20b',
             ignoreFocusOut: true
           });
-      if (model?.trim()) {
-        onProgress(`Đang tải ${model.trim()}…`);
-        if (kind === 'ollama') await execFileAsync('ollama', ['pull', model.trim()], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+      const modelName = model?.trim() ?? '';
+      if (modelName && !modelName.startsWith('-')) {
+        onProgress(`Đang tải ${modelName}…`);
+        if (kind === 'ollama') await execFileAsync('ollama', ['pull', modelName], { windowsHide: true, timeout: 600_000, maxBuffer: 8 * 1024 * 1024 });
         else {
-          await execFileAsync('lms', ['get', model.trim()], { windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
-          await execFileAsync('lms', ['load', model.trim()], { windowsHide: true, timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+          await execFileAsync('lms', ['get', modelName], { windowsHide: true, shell: process.platform === 'win32', timeout: 600_000, maxBuffer: 8 * 1024 * 1024 });
+          await execFileAsync('lms', ['load', modelName], { windowsHide: true, shell: process.platform === 'win32', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
         }
       }
     }
@@ -115,7 +117,7 @@ export class LocalRuntimeManager {
 
 async function commandWorks(command: string, args: string[]): Promise<boolean> {
   try {
-    await execFileAsync(command, args, { windowsHide: true, timeout: 5_000 });
+    await execFileAsync(command, args, { windowsHide: true, shell: process.platform === 'win32', timeout: 5_000 });
     return true;
   } catch {
     return false;

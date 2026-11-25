@@ -79,7 +79,7 @@ export function renderMcpOAuthResult(options: McpOAuthResultOptions): string {
       <div class="content">
         <div class="status"><span class="status-mark">${options.ok ? '✓' : '!'}</span><span>${escapeHtml(copy.eyebrow)}</span></div>
         <h1>${escapeHtml(copy.title)}</h1>
-        <p class="message">${copy.message.replace('{name}', `<span class="service-name">${name}</span>`)}</p>
+        <p class="message">${copy.message.replace('{name}', () => `<span class="service-name">${name}</span>`)}</p>
         <div class="next">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           <span>${escapeHtml(copy.next)}</span>

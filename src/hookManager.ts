@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { runShellCommand } from './commandRuntime';
+import { validateCommandPolicy } from './safetyPolicy';
 
 type HookStage = 'beforeAgent' | 'afterAgent';
 
@@ -14,12 +15,21 @@ export class HookManager {
     workspaceRoot: string,
     requestApproval: (description: string) => Promise<boolean>,
     onOutput: (chunk: string) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    commandPolicy: { allow: string[]; deny: string[] } = { allow: [], deny: [] }
   ): Promise<void> {
+    if (signal?.aborted) return;
     const configuration = await this.load(workspaceRoot);
     const commands = configuration[stage]?.filter((command) => typeof command === 'string' && command.trim()).slice(0, 10) ?? [];
     for (const command of commands) {
-      if (!await requestApproval(`Hook ${stage} muốn chạy: ${command}`)) continue;
+      if (signal?.aborted) return;
+      const policyError = validateCommandPolicy(command, commandPolicy);
+      if (policyError) {
+        onOutput(`[hook:${stage}] blocked by safety policy: ${policyError}\n`);
+        continue;
+      }
+      const approved = await waitForSignal(requestApproval(`Hook ${stage} muốn chạy: ${command}`), signal);
+      if (!approved || signal?.aborted) continue;
       await runShellCommand({ command, cwd: workspaceRoot, timeoutMs: 120_000 }, (event) => onOutput(event.chunk), signal);
     }
   }
@@ -49,4 +59,17 @@ export class HookManager {
     if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) throw new Error('Mỗi hook phải là một mảng command string.');
     return value;
   }
+}
+
+function waitForSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T | undefined> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(undefined);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', onAbort); reject(error); }
+    );
+  });
 }

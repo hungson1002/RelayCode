@@ -31,6 +31,7 @@ let lightboxDragging = false;
 let lightboxPointerId = null;
 let lightboxDragOffsetX = 0;
 let lightboxDragOffsetY = 0;
+let lightboxReturnFocus = null;
 
 function clampLightboxZoom(value) {
   return Math.min(4, Math.max(0.5, Math.round(value * 4) / 4));
@@ -65,9 +66,21 @@ function setLightboxZoom(value) {
 }
 
 function openImage(source) {
-  $('lightboxImage').src = source;
+  lightboxReturnFocus = document.activeElement;
+  currentLightboxMediaPath = '';
+  const lightbox = $('imageLightbox');
+  const video = $('lightboxVideo');
+  const image = $('lightboxImage');
+  video.pause();
+  video.removeAttribute('src');
+  video.classList.add('hidden');
+  $('lightboxMediaBar').classList.add('hidden');
+  lightbox.classList.remove('is-video');
+  lightbox.setAttribute('aria-label', uiCopy('Xem ảnh', 'Image viewer'));
+  image.classList.remove('hidden');
+  image.src = source;
   resetLightboxView();
-  $('imageLightbox').classList.remove('hidden');
+  lightbox.classList.remove('hidden');
   requestAnimationFrame(() => $('zoomIn').focus());
 }
 
@@ -82,8 +95,18 @@ function stopLightboxDrag() {
 
 function closeImageLightbox() {
   stopLightboxDrag();
+  const video = $('lightboxVideo');
+  video.pause();
+  video.removeAttribute('src');
+  video.classList.add('hidden');
+  $('lightboxMediaBar').classList.add('hidden');
+  $('lightboxImage').classList.remove('hidden');
+  $('imageLightbox').classList.remove('is-video');
   $('imageLightbox').classList.add('hidden');
+  currentLightboxMediaPath = '';
   resetLightboxView();
+  if (lightboxReturnFocus?.isConnected) lightboxReturnFocus.focus();
+  lightboxReturnFocus = null;
 }
 
 function createUserAttachmentLabel(name) {
@@ -97,6 +120,10 @@ function appendMessageAttachments(item, attachments) {
   if (!attachments?.length) return;
   const gallery = document.createElement('div'); gallery.className = 'user-attachments';
   for (const attachment of attachments) {
+    if (attachment.kind === 'video' || attachment.videoUrl) {
+      gallery.append(createVideoAttachmentNode(attachment, { compact: false }));
+      continue;
+    }
     const initialPreview = attachment.preview || attachment.modelPreview;
     if (initialPreview) {
       const img = document.createElement('img'); img.src = initialPreview; img.alt = attachment.name;
@@ -142,10 +169,11 @@ function renderHistory(sessions = []) {
     $('viewAllHistory').classList.add('hidden');
     return;
   }
-  const visible = historyExpanded ? sessions : sessions.slice(0, 5);
+  const filteredSessions = typeof filteredHistorySessions === 'function' ? filteredHistorySessions(sessions) : sessions;
+  const visible = historyExpanded || historySearchQuery ? filteredSessions : filteredSessions.slice(0, 5);
   for (const session of visible) {
     const row = document.createElement('div'); row.className = 'history-item-row';
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'history-item' + (session.kind === 'chatgpt-web' ? ' chatgpt-web-history-item' : '');
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'history-item' + (session.kind === 'chatgpt-web' ? ' chatgpt-web-history-item' : '') + (session.pinned ? ' is-pinned' : '');
     const title = document.createElement('span');
     if (session.kind === 'chatgpt-web') {
       title.innerHTML = '<i aria-hidden="true">' + uiIcon('globe') + '</i><b></b>';
@@ -156,13 +184,10 @@ function renderHistory(sessions = []) {
     const time = document.createElement('time'); time.dateTime = updatedAt.toISOString(); time.textContent = updatedAt.toLocaleString(undefined, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     button.append(title, time);
     button.addEventListener('click', () => { $('historyPanel').classList.add('hidden'); vscode.postMessage({ type: 'loadSession', id: session.id }); });
-    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'history-delete'; remove.setAttribute('aria-label', uiCopy('Xóa cuộc trò chuyện', 'Delete conversation'));
-    remove.innerHTML = uiIcon('trash');
-    remove.addEventListener('click', (event) => { event.stopPropagation(); vscode.postMessage({ type: 'deleteSession', id: session.id }); });
-    row.append(button, remove);
+    row.append(button, ...createHistoryActionButtons(session));
     list.append(row);
   }
-  $('viewAllHistory').classList.toggle('hidden', historyExpanded || sessions.length <= 5);
+  $('viewAllHistory').classList.toggle('hidden', historyExpanded || Boolean(historySearchQuery) || filteredSessions.length <= 5);
 }
 
 function messageActionIcon(kind) {
@@ -259,9 +284,11 @@ async function copyMessageText(button, content) {
   }
   button.classList.add('copied');
   button.setAttribute('aria-label', uiCopy('Đã sao chép', 'Copied'));
+  if (typeof refreshFloatingHint === 'function') refreshFloatingHint(button);
   setTimeout(() => {
     button.classList.remove('copied');
     button.setAttribute('aria-label', uiCopy('Sao chép', 'Copy'));
+    if (typeof refreshFloatingHint === 'function') refreshFloatingHint(button);
   }, 1200);
 }
 
@@ -469,7 +496,7 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
     edit.setAttribute('aria-label', uiCopy('Chỉnh sửa', 'Edit'));
     edit.innerHTML = messageActionIcon('edit');
     edit.addEventListener('click', () => beginMessageEdit(item, body, content, turnIndex));
-    actions.append(edit);
+    actions.append(edit, createRollbackMessageButton(turnIndex));
   }
   if (role === 'assistant') {
     detachedAssistantResponseActions = null;
@@ -484,7 +511,6 @@ function appendMessage(role, content, error = false, timestamp = Date.now(), att
     responseActions.append(copy, expand, label);
     item.append(body, responseActions);
   } else {
-    actions.append(copy);
     meta.append(label, actions);
     item.append(body, meta);
   }
@@ -548,31 +574,46 @@ function appendTurnChangeSummary(item, data) {
   header.querySelector('.edit-history-stats').innerHTML = '<b class="diff-add">+' + added + '</b><b class="diff-remove">-' + removed + '</b>';
   const preview = document.createElement('div');
   preview.className = 'activity-history-details edit-history-details';
-  for (const change of changes) {
-    const entry = document.createElement('details');
-    entry.className = 'edited-file-entry turn-change-file';
-    entry.dataset.changeId = change.id;
-    const entrySummary = document.createElement('summary');
-    entrySummary.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + Number(change.added || 0) + '</b><b class="diff-remove">-' + Number(change.removed || 0) + '</b></small><i aria-hidden="true">' + uiIcon('caretRight') + '</i>';
-    const inline = document.createElement('div');
-    inline.className = 'edited-file-preview loading';
-    inline.textContent = activityCopy('Mở để tải bản xem trước…', 'Open to load preview…');
-    const openDiff = document.createElement('button');
-    openDiff.type = 'button';
-    openDiff.className = 'edited-file-open';
-    openDiff.textContent = activityCopy('Mở diff đầy đủ', 'Open full diff');
-    openDiff.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
-    entry.addEventListener('toggle', () => {
-      entrySummary.querySelector('i').innerHTML = uiIcon(entry.open ? 'caretDown' : 'caretRight');
-      if (entry.open && !entry.dataset.previewRequested) {
-        entry.dataset.previewRequested = 'true';
-        inline.textContent = activityCopy('Đang tải diff…', 'Loading diff…');
-        vscode.postMessage({ type: 'previewChange', id: change.id });
-      }
-    });
-    entry.append(entrySummary, inline, openDiff);
-    preview.append(entry);
-  }
+  let renderedTurnChanges = 0;
+  const renderTurnChangeBatch = () => {
+    preview.querySelector('.change-summary-overflow')?.remove();
+    const batch = changes.slice(renderedTurnChanges, renderedTurnChanges + 60);
+    for (const change of batch) {
+      const entry = document.createElement('details');
+      entry.className = 'edited-file-entry turn-change-file';
+      entry.dataset.changeId = change.id;
+      const entrySummary = document.createElement('summary');
+      entrySummary.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + Number(change.added || 0) + '</b><b class="diff-remove">-' + Number(change.removed || 0) + '</b></small><i aria-hidden="true">' + uiIcon('caretRight') + '</i>';
+      const inline = document.createElement('div');
+      inline.className = 'edited-file-preview loading';
+      inline.textContent = activityCopy('Mở để tải bản xem trước…', 'Open to load preview…');
+      const openDiff = document.createElement('button');
+      openDiff.type = 'button';
+      openDiff.className = 'edited-file-open';
+      openDiff.textContent = activityCopy('Mở diff đầy đủ', 'Open full diff');
+      openDiff.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
+      entry.addEventListener('toggle', () => {
+        entrySummary.querySelector('i').innerHTML = uiIcon(entry.open ? 'caretDown' : 'caretRight');
+        if (entry.open && !entry.dataset.previewRequested) {
+          entry.dataset.previewRequested = 'true';
+          inline.textContent = activityCopy('Đang tải diff…', 'Loading diff…');
+          vscode.postMessage({ type: 'previewChange', id: change.id });
+        }
+      });
+      entry.append(entrySummary, inline, openDiff);
+      preview.append(entry);
+    }
+    renderedTurnChanges += batch.length;
+    if (renderedTurnChanges < changes.length) {
+      const overflow = document.createElement('button');
+      overflow.type = 'button';
+      overflow.className = 'change-summary-overflow';
+      overflow.textContent = uiCopy('Hiện thêm ', 'Show ') + Math.min(60, changes.length - renderedTurnChanges) + uiCopy(' file', ' files');
+      overflow.addEventListener('click', renderTurnChangeBatch);
+      preview.append(overflow);
+    }
+  };
+  renderTurnChangeBatch();
   card.addEventListener('toggle', () => {
     header.querySelector('.activity-history-caret').innerHTML = uiIcon(card.open ? 'caretDown' : 'caretRight');
   });

@@ -120,6 +120,20 @@ describe('MCP schema compatibility', () => {
     });
     expect(validator({ anything: 'returned by MCP' })).toMatchObject({ valid: true });
   });
+
+  it('preserves tool parameters literally named definitions or $defs inside properties', () => {
+    const normalized = normalizeMcpInputSchema({
+      type: 'object',
+      properties: {
+        definitions: { type: 'array', items: { type: 'string' } },
+        $defs: { type: 'string' }
+      },
+      required: ['definitions']
+    });
+    expect(normalized.properties).toHaveProperty('definitions');
+    expect(normalized.properties).toHaveProperty('$defs');
+    expect(normalized.required).toEqual(['definitions']);
+  });
 });
 
 describe('MCP catalog compatibility', () => {

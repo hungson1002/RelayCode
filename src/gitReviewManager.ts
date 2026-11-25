@@ -122,22 +122,55 @@ export class GitReviewManager {
   }
 
   private async unstaged(root: string): Promise<string> {
-    const tracked = await this.git(root, ['diff', '--no-ext-diff', '--binary']);
-    const status = await this.git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-    const untracked = status.split('\0').filter((entry) => entry.startsWith('?? ')).map((entry) => entry.slice(3));
+    const scope = this.workspaceScope(root);
+    const pathspec = scope === '.' ? [] : ['--', scope];
+    const tracked = await this.git(root, ['diff', '--no-ext-diff', '--binary', ...pathspec]);
+    const status = await this.git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...pathspec]);
+    const ignoredDirs = new Set([
+      '.git', 'node_modules', 'dist', 'out', 'build', 'coverage', '.next', '.nuxt',
+      'target', '.venv', 'venv', '__pycache__', '.cache', '.turbo', '.playwright-mcp', 'old-vsix', 'vendor', 'bin', 'obj'
+    ]);
+    const untracked = status
+      .split('\0')
+      .filter((entry) => entry.startsWith('?? '))
+      .map((entry) => entry.slice(3))
+      .filter((relPath) => !relPath.replace(/\\/g, '/').split('/').slice(0, -1).some((part) => ignoredDirs.has(part.toLowerCase())));
     const additions: string[] = [];
+    const maxUntrackedFiles = 200;
+    const maxTotalBytes = 2_000_000;
+    let totalBytes = 0;
+    let skipped = 0;
     for (const path of untracked) {
+      if (additions.length >= maxUntrackedFiles || totalBytes >= maxTotalBytes) {
+        skipped++;
+        continue;
+      }
       const absolute = resolve(root, path);
       const inside = relative(resolve(root), absolute);
       if (inside === '..' || inside.startsWith(`..${sep}`) || resolve(inside) === inside) continue;
       try {
         const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(absolute));
-        if (bytes.includes(0) || bytes.byteLength > 2_000_000) continue;
+        if (bytes.includes(0) || bytes.byteLength > 2_000_000 || totalBytes + bytes.byteLength > maxTotalBytes) {
+          skipped++;
+          continue;
+        }
+        totalBytes += bytes.byteLength;
         const text = Buffer.from(bytes).toString('utf8');
         additions.push(`diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${text.split(/\r?\n/).length} @@\n${text.split(/\r?\n/).map((line) => `+${line}`).join('\n')}`);
       } catch { /* File may disappear while status is being read. */ }
     }
+    if (skipped > 0) {
+      additions.push(`# ${skipped} additional untracked/large files were omitted to keep the diff fast and readable.`);
+    }
     return [tracked, ...additions].filter(Boolean).join('\n');
+  }
+
+  private workspaceScope(repoRoot: string): string {
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!folder) return '.';
+    const rel = relative(resolve(repoRoot), resolve(folder));
+    if (!rel || rel === '..' || rel.startsWith(`..${sep}`) || resolve(rel) === rel) return '.';
+    return rel.replace(/\\/g, '/');
   }
 
   private async git(cwd: string, args: string[]): Promise<string> {

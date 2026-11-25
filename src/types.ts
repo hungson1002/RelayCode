@@ -31,12 +31,25 @@ export interface ChatMessage {
   >;
 }
 
+export interface AgentToolLifecycleEvent {
+  id: string;
+  phase: 'start' | 'end';
+  tool: string;
+  kind: 'inspect' | 'edit' | 'command' | 'mcp' | 'web' | 'goal';
+  target?: string;
+  durationMs?: number;
+  ok?: boolean;
+  step?: number;
+}
+
 export interface StreamCallbacks {
   onDelta(delta: string): void;
+  onThinking?(delta: string): void;
   onIntermediateStep?(content?: string): void;
   onStatus(status: string): void;
   onCommentary?(content: string): void;
   onActivityComplete?(): void;
+  onToolEvent?(event: AgentToolLifecycleEvent): void;
   onToolOutput?(event: { tool: string; command?: string; chunk: string; stream: 'stdout' | 'stderr'; elapsedMs: number }): void;
   onMetrics?(metrics: RequestMetrics): void;
   onToolFailure?(failure: AgentToolFailure): Promise<AgentToolFailureDecision>;

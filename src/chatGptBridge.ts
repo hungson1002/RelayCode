@@ -2,10 +2,11 @@ import * as vscode from 'vscode';
 import * as http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { dirname, relative, resolve, sep } from 'node:path';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
+import { isReadOnlyCommand } from './agentRuntime';
 import { countLineChanges } from './diffHunks';
 import { runShellCommand, validateShellCommandSyntax } from './commandRuntime';
 import { validateCommandPolicy } from './safetyPolicy';
@@ -94,6 +95,7 @@ type WorkspaceCommandTask = {
   completedAt?: number;
   output?: string;
   error?: string;
+  mutationVersion?: number;
 };
 
 export class ChatGptBridge implements vscode.Disposable {
@@ -105,6 +107,7 @@ export class ChatGptBridge implements vscode.Disposable {
   private commandTasksWriteQueue: Promise<void> = Promise.resolve();
   private readonly repeatedNoopCalls = new Map<string, number>();
   private readonly suppressedToolActivity = new WeakSet<ToolResult>();
+  private workspaceMutationVersion = 0;
 
   public constructor(
     private readonly context: vscode.ExtensionContext,
@@ -457,8 +460,19 @@ export class ChatGptBridge implements vscode.Disposable {
       annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false }
     }, () => this.track('get_git_diff', {}, async () => {
       const root = this.requiredWorkspaceRoot();
-      const unstaged = await runShellCommand({ command: 'git diff --no-ext-diff --', cwd: root, timeoutMs: 30_000 }).catch((error) => this.errorText(error));
-      const staged = await runShellCommand({ command: 'git diff --cached --no-ext-diff --', cwd: root, timeoutMs: 30_000 }).catch((error) => this.errorText(error));
+      let unstagedError: string | undefined;
+      let stagedError: string | undefined;
+      const unstaged = await runShellCommand({ command: 'git diff --no-ext-diff --', cwd: root, timeoutMs: 30_000 }).catch((error) => {
+        unstagedError = this.errorText(error);
+        return '';
+      });
+      const staged = await runShellCommand({ command: 'git diff --cached --no-ext-diff --', cwd: root, timeoutMs: 30_000 }).catch((error) => {
+        stagedError = this.errorText(error);
+        return '';
+      });
+      if (unstagedError && stagedError) {
+        return this.fail(`Unable to read Git diff: ${unstagedError}`, { unstagedError, stagedError });
+      }
       return this.ok('Loaded the current Git diff.', { unstaged: unstaged.slice(-60_000), staged: staged.slice(-60_000) });
     }));
 
@@ -486,6 +500,7 @@ export class ChatGptBridge implements vscode.Disposable {
       const updated = new TextEncoder().encode(content);
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(uri.fsPath)));
       await vscode.workspace.fs.writeFile(uri, updated);
+      this.workspaceMutationVersion++;
       const counts = countLineChanges(original, updated);
       this.callbacks.registerChange({ path: uri.fsPath, original, updated, existed, ...counts });
       return this.ok(`Saved ${path}; the edit is waiting in RelayCode Review.`, { path, review: 'pending', ...counts });
@@ -547,6 +562,7 @@ export class ChatGptBridge implements vscode.Disposable {
       const updatedText = current.slice(0, originalStart) + replacement + current.slice(originalEnd);
       const updated = new TextEncoder().encode(updatedText);
       await vscode.workspace.fs.writeFile(uri, updated);
+      this.workspaceMutationVersion++;
       const counts = countLineChanges(original, updated);
       this.callbacks.registerChange({ path: uri.fsPath, original, updated, existed: true, ...counts });
       return this.ok(`Patched ${path}; the edit is waiting in RelayCode Review.`, { path, review: 'pending', ...counts });
@@ -565,7 +581,8 @@ export class ChatGptBridge implements vscode.Disposable {
       if (!await this.callbacks.requestApproval(`ChatGPT Web muốn xóa ${path}`)) throw new Error('Denied by user.');
       const original = await vscode.workspace.fs.readFile(uri);
       await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
-      const removed = new TextDecoder().decode(original).split(/\r?\n/).length;
+      this.workspaceMutationVersion++;
+      const { removed } = countLineChanges(original, new Uint8Array());
       this.callbacks.registerChange({ path: uri.fsPath, original, updated: new Uint8Array(), existed: true, added: 0, removed });
       return this.ok(`Deleted ${path}; the deletion is waiting in RelayCode Review.`, { path, review: 'pending', added: 0, removed });
     }));
@@ -646,7 +663,9 @@ export class ChatGptBridge implements vscode.Disposable {
     const normalizedCommand = command.trim();
     const existing = !forceNewRun
       ? [...this.commandTasks.values()].reverse().find((task) => task.command === normalizedCommand
-        && ((task.state === 'waiting_for_approval' || task.state === 'running') || Date.now() - task.startedAt < COMMAND_TASK_RETENTION_MS))
+        && ((task.state === 'waiting_for_approval' || task.state === 'running')
+          || (Date.now() - task.startedAt < COMMAND_TASK_RETENTION_MS
+            && (task.mutationVersion === undefined || task.mutationVersion === this.workspaceMutationVersion))))
       : undefined;
     if (existing) return this.workspaceCommandTaskResult(existing, true);
     const syntaxError = await validateShellCommandSyntax(normalizedCommand);
@@ -670,7 +689,8 @@ export class ChatGptBridge implements vscode.Disposable {
       // Full Access starts every valid workspace command immediately. Other
       // permission modes retain the normal approval flow.
       state: fullAccess ? 'running' : 'waiting_for_approval',
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      mutationVersion: this.workspaceMutationVersion
     };
     this.commandTasks.set(task.id, task);
     try {
@@ -719,7 +739,8 @@ export class ChatGptBridge implements vscode.Disposable {
         task.state = 'running';
         await this.persistCommandTasks();
       }
-      before = await this.captureSnapshot(root);
+      const trackChanges = !isReadOnlyCommand(task.command);
+      before = trackChanges ? await this.captureSnapshot(root) : undefined;
       let commandFailed = false;
       try {
         task.output = await runShellCommand({ command: task.command, cwd: root, timeoutMs: timeoutSeconds * 1000 }, (event) => {
@@ -729,8 +750,18 @@ export class ChatGptBridge implements vscode.Disposable {
         task.error = this.errorText(error);
         commandFailed = true;
       } finally {
-        const after = await this.captureSnapshot(root, [...before.keys()]);
-        this.registerSnapshotChanges(before, after);
+        if (before) {
+          try {
+            const after = await this.captureSnapshot(root, [...before.keys()]);
+            const changes = diffWorkspaceSnapshots(before, after);
+            if (changes.length) {
+              this.workspaceMutationVersion++;
+              for (const change of changes) this.callbacks.registerChange(change);
+            }
+          } catch {
+            // Never mark a completed command as failed due to snapshot errors.
+          }
+        }
       }
       task.state = commandFailed ? 'failed' : 'completed';
     } catch (error) {
@@ -880,15 +911,27 @@ export class ChatGptBridge implements vscode.Disposable {
   }
 
   private realPathIsInside(root: string, target: string): boolean {
-    if (!existsSync(root)) return this.isInside(root, target);
-    const realRoot = realpathSync.native(root);
-    let existing = target;
-    while (!existsSync(existing)) {
-      const parent = dirname(existing);
-      if (parent === existing) return false;
-      existing = parent;
+    try {
+      if (!existsSync(root)) return this.isInside(root, target);
+      const realRoot = realpathSync.native(root);
+      let existing = target;
+      while (true) {
+        try {
+          const stat = lstatSync(existing);
+          if (stat.isSymbolicLink()) {
+            if (!existsSync(existing)) return false;
+            return this.isInside(realRoot, realpathSync.native(existing));
+          }
+          return this.isInside(realRoot, realpathSync.native(existing));
+        } catch {
+          const parent = dirname(existing);
+          if (parent === existing) return false;
+          existing = parent;
+        }
+      }
+    } catch {
+      return false;
     }
-    return this.isInside(realRoot, realpathSync.native(existing));
   }
 
   private async pathToken(): Promise<string> {

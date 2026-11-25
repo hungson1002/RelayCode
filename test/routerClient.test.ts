@@ -78,7 +78,7 @@ describe('RouterClient compatible chat responses', () => {
     const chunks: string[] = [];
     await client.streamChat('model', [{ role: 'user', content: 'test' }], (delta) => chunks.push(delta));
     expect(chunks).toEqual(['Xin chào']);
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true, max_tokens: 4096 });
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true, max_tokens: 16384 });
     await expect(client.streamChat('model', [{ role: 'user', content: 'test' }], () => undefined)).rejects.toThrow(/không trả về nội dung/);
   });
 
@@ -96,7 +96,7 @@ describe('RouterClient compatible chat responses', () => {
 
     expect(response.content).toBe('Đang làm');
     expect(content).toEqual(['Đang làm']);
-    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true, max_tokens: 4096 });
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({ stream: true, max_tokens: 16384 });
   });
 });
 
@@ -175,7 +175,7 @@ describe('RouterClient model checks', () => {
     vi.stubGlobal('fetch', fetchMock);
     await new RouterClient({ endpoint: 'https://api.openai.com/v1', apiKey: 'key' }).checkModel('gpt-5');
     const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
-    expect(body.max_completion_tokens).toBe(16);
+    expect(body.max_completion_tokens).toBe(64);
     expect(body.max_tokens).toBeUndefined();
   });
 });

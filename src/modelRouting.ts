@@ -11,16 +11,17 @@ function scoreModel(mode: ChatMode, model: RouterModel): number {
   if (mode !== 'chat' && capabilities?.tools !== false) score += 30;
   if ((mode === 'agent' || mode === 'plan') && capabilities?.reasoning) score += 28;
   if (mode === 'chat') {
-    if (/(?:mini|small|fast|flash|haiku|nano|instant|turbo)/.test(text)) score += 24;
-    if (/(?:reasoning|thinking|opus|large|pro|max)/.test(text)) score -= 8;
+    if (/\b(?:mini|small|fast|flash|haiku|nano|instant|turbo)\b/.test(text)) score += 24;
+    if (/\b(?:reasoning|thinking|opus|large|pro|max)\b/.test(text)) score -= 8;
   } else {
-    if (/(?:agent|coder|coding|reasoning|thinking|opus|sonnet|pro|max|gpt-5|o[134]|r1)/.test(text)) score += 18;
+    if (/\b(?:agent|coder|coding|reasoning|thinking|opus|sonnet|pro|max|gpt-5|o[134]|r1)\b/.test(text)) score += 18;
   }
   if (capabilities?.vision) score += mode === 'chat' ? 2 : 4;
   return score;
 }
 
 function isEligible(mode: ChatMode, model: RouterModel): boolean {
+  if (model.kind?.toLowerCase() === 'image') return false;
   return mode === 'chat' || model.capabilities?.tools !== false;
 }
 

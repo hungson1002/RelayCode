@@ -42,12 +42,35 @@ export function shellRuntimeInstruction(workspaceRoot: string): string {
   ].join('\n');
 }
 
+function stripQuotedStrings(command: string): string {
+  let result = '';
+  let quote: "'" | '"' | undefined;
+  for (let index = 0; index < command.length; index++) {
+    const ch = command[index]!;
+    const next = command[index + 1];
+    if (quote) {
+      if (quote === '"' && ch === '`') { index++; continue; }
+      if (quote === "'" && ch === "'" && next === "'") { index++; continue; }
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      result += ' ';
+      continue;
+    }
+    result += ch;
+  }
+  return result;
+}
+
 export function validateShellCompatibility(command: string): string | undefined {
   const value = command.trim();
   if (!value) return 'Command cannot be empty.';
-  if (/\b(?:read-host|pause|sudo)\b/i.test(value)
-    || /\b(?:npm|pnpm|yarn|docker)\s+login\b/i.test(value)
-    || /\bgh\s+auth\s+login\b/i.test(value)) {
+  const unquoted = stripQuotedStrings(value);
+  if (/(?:^|[;&|]\s*)(?:read-host|pause|sudo)\b/i.test(unquoted)
+    || /\b(?:npm|pnpm|yarn|docker)\s+login\b/i.test(unquoted)
+    || /\bgh\s+auth\s+login\b/i.test(unquoted)) {
     return 'Interactive commands are not supported by the Agent terminal. Use a non-interactive flag/API flow or ask the user to complete authentication outside the run.';
   }
   if (process.platform === 'win32') {
@@ -60,12 +83,12 @@ export function validateShellCompatibility(command: string): string | undefined 
       [/<<\s*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?/i, 'Bash heredoc syntax is not supported by PowerShell. Use a here-string or write_file.'],
       [/(?:^|\s)\/dev\/null(?:\s|$)/i, '/dev/null does not exist on Windows. Use $null.']
     ];
-    const incompatibility = incompatibilities.find(([pattern]) => pattern.test(value))?.[1];
+    const incompatibility = incompatibilities.find(([pattern]) => pattern.test(unquoted))?.[1];
     if (incompatibility) return incompatibility;
     if (splitWindowsCommandChain(value)) return WINDOWS_LOGICAL_CHAIN_NOTICE;
     return undefined;
   }
-  if (/\b(?:New-Item|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Test-Path)\b|\$env:/i.test(value)) {
+  if (/(?:^|[;&|]\s*)(?:New-Item|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Test-Path)\b|\$env:/i.test(unquoted)) {
     return 'This command uses PowerShell syntax, but the current runtime uses a POSIX shell.';
   }
   return undefined;
@@ -92,7 +115,7 @@ function splitWindowsCommandChain(command: string): { commands: string[]; operat
     if (hereStringQuote) {
       if (index === 0 || command[index - 1] === '\n') {
         const lineEnd = command.indexOf('\n', index);
-        const line = command.slice(index, lineEnd < 0 ? command.length : lineEnd).trim();
+        const line = command.slice(index, lineEnd < 0 ? command.length : lineEnd).replace(/\r$/, '');
         if (line === `${hereStringQuote}@`) hereStringQuote = undefined;
       }
       continue;
@@ -102,7 +125,7 @@ function splitWindowsCommandChain(command: string): { commands: string[]; operat
       continue;
     }
     if (quote) {
-      if (character === '`') {
+      if (quote === '"' && character === '`') {
         index++;
       } else if (quote === "'" && character === "'" && next === "'") {
         index++;
@@ -295,6 +318,7 @@ export function validateShellCommandSyntax(command: string): Promise<string | un
     child.on('close', (code) => finish(code === 0
       ? undefined
       : `Windows PowerShell syntax error; the command was not run: ${output.trim().slice(0, 900) || 'PowerShell rejected the script.'}`));
+    child.stdin.on('error', () => undefined);
     child.stdin.end(sourceBase64);
     timeout = setTimeout(() => {
       child.kill();
@@ -332,6 +356,7 @@ export function runShellCommand(
     });
     let stdout = '';
     let stderr = '';
+    let combined = '';
     let settled = false;
     let timeout: NodeJS.Timeout | undefined;
     let killEscalation: NodeJS.Timeout | undefined;
@@ -344,7 +369,7 @@ export function runShellCommand(
       if (killEscalation) clearTimeout(killEscalation);
       signal?.removeEventListener('abort', abort);
       if (error) reject(error);
-      else resolvePromise(`${stdout}\n${stderr}`.trim().slice(-MAX_CAPTURED_OUTPUT) || 'Command completed.');
+      else resolvePromise((combined || `${stdout}\n${stderr}`).trim().slice(-MAX_CAPTURED_OUTPUT) || 'Command completed.');
     };
     const stopTree = (error: Error) => {
       if (settled || stoppingError) return;
@@ -356,6 +381,7 @@ export function runShellCommand(
       const chunk = data.toString('utf8');
       if (stream === 'stdout') stdout = (stdout + chunk).slice(-MAX_CAPTURED_OUTPUT);
       else stderr = (stderr + chunk).slice(-MAX_CAPTURED_OUTPUT);
+      combined = (combined + chunk).slice(-MAX_CAPTURED_OUTPUT);
       onOutput?.({ chunk, stream, elapsedMs: Date.now() - started });
     };
     child.stdout.on('data', (data: Buffer) => emit('stdout', data));

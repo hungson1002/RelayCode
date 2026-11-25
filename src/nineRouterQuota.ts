@@ -43,7 +43,7 @@ export function quotaExhaustionForModel(snapshot: QuotaSnapshot, model: string):
   if (snapshot.status !== 'ready') return undefined;
   const activeAccounts = snapshot.accounts.filter((account) => account.active);
   if (!activeAccounts.length) return undefined;
-  const matches = activeAccounts.map((account) => account.quotas.find((quota) => quotaMatchesModel(quota, model)));
+  const matches = activeAccounts.map((account) => findBestQuotaMatch(account.quotas, model));
   if (matches.some((quota) => !quota)) return undefined;
   const reported = matches as QuotaItem[];
   if (reported.some((quota) => quota.unlimited || !quotaIsExhausted(quota))) return undefined;
@@ -167,7 +167,13 @@ export class NineRouterQuotaService {
     });
     const payload = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    const cookie = response.headers.get('set-cookie')?.split(';', 1)[0];
+    const setCookies = typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : (response.headers.get('set-cookie') ? [response.headers.get('set-cookie') as string] : []);
+    const cookie = setCookies
+      .map((entry) => entry.split(';', 1)[0]?.trim() ?? '')
+      .filter(Boolean)
+      .join('; ');
     if (!cookie) throw new Error('9Router không trả session đăng nhập.');
     await this.context.secrets.store(this.sessionKey(origin), cookie);
     return cookie;
@@ -247,12 +253,32 @@ function humanize(value: string): string {
   return value.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function quotaMatchesModel(quota: QuotaItem, model: string): boolean {
+function findBestQuotaMatch(quotas: QuotaItem[], model: string): QuotaItem | undefined {
   const expected = canonicalModel(model);
-  return [quota.id, quota.name].some((value) => {
-    const candidate = canonicalModel(value);
-    return Boolean(candidate && expected && (candidate === expected || candidate.includes(expected) || expected.includes(candidate)));
-  });
+  if (!expected) return undefined;
+  const exact = quotas.find((quota) => [quota.id, quota.name].some((value) => canonicalModel(value) === expected));
+  if (exact) return exact;
+  // Prefer the longest matching candidate so specific variants (e.g. "GPT-5 Mini"
+  // or "GPT-5 Codex") are never shadowed by a shorter parent ("GPT-5").
+  let best: { quota: QuotaItem; score: number } | undefined;
+  for (const quota of quotas) {
+    for (const value of [quota.id, quota.name]) {
+      const candidate = canonicalModel(value);
+      if (!candidate) continue;
+      if (candidate === expected) return quota;
+      if (candidate.includes(expected)) {
+        const score = expected.length * 10 - (candidate.length - expected.length);
+        if (!best || score > best.score) best = { quota, score };
+      } else if (expected.includes(candidate)) {
+        // Do not let a base family quota shadow distinct sub-variants like mini/codex/nano/flash/haiku/pro.
+        const remainder = expected.slice(expected.indexOf(candidate) + candidate.length);
+        if (/^(?:mini|codex|nano|flash|haiku|sonnet|opus|pro|max|lite|turbo)/i.test(remainder)) continue;
+        const score = candidate.length * 10 - remainder.length;
+        if (!best || score > best.score) best = { quota, score };
+      }
+    }
+  }
+  return best?.quota;
 }
 
 function canonicalModel(value: string): string {

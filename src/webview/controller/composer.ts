@@ -109,7 +109,10 @@ function renderFollowUpQueue() {
       queuedFollowUps.splice(index, 1);
       $('prompt').value = item.prompt;
       setMode(item.mode);
-      if ([...$('model').options].some((option) => option.value === item.model)) $('model').value = item.model;
+      if ([...$('model').options].some((option) => option.value === item.model)) {
+        $('model').value = item.model;
+        $('model').dispatchEvent(new Event('change'));
+      }
       menu.classList.add('hidden');
       renderFollowUpQueue();
       resizePrompt();
@@ -230,6 +233,8 @@ function finishTurn(data) {
   }
   assistantBody = null;
   assistantRawText = '';
+  assistantStreamTextNode = null;
+  assistantMarkdownRenderedLength = 0;
   assistantActivity = null;
   pendingActivityStatus = '';
   activityReadyAfterCommentary = false;
@@ -272,6 +277,9 @@ function settleTurn(data) {
     pendingTurnEnd = null;
     turnStartedAt = 0;
     assistantBody = null;
+    assistantRawText = '';
+    assistantStreamTextNode = null;
+    assistantMarkdownRenderedLength = 0;
     assistantActivity = null;
     pendingActivityStatus = '';
     assistantHasOutput = false;
@@ -306,6 +314,17 @@ function stopCurrentTurn() {
   settleTurn({ cancelled: true, timestamp: Date.now() });
 }
 
+function positionComposerPopup(menu) {
+  if (!menu || menu.classList.contains('hidden')) return;
+  const shell = document.querySelector('.composer-shell');
+  const rect = shell?.getBoundingClientRect();
+  if (!rect) return;
+  const headerBottom = document.querySelector('.route-header')?.getBoundingClientRect().bottom || 46;
+  const available = Math.floor(rect.top - headerBottom - 16);
+  const maxHeight = Math.max(110, Math.min(390, available));
+  menu.style.setProperty('--composer-menu-max-height', maxHeight + 'px');
+}
+
 function resizePrompt() {
   const prompt = $('prompt');
   const maximum = 132;
@@ -313,7 +332,10 @@ function resizePrompt() {
   const height = Math.min(prompt.scrollHeight, maximum);
   prompt.style.height = height + 'px';
   prompt.style.overflowY = prompt.scrollHeight > maximum ? 'auto' : 'hidden';
+  if (typeof syncPromptEmptyState === 'function') syncPromptEmptyState();
   document.querySelector('.composer-shell')?.classList.toggle('has-input', Boolean(prompt.value.trim() || pendingAttachmentCount || composerSkills.length || composerContexts.length || composerCommand));
+  positionComposerPopup($('composerMenu'));
+  positionComposerPopup($('addMenu'));
 }
 
 function composerSkillLabel(name) {
@@ -476,6 +498,15 @@ function renderAddMenu() {
       }
     }),
     createMenuRow({
+      glyph: 'fileVideo',
+      label: uiCopy('Ảnh & Video', 'Images & Videos'),
+      description: uiCopy('Gửi ảnh hoặc video không giới hạn dung lượng', 'Attach images or videos of any size'),
+      action: () => {
+        closeAddMenu();
+        vscode.postMessage({ type: 'pickFiles', kind: 'media' });
+      }
+    }),
+    createMenuRow({
       glyph: 'target',
       label: 'Goal',
       description: uiCopy('Đặt mục tiêu để agent tiếp tục theo đuổi', 'Set a goal for Agent to keep pursuing'),
@@ -544,7 +575,7 @@ function renderComposerMenu() {
     ['/schedule', uiCopy('Quản lý tác vụ Agent định kỳ', 'Manage scheduled Agent tasks'), 'Scheduled tasks', 'clockCounterClockwise'],
     ['/plugins', uiCopy('Mở plugin và skill đã cài', 'Open installed plugins and skills'), 'Plugins', 'cube'],
     ['/hooks', uiCopy('Cấu hình hook trước/sau Agent', 'Configure before/after Agent hooks'), 'Hooks', 'arrowsClockwise'],
-    ['/diff', uiCopy('Mở các thay đổi đang chờ review', 'Open changes awaiting review'), 'Diff', 'gitDiff'],
+    ['/diff', uiCopy('Xem Git diff hiện tại', 'View current Git diff'), 'Diff', 'gitDiff'],
     ['/ide-context', uiCopy('Bật hoặc tắt file đang mở trong ngữ cảnh', 'Toggle the open file in context'), 'IDE context', 'selection'],
     ['/init', uiCopy('Tạo khung AGENTS.md cho dự án', 'Create an AGENTS.md scaffold for the project'), 'Init', 'fileMd'],
     ['/status', uiCopy('Xem provider, MCP và skills', 'View provider, MCP and skills status'), 'Status', 'info'],
@@ -563,15 +594,29 @@ function renderComposerMenu() {
     ['@problems', uiCopy('Problems của workspace', 'Workspace problems'), 'Problems', 'pulse']
   ];
   const trigger = activeComposerTrigger(value);
+  const pathMention = trigger?.kind === 'mention' ? trigger.token.match(/^@(file|folder):(.*)$/i) : null;
+  if (pathMention) {
+    const pathKind = pathMention[1].toLowerCase();
+    const pathQuery = pathMention[2] || '';
+    requestWorkspacePathSuggestions(pathKind, pathQuery);
+  }
   const source = trigger?.kind === 'command'
     ? slash.map(([key, description, label, glyph]) => ({ key, description, label, glyph, kind: 'command' }))
+    : pathMention
+      ? (workspacePathResults.kind === pathMention[1].toLowerCase() ? workspacePathResults.items : []).map((pathItem) => ({
+          key: '@' + pathMention[1].toLowerCase() + ':' + pathItem,
+          label: pathItem.split('/').pop() || pathItem,
+          description: pathItem,
+          glyph: pathMention[1].toLowerCase() === 'folder' ? 'folderOpen' : fileUiIcon(pathItem),
+          kind: 'mention'
+        }))
     : trigger?.kind === 'mention'
       ? mentions.map(([key, description, label, glyph]) => ({ key, description, label, glyph, kind: 'mention' }))
       : trigger?.kind === 'skill'
         ? skills.map((skill) => ({ key: '$' + skill.name, label: composerSkillLabel(skill.name), glyph: 'cube', description: skill.description, kind: 'skill', source: skill.source, skill }))
         : [];
   const needle = (trigger?.token || '').toLowerCase();
-  const filtered = source.filter((item) => item.key.toLowerCase().includes(needle)).slice(0, 50);
+  const filtered = (pathMention ? source : source.filter((item) => item.key.toLowerCase().includes(needle))).slice(0, 50);
   menu.replaceChildren();
   if (composerMenuIndex >= filtered.length) composerMenuIndex = filtered.length - 1;
   for (const [index, item] of filtered.entries()) {
@@ -607,6 +652,12 @@ function renderComposerMenu() {
         renderComposerTokens();
         menu.classList.add('hidden');
         composerMenuIndex = -1;
+        if (item.key === '/browser') {
+          $('prompt').focus();
+          resizePrompt();
+          updateSendState();
+          return;
+        }
         requestAnimationFrame(send);
         return;
       }
@@ -620,6 +671,10 @@ function renderComposerMenu() {
     menu.append(button);
   }
   menu.classList.toggle('hidden', !filtered.length);
+  if (filtered.length) {
+    positionComposerPopup(menu);
+    requestAnimationFrame(() => positionComposerPopup(menu));
+  }
 }
 
 function send() {

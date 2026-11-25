@@ -17,7 +17,7 @@ export interface ModelCapabilities {
 }
 
 export interface ToolCompletionProgress {
-  type: 'content' | 'tool';
+  type: 'content' | 'tool' | 'thinking';
   content?: string;
   name?: string;
   arguments?: string;
@@ -31,7 +31,14 @@ export interface ProviderClient {
     size: string,
     signal?: AbortSignal
   ): Promise<{ bytes: Uint8Array; mimeType: string; revisedPrompt?: string }>;
-  streamChat(model: string, messages: ChatMessage[], onDelta: (delta: string) => void, signal?: AbortSignal, tuning?: RequestTuning): Promise<RequestMetrics>;
+  streamChat(
+    model: string,
+    messages: ChatMessage[],
+    onDelta: (delta: string) => void,
+    signal?: AbortSignal,
+    tuning?: RequestTuning,
+    onThinking?: (delta: string) => void
+  ): Promise<RequestMetrics>;
   checkModel(model: string, signal?: AbortSignal, mode?: ChatMode): Promise<RequestMetrics>;
   completeWithTools(
     model: string,
@@ -45,10 +52,11 @@ export interface ProviderClient {
 
 export function capabilitiesForModel(model: string): ModelCapabilities {
   const id = model.toLowerCase();
+  const isNonChatToolModel = /(embed|audio|tts|whisper|moderation|rerank|image-generation|gpt-image|dall-e|imagen|flux|sdxl|stable[- ]?diffusion|seedream|recraft)/.test(id);
   return {
-    tools: !/(embed|audio|tts|image-generation)/.test(id),
-    vision: /(vision|vl|gemini|claude|gpt-4o|gpt-5|qwen2-vl|pixtral|step-3\.7)/.test(id),
-    reasoning: /(thinking|reason|r1|o1|o3|o4|gpt-5)/.test(id)
+    tools: !isNonChatToolModel,
+    vision: !isNonChatToolModel && /(vision|vl|gemini|claude|gpt-4o|gpt-5|qwen2-vl|pixtral|step-3\.7)/.test(id),
+    reasoning: !isNonChatToolModel && /(thinking|reason|r1|o1|o3|o4|gpt-5)/.test(id)
   };
 }
 

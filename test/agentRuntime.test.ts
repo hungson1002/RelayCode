@@ -25,6 +25,7 @@ import {
   AgentRuntime,
   compactAgentFinalResponse,
   compactProgressCommentary,
+  isReadOnlyCommand,
   normalizeCompletedToolHistory
 } from '../src/agentRuntime';
 
@@ -1091,5 +1092,160 @@ describe('AgentRuntime Git workflow', () => {
     const definitions = completeWithTools.mock.calls[0]?.[2] as Array<Record<string, unknown>>;
     const names = definitions.map((item) => String((item.function as Record<string, unknown>)?.name ?? ''));
     expect(names).toEqual(expect.arrayContaining(['git_status', 'git_diff', 'git_commit', 'git_push']));
+  });
+});
+
+describe('AgentRuntime tool upgrades and read-only detection', () => {
+  beforeEach(async () => {
+    const vscodeApi = await import('vscode');
+    vi.mocked(vscodeApi.workspace.findFiles).mockReset().mockResolvedValue([]);
+    vi.mocked(vscodeApi.workspace.fs.stat).mockReset().mockRejectedValue(new Error('missing'));
+    vi.mocked(vscodeApi.workspace.fs.readFile).mockReset().mockResolvedValue(new TextEncoder().encode('Reference instructions'));
+    vi.mocked(vscodeApi.workspace.fs.writeFile).mockReset().mockResolvedValue(undefined);
+  });
+
+  it('supports startLine/endLine pagination in read_file', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{ id: 'read-range', name: 'read_file', arguments: '{"path":"src/app.ts","startLine":2,"endLine":3}' }],
+        metrics
+      })
+      .mockResolvedValueOnce({ content: 'Done.', toolCalls: [], metrics });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const vscodeApi = await import('vscode');
+    vi.mocked(vscodeApi.workspace.fs.readFile).mockResolvedValueOnce(new TextEncoder().encode('line1\nline2\nline3\nline4\n'));
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Read lines 2 to 3 of src/app.ts', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() });
+
+    const messages = completeWithTools.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
+    const toolMessage = messages.find((m) => m.role === 'tool');
+    const content = String(toolMessage?.content ?? '');
+    expect(content).toContain('Showing lines 2-3 of 5');
+    expect(content).toContain('startLine=4');
+    expect(content).toContain('2: line2\n3: line3');
+    expect(content).not.toContain('line4');
+  });
+
+  it('preserves $ replacement patterns and CRLF line endings in apply_patch', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [{
+          id: 'patch-dollar',
+          name: 'apply_patch',
+          arguments: JSON.stringify({
+            path: 'src/template.ts',
+            oldText: 'const a = 1;\nconst b = 2;',
+            newText: 'const a = "$& $$ $` $\'";\nconst b = 3;'
+          })
+        }],
+        metrics
+      })
+      .mockResolvedValue({ content: 'Patched.', toolCalls: [], metrics });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const vscodeApi = await import('vscode');
+    vi.mocked(vscodeApi.workspace.fs.readFile).mockResolvedValueOnce(new TextEncoder().encode('const a = 1;\r\nconst b = 2;\r\n'));
+    vi.mocked(vscodeApi.workspace.fs.writeFile).mockResolvedValueOnce(undefined);
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Update src/template.ts', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() });
+
+    expect(vscodeApi.workspace.fs.writeFile).toHaveBeenCalledTimes(1);
+    const writtenBytes = vi.mocked(vscodeApi.workspace.fs.writeFile).mock.calls[0]?.[1] as Uint8Array;
+    expect(new TextDecoder().decode(writtenBytes)).toBe('const a = "$& $$ $` $\'";\r\nconst b = 3;\r\n');
+  });
+
+  it('classifies read-only shell commands accurately and rejects chained mutations', () => {
+    expect(isReadOnlyCommand('Get-Content src/app.ts -TotalCount 20')).toBe(true);
+    expect(isReadOnlyCommand('Get-ChildItem -Recurse src | Select-String "foo"')).toBe(true);
+    expect(isReadOnlyCommand('git status && git diff --stat')).toBe(true);
+    expect(isReadOnlyCommand('rg "export" src')).toBe(true);
+    expect(isReadOnlyCommand('Get-Content src/app.ts; Remove-Item src/app.ts')).toBe(false);
+    expect(isReadOnlyCommand('echo hello > out.txt')).toBe(false);
+    expect(isReadOnlyCommand('git checkout .')).toBe(false);
+    expect(isReadOnlyCommand('npm run build')).toBe(false);
+  });
+
+  it('emits structured tool lifecycle events and breaks identical consecutive tool loops', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({ content: '', toolCalls: [{ id: 'loop-1', name: 'read_file', arguments: '{"path":"src/a.ts"}' }], metrics })
+      .mockResolvedValueOnce({ content: '', toolCalls: [{ id: 'loop-2', name: 'read_file', arguments: '{"path":"src/a.ts"}' }], metrics })
+      .mockResolvedValueOnce({ content: '', toolCalls: [{ id: 'loop-3', name: 'read_file', arguments: '{"path":"src/a.ts"}' }], metrics })
+      .mockResolvedValueOnce({ content: 'Stopped looping and answered.', toolCalls: [], metrics });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const vscodeApi = await import('vscode');
+    vi.mocked(vscodeApi.workspace.fs.readFile).mockResolvedValue(new TextEncoder().encode('export const ok = true;\n'));
+    const toolEvents: Array<{ phase: string; tool: string; ok?: boolean }> = [];
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Inspect src/a.ts', 'test-model', {
+      onDelta: vi.fn(),
+      onStatus: vi.fn(),
+      onToolEvent: (event) => toolEvents.push({ phase: event.phase, tool: event.tool, ok: event.ok })
+    });
+
+    expect(toolEvents.filter((event) => event.phase === 'start')).toHaveLength(3);
+    expect(toolEvents.filter((event) => event.phase === 'end').map((event) => event.ok)).toEqual([true, true, false]);
+    const finalMessages = completeWithTools.mock.calls[3]?.[1] as Array<Record<string, unknown>>;
+    expect(finalMessages.some((m) => m.role === 'tool' && String(m.content).includes('Loop detected'))).toBe(true);
+  });
+
+  it('executes consecutive read-only tool calls in parallel while preserving result order', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [
+          { id: 'p1', name: 'read_file', arguments: '{"path":"src/one.ts"}' },
+          { id: 'p2', name: 'read_file', arguments: '{"path":"src/two.ts"}' },
+          { id: 'p3', name: 'read_file', arguments: '{"path":"src/three.ts"}' }
+        ],
+        metrics
+      })
+      .mockResolvedValueOnce({ content: 'All three read in parallel.', toolCalls: [], metrics });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const vscodeApi = await import('vscode');
+    let inFlight = 0;
+    let peakInFlight = 0;
+    vi.mocked(vscodeApi.workspace.fs.readFile).mockImplementation(async (uri: { fsPath: string }) => {
+      inFlight++;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+      inFlight--;
+      return new TextEncoder().encode(`content of ${uri.fsPath}`);
+    });
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Read three files', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() });
+
+    expect(peakInFlight).toBeGreaterThanOrEqual(2);
+    const secondMessages = completeWithTools.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
+    const toolMsgs = secondMessages.filter((m) => m.role === 'tool');
+    expect(toolMsgs.map((m) => m.tool_call_id)).toEqual(['p1', 'p2', 'p3']);
+    expect(String(toolMsgs[0]?.content)).toContain('one.ts');
+    expect(String(toolMsgs[1]?.content)).toContain('two.ts');
+    expect(String(toolMsgs[2]?.content)).toContain('three.ts');
+  });
+
+  it('exposes LSP get_diagnostics and find_symbol tools safely', async () => {
+    const completeWithTools = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [
+          { id: 'd1', name: 'get_diagnostics', arguments: '{"severity":"error"}' },
+          { id: 's1', name: 'find_symbol', arguments: '{"query":"AgentRuntime"}' }
+        ],
+        metrics
+      })
+      .mockResolvedValueOnce({ content: 'Checked diagnostics and symbols.', toolCalls: [], metrics });
+    const client = { listModels: vi.fn(), streamChat: vi.fn(), checkModel: vi.fn(), completeWithTools } as unknown as ProviderClient;
+    const runtime = new AgentRuntime(client, WORKSPACE_ROOT, async () => true, () => undefined);
+
+    await runtime.run('Check errors and symbols', 'test-model', { onDelta: vi.fn(), onStatus: vi.fn() });
+
+    const secondMessages = completeWithTools.mock.calls[1]?.[1] as Array<Record<string, unknown>>;
+    const toolMsgs = secondMessages.filter((m) => m.role === 'tool');
+    expect(toolMsgs.map((m) => m.tool_call_id)).toEqual(['d1', 's1']);
   });
 });

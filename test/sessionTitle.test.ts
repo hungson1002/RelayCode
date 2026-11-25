@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { smartSessionTitle, smartSessionTitleFromTurns } from '../src/sessionTitle';
+import { cleanGeneratedTitle, smartSessionTitle, smartSessionTitleFromTurns } from '../src/sessionTitle';
 
 describe('smartSessionTitle', () => {
   it('removes greetings and preserves technical acronyms', () => {
@@ -62,5 +62,12 @@ describe('smartSessionTitle', () => {
     expect(smartSessionTitleFromTurns([
       { role: 'user', content: '', attachments: [{ name: 'login-error.png' }] }
     ])).toBe('Xem login-error.png');
+  });
+
+  it('strips noisy context XML/mentions and cleans AI-generated titles', () => {
+    expect(smartSessionTitle('@git-diff $fca <file path="a.ts">const x = 1;</file> Sửa lỗi upload video lớn')).toBe('Sửa lỗi upload video lớn');
+    expect(cleanGeneratedTitle('Title: "Hỗ trợ gửi video không giới hạn."')).toBe('Hỗ trợ gửi video không giới hạn');
+    expect(cleanGeneratedTitle('`Upgrade sidebar UI`')).toBe('Upgrade sidebar UI');
+    expect(cleanGeneratedTitle('')).toBeUndefined();
   });
 });

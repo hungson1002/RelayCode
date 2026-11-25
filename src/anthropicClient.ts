@@ -40,7 +40,9 @@ export class AnthropicClient {
     model: string,
     messages: ChatMessage[],
     onDelta: (delta: string) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    _tuning?: import('./types').RequestTuning,
+    onThinking?: (delta: string) => void
   ): Promise<RequestMetrics> {
     const startedAt = Date.now();
     const converted = this.convertChatMessages(messages);
@@ -49,7 +51,7 @@ export class AnthropicClient {
       headers: this.headers(),
       body: JSON.stringify({
         model,
-        max_tokens: 4096,
+        max_tokens: 8192,
         system: converted.system || undefined,
         messages: converted.messages,
         stream: true
@@ -65,33 +67,41 @@ export class AnthropicClient {
     let output = '';
     let inputTokens: number | undefined;
     let outputTokens: number | undefined;
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const blocks = buffer.split(/\r?\n\r?\n/);
-      buffer = blocks.pop() ?? '';
-      if (done && buffer.trim()) blocks.push(buffer);
-      for (const block of blocks) {
-        for (const data of parseSseData(block)) {
-          let event: { type?: string; delta?: { type?: string; text?: string }; error?: { message?: string }; message?: { usage?: { input_tokens?: number; output_tokens?: number } }; usage?: { input_tokens?: number; output_tokens?: number } };
-          try {
-            event = JSON.parse(data) as typeof event;
-          } catch {
-            // Ignore non-JSON keepalive events.
-            continue;
-          }
-          if (event.type === 'error') throw new Error(event.error?.message || 'Anthropic stream error.');
-          if (event.message?.usage?.input_tokens !== undefined) inputTokens = event.message.usage.input_tokens;
-          if (event.message?.usage?.output_tokens !== undefined) outputTokens = event.message.usage.output_tokens;
-          if (event.usage?.input_tokens !== undefined) inputTokens = event.usage.input_tokens;
-          if (event.usage?.output_tokens !== undefined) outputTokens = event.usage.output_tokens;
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
-            output += event.delta.text;
-            onDelta(event.delta.text);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() ?? '';
+        if (done && buffer.trim()) blocks.push(buffer);
+        for (const block of blocks) {
+          for (const data of parseSseData(block)) {
+            let event: { type?: string; delta?: { type?: string; text?: string; thinking?: string }; error?: { message?: string }; message?: { usage?: { input_tokens?: number; output_tokens?: number } }; usage?: { input_tokens?: number; output_tokens?: number } };
+            try {
+              event = JSON.parse(data) as typeof event;
+            } catch {
+              // Ignore non-JSON keepalive events.
+              continue;
+            }
+            if (event.type === 'error') throw new Error(event.error?.message || 'Anthropic stream error.');
+            if (event.message?.usage?.input_tokens !== undefined) inputTokens = event.message.usage.input_tokens;
+            if (event.message?.usage?.output_tokens !== undefined) outputTokens = event.message.usage.output_tokens;
+            if (event.usage?.input_tokens !== undefined) inputTokens = event.usage.input_tokens;
+            if (event.usage?.output_tokens !== undefined) outputTokens = event.usage.output_tokens;
+            if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta.thinking) {
+              onThinking?.(event.delta.thinking);
+            }
+            if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
+              output += event.delta.text;
+              onDelta(event.delta.text);
+            }
           }
         }
+        if (done) break;
       }
-      if (done) break;
+    } finally {
+      void reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
     return requestMetrics(startedAt, response.headers, inputTokens ?? estimateTokens(converted), outputTokens ?? estimateTokens(output), inputTokens === undefined || outputTokens === undefined);
   }
@@ -155,7 +165,7 @@ export class AnthropicClient {
       headers: this.headers(),
       body: JSON.stringify({
         model,
-        max_tokens: 4096,
+        max_tokens: 8192,
         system: converted.system || undefined,
         messages: converted.messages,
         tools: anthropicTools,
@@ -165,11 +175,12 @@ export class AnthropicClient {
     });
     if (!response.ok) throw new Error(await this.describeError(response));
     const body = (await response.json()) as {
-      content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
+      content?: Array<{ type?: string; text?: string; thinking?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
       usage?: { input_tokens?: number; output_tokens?: number };
     };
     const blocks = body.content ?? [];
     for (const block of blocks) {
+      if (block.type === 'thinking' && block.thinking) onProgress?.({ type: 'thinking', content: block.thinking });
       if (block.type === 'text' && block.text) onProgress?.({ type: 'content' });
       if (block.type === 'tool_use' && block.name) {
         onProgress?.({ type: 'tool', name: block.name, arguments: JSON.stringify(block.input ?? {}) });
@@ -189,10 +200,26 @@ export class AnthropicClient {
     const converted: AnthropicMessage[] = [];
     for (const message of messages) {
       if (message.role === 'system') {
-        system.push(typeof message.content === 'string' ? message.content : message.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n'));
+        const text = typeof message.content === 'string'
+          ? message.content
+          : message.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+        if (text.trim()) system.push(text);
         continue;
       }
-      converted.push({ role: message.role, content: this.convertContent(message.content) });
+      const raw = this.convertContent(message.content);
+      const blocks: AnthropicContent[] = typeof raw === 'string'
+        ? (raw ? [{ type: 'text', text: raw }] : [])
+        : raw;
+      if (!blocks.length) continue;
+      const previous = converted.at(-1);
+      if (previous?.role === message.role) {
+        const prevBlocks: AnthropicContent[] = typeof previous.content === 'string'
+          ? (previous.content ? [{ type: 'text', text: previous.content }] : [])
+          : previous.content;
+        previous.content = [...prevBlocks, ...blocks];
+      } else {
+        converted.push({ role: message.role, content: typeof raw === 'string' ? raw : blocks });
+      }
     }
     return { system: system.join('\n\n'), messages: converted };
   }
@@ -238,7 +265,12 @@ export class AnthropicClient {
           const id = typeof rawCall.id === 'string' ? rawCall.id.trim() : '';
           if (!id || !fn || typeof fn.name !== 'string') continue;
           let input: Record<string, unknown> = {};
-          try { input = JSON.parse(String(fn.arguments ?? '{}')) as Record<string, unknown>; } catch { /* Keep empty input. */ }
+          try {
+            const parsed: unknown = JSON.parse(String(fn.arguments ?? '{}'));
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              input = parsed as Record<string, unknown>;
+            }
+          } catch { /* Keep empty input. */ }
           content.push({ type: 'tool_use', id, name: fn.name, input });
           toolUseIds.push(id);
         }
@@ -289,7 +321,7 @@ export class AnthropicClient {
       const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,(.+)$/i.exec(part.image_url.url);
       if (match) converted.push({ type: 'image', source: { type: 'base64', media_type: match[1]!, data: match[2]! } });
     }
-    return converted;
+    return converted.length ? converted : [{ type: 'text', text: '(attachment)' }];
   }
 
   private async describeError(response: Response): Promise<string> {

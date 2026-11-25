@@ -60,6 +60,7 @@ export class RouterProcessManager implements vscode.Disposable {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(packageManager, ['install', '--global', packageName], {
         windowsHide: true,
+        shell: process.platform === 'win32',
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -97,7 +98,7 @@ export class RouterProcessManager implements vscode.Disposable {
     }
 
     const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
-    const local = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+    const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
     const portListening = local && Number.isInteger(port) && await this.isPortListening(url.hostname, port);
     return {
       state: portListening ? 'stale' : 'offline',
@@ -136,7 +137,7 @@ export class RouterProcessManager implements vscode.Disposable {
     this.process = undefined;
     if (!endpoint || process.platform !== 'win32') return false;
     const url = new URL(normalizeEndpoint(endpoint));
-    if (!['localhost', '127.0.0.1', '::1'].includes(url.hostname)) return false;
+    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)) return false;
     const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
     if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
     const script = `$all=@(Get-CimInstance Win32_Process);$listeners=@((Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue).OwningProcess|Select-Object -Unique);$roots=@();foreach($listener in $listeners){$current=$all|Where-Object ProcessId -eq $listener|Select-Object -First 1;while($current){if($current.CommandLine -match 'node_modules[\\\\/]9router[\\\\/](cli\\.js|app[\\\\/]custom-server\\.js)'){$roots+=$current.ProcessId;break};$parentId=$current.ParentProcessId;$current=$all|Where-Object ProcessId -eq $parentId|Select-Object -First 1}};$targets=@();foreach($root in ($roots|Select-Object -Unique)){$targets+=$root;$changed=$true;while($changed){$before=$targets.Count;$targets+=@($all|Where-Object {$targets -contains $_.ParentProcessId}|ForEach-Object ProcessId);$targets=@($targets|Select-Object -Unique);$changed=$targets.Count -gt $before}};if($targets.Count){Stop-Process -Id $targets -Force -ErrorAction Stop}`;
@@ -160,7 +161,7 @@ export class RouterProcessManager implements vscode.Disposable {
     onProgress: (progress: RouterLaunchProgress) => void
   ): Promise<string> {
     const url = new URL(normalizeEndpoint(endpoint));
-    if (!['localhost', '127.0.0.1', '::1'].includes(url.hostname)) {
+    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)) {
       throw new Error('Chỉ có thể tự khởi động 9Router tại máy cục bộ. Dùng Kết nối thủ công cho server từ xa.');
     }
 
@@ -210,15 +211,19 @@ export class RouterProcessManager implements vscode.Disposable {
     mkdirSync(logDir, { recursive: true });
     const logPath = join(logDir, '9router-runtime.log');
     const logFd = openSync(logPath, 'a');
-    this.process = spawn(launch.executable, args, {
-      cwd: homedir(),
-      env: { ...process.env, BROWSER: 'none' },
-      windowsHide: true,
-      detached: true,
-      stdio: ['ignore', logFd, logFd]
-    });
-    const child = this.process;
-    closeSync(logFd);
+    let child: ChildProcess;
+    try {
+      child = spawn(launch.executable, args, {
+        cwd: homedir(),
+        env: { ...process.env, BROWSER: 'none' },
+        windowsHide: true,
+        detached: true,
+        stdio: ['ignore', logFd, logFd]
+      });
+      this.process = child;
+    } finally {
+      closeSync(logFd);
+    }
     this.output.appendLine(`9Router started with PID ${child.pid ?? 'unknown'}. Log: ${logPath}`);
     child.once('error', (error) => {
       this.recentErrors.push(error.message);

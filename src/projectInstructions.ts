@@ -41,12 +41,19 @@ export function formatProjectInstructions(instructions: ProjectInstruction[]): s
 
 export function nearestInstructionCandidates(workspaceRoot: string, filePath: string): string[] {
   const root = resolve(workspaceRoot);
+  const normalize = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value);
+  const normalizedRoot = normalize(root);
   let current = resolve(dirname(filePath));
   const candidates: string[] = [];
-  while (current === root || current.startsWith(`${root}${sep}`)) {
+  while (true) {
+    const normalizedCurrent = normalize(current);
+    if (normalizedCurrent !== normalizedRoot && !normalizedCurrent.startsWith(`${normalizedRoot}${sep}`)) break;
     candidates.unshift(join(current, 'AGENTS.md'));
-    if (current === root) break;
-    current = dirname(current);
+    if (normalizedCurrent === normalizedRoot) break;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
   }
+  if (!candidates.length) candidates.push(join(root, 'AGENTS.md'));
   return candidates;
 }

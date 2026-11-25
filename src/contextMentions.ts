@@ -8,10 +8,15 @@ export interface ParsedContextMentions {
 }
 
 function valuesAfter(prompt: string, name: 'file' | 'folder', limit: number): string[] {
-  const pattern = new RegExp(`@${name}:(?:"([^"]+)"|'([^']+)'|([^\\s,]+))`, 'gi');
-  return [...prompt.matchAll(pattern)]
+  const withoutCodeBlocks = prompt.replace(/```[\s\S]*?```/g, ' ');
+  const pattern = new RegExp(`(?:^|[\\s(\\[{"'])@${name}:(?:"([^"]+)"|'([^']+)'|([^\\s,]+))`, 'gi');
+  return [...withoutCodeBlocks.matchAll(pattern)]
     .slice(0, limit)
-    .map((match) => (match[1] || match[2] || match[3] || '').trim())
+    .map((match) => {
+      const quoted = match[1] || match[2];
+      if (quoted) return quoted.trim();
+      return (match[3] || '').trim().replace(/[.,;:!?)\]}]+$/, '');
+    })
     .filter(Boolean);
 }
 

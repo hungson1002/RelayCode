@@ -1,4 +1,5 @@
 export const CHAT_CONTROLLER_HOST_CHANGES = String.raw`  } else if (data.type === 'changesState') {
+    latestChangesState = data;
     const tray = $('changeTray');
     const collapsed = $('collapsedChanges');
     const messageList = $('messages');
@@ -21,9 +22,9 @@ export const CHAT_CONTROLLER_HOST_CHANGES = String.raw`  } else if (data.type ==
     // until the user hides it or resolves every pending change.
     tray.classList.toggle('hidden', !nextChangeCount || changesHidden);
     collapsed.classList.toggle('hidden', !nextChangeCount || !changesHidden);
-    const displayAdded = allChanges.reduce((sum, change) => sum + change.added, 0);
-    const displayRemoved = allChanges.reduce((sum, change) => sum + change.removed, 0);
-    const fileSummary = nextChangeCount + ' ' + (nextChangeCount === 1 ? 'file' : 'files') + ' changed';
+    const displayAdded = allChanges.reduce((sum, change) => sum + Number(change.added || 0), 0);
+    const displayRemoved = allChanges.reduce((sum, change) => sum + Number(change.removed || 0), 0);
+    const fileSummary = formatChangedFilesLabel(nextChangeCount);
     $('changeCount').innerHTML = escapeHtml(fileSummary) + ' <b class="diff-add">+' + displayAdded + '</b> <b class="diff-remove">-' + displayRemoved + '</b>';
     $('collapsedChangeCount').innerHTML = escapeHtml(fileSummary + '  ') + '<b class="diff-add">+' + displayAdded + '</b> <b class="diff-remove">-' + displayRemoved + '</b>';
     const list = $('changeList'); list.replaceChildren();
@@ -50,7 +51,7 @@ export const CHAT_CONTROLLER_HOST_CHANGES = String.raw`  } else if (data.type ==
         file.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span>';
         const stats = document.createElement('span');
         stats.className = 'change-row-stats';
-        stats.innerHTML = '<b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b>' + (resolved ? '<em>' + escapeHtml(change.resolution === 'accepted' ? activityCopy('Đã chấp nhận', 'Accepted') : activityCopy('Đã hoàn tác', 'Undone')) + '</em>' : '');
+        stats.innerHTML = '<b class="diff-add">+' + Number(change.added || 0) + '</b> <b class="diff-remove">-' + Number(change.removed || 0) + '</b>' + (resolved ? '<em>' + escapeHtml(change.resolution === 'accepted' ? activityCopy('Đã chấp nhận', 'Accepted') : activityCopy('Đã hoàn tác', 'Undone')) + '</em>' : '');
         const actions = document.createElement('span');
         actions.className = 'change-row-actions';
         const undo = document.createElement('button');
@@ -99,7 +100,7 @@ export const CHAT_CONTROLLER_HOST_CHANGES = String.raw`  } else if (data.type ==
       if (!changeSummary) {
         changeSummary = document.createElement('article');
         changeSummary.className = 'chat-change-summary collapsed';
-        changeSummary.innerHTML = '<header><span class="change-summary-icon" aria-hidden="true">' + uiIcon('files') + '</span><span class="change-summary-copy"><strong><span class="change-summary-files"></span></strong><small class="change-summary-stats"><b class="diff-add"></b><b class="diff-remove"></b></small></span><span class="change-summary-actions"><button class="summary-undo" type="button">Undo</button><button class="summary-review" type="button">Show files</button></span></header><div class="change-summary-preview"></div>';
+        changeSummary.innerHTML = '<header><span class="change-summary-icon" aria-hidden="true">' + uiIcon('files') + '</span><span class="change-summary-copy"><strong><span class="change-summary-files"></span></strong><small class="change-summary-stats"><b class="diff-add"></b><b class="diff-remove"></b></small></span><span class="change-summary-actions"><button class="summary-undo" type="button">' + activityCopy('Hoàn tác', 'Undo') + '</button><button class="summary-review" type="button">' + activityCopy('Xem file', 'Show files') + '</button></span></header><div class="change-summary-preview"></div>';
         $('messages').append(changeSummary);
       }
       const setSummaryExpanded = (expanded) => {
@@ -109,21 +110,39 @@ export const CHAT_CONTROLLER_HOST_CHANGES = String.raw`  } else if (data.type ==
       };
       const reviewButton = changeSummary.querySelector('.summary-review');
       reviewButton.onclick = () => setSummaryExpanded(!changeSummaryExpanded);
-      changeSummary.querySelector('.summary-undo').onclick = () => vscode.postMessage({ type: 'undoAllChanges' });
+      const undoButton = changeSummary.querySelector('.summary-undo');
+      undoButton.textContent = activityCopy('Hoàn tác', 'Undo');
+      undoButton.onclick = () => vscode.postMessage({ type: 'undoAllChanges' });
       changeSummary.querySelector('.change-summary-files').textContent = fileSummary;
-      changeSummary.querySelector('.change-summary-stats .diff-add').textContent = '+' + data.added;
-      changeSummary.querySelector('.change-summary-stats .diff-remove').textContent = '-' + data.removed;
+      changeSummary.querySelector('.change-summary-stats .diff-add').textContent = '+' + displayAdded;
+      changeSummary.querySelector('.change-summary-stats .diff-remove').textContent = '-' + displayRemoved;
       changeSummary.querySelector('.change-summary-copy').onclick = () => setSummaryExpanded(!changeSummaryExpanded);
       const preview = changeSummary.querySelector('.change-summary-preview');
       preview.replaceChildren();
-      for (const change of (data.changes || [])) {
-        const row = document.createElement('button');
-        row.type = 'button';
-        row.className = 'change-summary-file';
-        row.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + change.added + '</b> <b class="diff-remove">-' + change.removed + '</b></small>';
-        row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
-        preview.append(row);
-      }
+      let renderedSummary = 0;
+      const summaryItems = data.changes || [];
+      const renderSummaryBatch = () => {
+        preview.querySelector('.change-summary-overflow')?.remove();
+        const batch = summaryItems.slice(renderedSummary, renderedSummary + 60);
+        for (const change of batch) {
+          const row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'change-summary-file';
+          row.innerHTML = fileTypeIcon(change.path) + '<span>' + escapeHtml(change.path) + '</span><small><b class="diff-add">+' + Number(change.added || 0) + '</b> <b class="diff-remove">-' + Number(change.removed || 0) + '</b></small>';
+          row.addEventListener('click', () => vscode.postMessage({ type: 'reviewChange', id: change.id }));
+          preview.append(row);
+        }
+        renderedSummary += batch.length;
+        if (renderedSummary < summaryItems.length) {
+          const overflow = document.createElement('button');
+          overflow.type = 'button';
+          overflow.className = 'change-summary-overflow';
+          overflow.textContent = uiCopy('Hiện thêm ', 'Show ') + Math.min(60, summaryItems.length - renderedSummary) + uiCopy(' file', ' files');
+          overflow.addEventListener('click', renderSummaryBatch);
+          preview.append(overflow);
+        }
+      };
+      renderSummaryBatch();
       setSummaryExpanded(changeSummaryExpanded);
       placeAssistantResponseActionsAfterChangeSummary();
       updateChangeActionState();

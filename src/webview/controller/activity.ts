@@ -6,32 +6,39 @@ function compactActivityText(value, limit = 108) {
   return text.slice(0, Math.max(1, limit - 1)).trimEnd() + '…';
 }
 
+function stripStatusHeartbeat(status) {
+  return String(status || '').replace(/\s+·\s+\d+s$/i, '').trim();
+}
+
 function activityInfo(status) {
-  const detail = status.includes(':') ? status.slice(status.indexOf(':') + 1).trim() : '';
-  if (/kiểm tra provider|checking provider/i.test(status)) return { kind: 'provider', key: 'provider', done: activityCopy('Đã kiểm tra provider', 'Provider checked') };
-  if (/kết nối model gián đoạn|model connection interrupted/i.test(status)) return { kind: 'provider', key: 'model-retry', done: activityCopy('Đã kết nối lại model', 'Model reconnected') };
-  if (/chờ model|model đang xử lý|model đang suy nghĩ|waiting for model|model is (?:working|thinking)/i.test(status)) return { kind: 'waiting', key: 'waiting', done: activityCopy('Model đã phản hồi', 'Model responded') };
-  if (/chạy lệnh|running command/i.test(status)) return { kind: 'command', key: 'command-current', done: detail ? activityCopy('Đã chạy: ', 'Ran: ') + detail : activityCopy('Đã chạy lệnh', 'Command completed') };
-  if (/chạy kiểm tra|running tests|validating changes/i.test(status)) return { kind: 'test', key: 'test-current', done: detail ? activityCopy('Đã kiểm tra: ', 'Checked: ') + detail : activityCopy('Đã chạy kiểm tra', 'Tests completed') };
-  if (/tạo ảnh thất bại|image generation failed/i.test(status)) return { kind: 'error', key: 'image:' + detail, done: detail ? activityCopy('Không thể tạo ảnh ', 'Could not generate ') + detail : activityCopy('Không thể tạo ảnh', 'Image generation failed') };
-  if (/tạo ảnh|generating image/i.test(status)) return { kind: 'edit', key: 'image:' + detail, done: detail ? activityCopy('Đã tạo ảnh ', 'Generated ') + detail : activityCopy('Đã tạo ảnh', 'Image generated') };
-  if (/tìm model tạo ảnh|finding an image model/i.test(status)) return { kind: 'inspect', key: 'image-models', done: activityCopy('Đã tìm model tạo ảnh', 'Image model found') };
-  if (/tạo thư mục|creating directory/i.test(status)) return { kind: 'edit', key: 'directory:' + detail, done: detail ? activityCopy('Đã tạo thư mục ', 'Created directory ') + detail : activityCopy('Đã tạo thư mục', 'Directory created') };
-  if (/xóa file|deleting file/i.test(status)) return { kind: 'edit', key: 'delete:' + detail, done: detail ? activityCopy('Đã xóa ', 'Deleted ') + detail : activityCopy('Đã xóa file', 'File deleted') };
-  if (/di chuyển file|moving file/i.test(status)) return { kind: 'edit', key: 'move:' + detail, done: detail ? activityCopy('Đã di chuyển ', 'Moved ') + detail : activityCopy('Đã di chuyển file', 'File moved') };
-  if (/sửa file|editing file/i.test(status)) return { kind: 'edit', key: 'edit:' + detail, done: detail ? activityCopy('Đã sửa ', 'Edited ') + detail : activityCopy('Đã sửa file', 'File edited') };
-  if (/kiểm tra đường dẫn|checking path/i.test(status)) return { kind: 'inspect', key: 'stat:' + detail, done: detail ? activityCopy('Đã kiểm tra ', 'Checked ') + detail : activityCopy('Đã kiểm tra đường dẫn', 'Path checked') };
-  if (/xem thư mục|reading directory/i.test(status)) return { kind: 'inspect', key: 'directory-list:' + detail, done: detail ? activityCopy('Đã xem thư mục ', 'Read directory ') + detail : activityCopy('Đã xem thư mục', 'Directory read') };
-  if (/Git diff/i.test(status)) return { kind: 'inspect', key: 'git-diff', done: activityCopy('Đã đọc Git diff', 'Git diff read') };
-  if (/đọc tài nguyên skill|reading skill resource/i.test(status)) return { kind: 'inspect', key: 'skill:' + detail, done: detail ? activityCopy('Đã đọc skill: ', 'Read skill: ') + detail : activityCopy('Đã đọc skill', 'Skill read') };
-  if (/đọc trang web|reading webpage/i.test(status)) return { kind: 'inspect', key: 'web:' + detail, done: detail ? activityCopy('Đã đọc trang ', 'Read page ') + detail : activityCopy('Đã đọc trang web', 'Webpage read') };
-  if (/phân tích file|analyzing file/i.test(status)) return { kind: 'inspect', key: 'analyze-files', done: detail ? activityCopy('Đã phân tích: ', 'Analyzed: ') + detail : activityCopy('Đã phân tích file', 'File analyzed') };
-  if (/đọc file|reading file/i.test(status)) return { kind: 'inspect', key: 'read:' + detail, done: detail ? activityCopy('Đã đọc ', 'Read ') + detail : activityCopy('Đã đọc file', 'File read') };
-  if (/cấu trúc dự án|project structure/i.test(status)) return { kind: 'inspect', key: 'list:' + detail, done: detail ? activityCopy('Đã xem file: ', 'Inspected files: ') + detail : activityCopy('Đã xem cấu trúc dự án', 'Project structure inspected') };
-  if (/tìm trong dự án|searching project/i.test(status)) return { kind: 'inspect', key: 'search:' + detail, done: detail ? activityCopy('Đã tìm: ', 'Searched: ') + detail : activityCopy('Đã tìm trong dự án', 'Project searched') };
-  if (/MCP/i.test(status)) return { kind: 'mcp', key: 'mcp:' + status, done: language === 'en' ? status.replace(/^Using/i, 'Used') : status.replace(/^Đang dùng/i, 'Đã dùng') };
-  if (/phân tích hướng thực hiện|analyzing the approach/i.test(status)) return { kind: 'thinking', key: 'thinking-direction', done: activityCopy('Đã xác định hướng thực hiện', 'Approach determined') };
-  if (/bước tiếp theo|next step/i.test(status)) return { kind: 'thinking', key: 'thinking-next', done: activityCopy('Đã xác định bước tiếp theo', 'Next step determined') };
+  const base = stripStatusHeartbeat(status);
+  const colon = base.indexOf(':');
+  const head = colon >= 0 ? base.slice(0, colon) : base;
+  const detail = colon >= 0 ? base.slice(colon + 1).trim() : '';
+  if (/kiểm tra provider|checking provider/i.test(head)) return { kind: 'provider', key: 'provider', done: activityCopy('Đã kiểm tra provider', 'Provider checked') };
+  if (/kết nối model gián đoạn|model connection interrupted/i.test(head)) return { kind: 'provider', key: 'model-retry', done: activityCopy('Đã kết nối lại model', 'Model reconnected') };
+  if (/chờ model|model đang xử lý|model đang suy nghĩ|waiting for model|model is (?:working|thinking)/i.test(head)) return { kind: 'waiting', key: 'waiting', done: activityCopy('Model đã phản hồi', 'Model responded') };
+  if (/chạy lệnh|running command/i.test(head)) return { kind: 'command', key: 'command-current', done: detail ? activityCopy('Đã chạy: ', 'Ran: ') + detail : activityCopy('Đã chạy lệnh', 'Command completed') };
+  if (/chạy kiểm tra|running tests|validating changes/i.test(head)) return { kind: 'test', key: 'test-current', done: detail ? activityCopy('Đã kiểm tra: ', 'Checked: ') + detail : activityCopy('Đã chạy kiểm tra', 'Tests completed') };
+  if (/tạo ảnh thất bại|image generation failed/i.test(head)) return { kind: 'error', key: 'image:' + detail, done: detail ? activityCopy('Không thể tạo ảnh ', 'Could not generate ') + detail : activityCopy('Không thể tạo ảnh', 'Image generation failed') };
+  if (/tạo ảnh|generating image/i.test(head)) return { kind: 'edit', key: 'image:' + detail, done: detail ? activityCopy('Đã tạo ảnh ', 'Generated ') + detail : activityCopy('Đã tạo ảnh', 'Image generated') };
+  if (/tìm model tạo ảnh|finding an image model/i.test(head)) return { kind: 'inspect', key: 'image-models', done: activityCopy('Đã tìm model tạo ảnh', 'Image model found') };
+  if (/tạo thư mục|creating directory/i.test(head)) return { kind: 'edit', key: 'directory:' + detail, done: detail ? activityCopy('Đã tạo thư mục ', 'Created directory ') + detail : activityCopy('Đã tạo thư mục', 'Directory created') };
+  if (/xóa file|deleting file/i.test(head)) return { kind: 'edit', key: 'delete:' + detail, done: detail ? activityCopy('Đã xóa ', 'Deleted ') + detail : activityCopy('Đã xóa file', 'File deleted') };
+  if (/di chuyển file|moving file/i.test(head)) return { kind: 'edit', key: 'move:' + detail, done: detail ? activityCopy('Đã di chuyển ', 'Moved ') + detail : activityCopy('Đã di chuyển file', 'File moved') };
+  if (/sửa file|editing file/i.test(head)) return { kind: 'edit', key: 'edit:' + detail, done: detail ? activityCopy('Đã sửa ', 'Edited ') + detail : activityCopy('Đã sửa file', 'File edited') };
+  if (/kiểm tra đường dẫn|checking path/i.test(head)) return { kind: 'inspect', key: 'stat:' + detail, done: detail ? activityCopy('Đã kiểm tra ', 'Checked ') + detail : activityCopy('Đã kiểm tra đường dẫn', 'Path checked') };
+  if (/xem thư mục|reading directory/i.test(head)) return { kind: 'inspect', key: 'directory-list:' + detail, done: detail ? activityCopy('Đã xem thư mục ', 'Read directory ') + detail : activityCopy('Đã xem thư mục', 'Directory read') };
+  if (/Git diff/i.test(head)) return { kind: 'inspect', key: 'git-diff', done: activityCopy('Đã đọc Git diff', 'Git diff read') };
+  if (/đọc tài nguyên skill|reading skill resource/i.test(head)) return { kind: 'inspect', key: 'skill:' + detail, done: detail ? activityCopy('Đã đọc skill: ', 'Read skill: ') + detail : activityCopy('Đã đọc skill', 'Skill read') };
+  if (/đọc trang web|reading webpage/i.test(head)) return { kind: 'inspect', key: 'web:' + detail, done: detail ? activityCopy('Đã đọc trang ', 'Read page ') + detail : activityCopy('Đã đọc trang web', 'Webpage read') };
+  if (/phân tích file|analyzing file/i.test(head)) return { kind: 'inspect', key: 'analyze-files', done: detail ? activityCopy('Đã phân tích: ', 'Analyzed: ') + detail : activityCopy('Đã phân tích file', 'File analyzed') };
+  if (/đọc file|reading file/i.test(head)) return { kind: 'inspect', key: 'read:' + detail, done: detail ? activityCopy('Đã đọc ', 'Read ') + detail : activityCopy('Đã đọc file', 'File read') };
+  if (/cấu trúc dự án|project structure/i.test(head)) return { kind: 'inspect', key: 'list:' + detail, done: detail ? activityCopy('Đã xem file: ', 'Inspected files: ') + detail : activityCopy('Đã xem cấu trúc dự án', 'Project structure inspected') };
+  if (/tìm trong dự án|searching project/i.test(head)) return { kind: 'inspect', key: 'search:' + detail, done: detail ? activityCopy('Đã tìm: ', 'Searched: ') + detail : activityCopy('Đã tìm trong dự án', 'Project searched') };
+  if (/MCP/i.test(head)) return { kind: 'mcp', key: 'mcp:' + base, done: language === 'en' ? base.replace(/^Using/i, 'Used') : base.replace(/^Đang dùng/i, 'Đã dùng') };
+  if (/phân tích hướng thực hiện|analyzing the approach/i.test(head)) return { kind: 'thinking', key: 'thinking-direction', done: activityCopy('Đã xác định hướng thực hiện', 'Approach determined') };
+  if (/bước tiếp theo|next step/i.test(head)) return { kind: 'thinking', key: 'thinking-next', done: activityCopy('Đã xác định bước tiếp theo', 'Next step determined') };
   return { kind: 'thinking', key: 'thinking', done: activityCopy('Đã phân tích yêu cầu', 'Request analyzed') };
 }
 
@@ -73,16 +80,17 @@ function fileUiIcon(path) {
 }
 
 function activityIconName(info, status) {
-  const detail = status.includes(':') ? status.slice(status.indexOf(':') + 1).trim() : '';
-  if (info.kind === 'edit' || (info.kind === 'inspect' && /(?:file|skill)/i.test(info.key))) return fileUiIcon(detail);
+  const base = stripStatusHeartbeat(status);
+  const detail = base.includes(':') ? base.slice(base.indexOf(':') + 1).trim() : '';
+  if (info.kind === 'edit' || (info.kind === 'inspect' && /(?:read:|file|skill|stat:)/i.test(info.key))) return fileUiIcon(detail);
   if (info.kind === 'command') return 'terminalWindow';
   if (info.kind === 'test') return 'checkCircle';
   if (info.kind === 'mcp') return 'plugsConnected';
   if (info.kind === 'provider') return 'pulse';
   if (info.kind === 'waiting' || info.kind === 'thinking') return 'brain';
-  if (/list:/.test(info.key)) return 'files';
-  if (/search:/.test(info.key)) return 'listSearch';
-  if (/web:/.test(info.key)) return 'listSearch';
+  if (/list:/.test(info.key)) return 'folderOpen';
+  if (/search:/.test(info.key)) return 'magnifyingGlass';
+  if (/web:/.test(info.key)) return 'globe';
   return 'spinnerGap';
 }
 
@@ -144,6 +152,8 @@ function archiveAssistantStreamBeforeTimeline() {
   insertAssistantTimelineNode(block);
   assistantRawText = '';
   pendingAssistantText = '';
+  assistantStreamTextNode = null;
+  assistantMarkdownRenderedLength = 0;
   assistantBody.replaceChildren();
   const item = assistantBody.closest('.message');
   if (item) item.dataset.rawContent = '';
@@ -195,6 +205,8 @@ function archiveStreamedProgress(content = '') {
   if (currentActivity) finalizeLiveActivity();
   assistantRawText = '';
   pendingAssistantText = '';
+  assistantStreamTextNode = null;
+  assistantMarkdownRenderedLength = 0;
   assistantBody.replaceChildren();
   const item = assistantBody.closest('.message');
   if (item) item.dataset.rawContent = '';
@@ -309,6 +321,8 @@ function appendAgentCommentary(content) {
     // Do not preserve the prefix as a stray message above the activity row.
     assistantRawText = '';
     pendingAssistantText = '';
+    assistantStreamTextNode = null;
+    assistantMarkdownRenderedLength = 0;
     assistantBody.replaceChildren();
     const item = assistantBody.closest('.message');
     if (item) item.dataset.rawContent = '';
@@ -335,7 +349,7 @@ function formatWorkingElapsed(seconds) {
 }
 
 function workingStatusLabel(status) {
-  const raw = String(status || '').trim();
+  const raw = stripStatusHeartbeat(status);
   if (!raw || language !== 'en') return raw;
   if (/đang kiểm tra provider/i.test(raw)) return 'Checking provider';
   if (/mất kết nối 9router/i.test(raw)) return 'Reconnecting 9Router';
@@ -384,6 +398,92 @@ function updateWorkingLabel(state = 'working') {
     : (state === 'cancelled' ? 'Đã dừng sau ' : state === 'error' ? 'Dừng sau ' : state === 'complete' ? 'Đã làm trong ' : 'Đang làm trong ') + elapsed;
 }
 
+let thinkingBlock = null;
+let thinkingBody = null;
+let thinkingTitle = null;
+let thinkingStartedAt = 0;
+
+function resetThinkingBlock() {
+  thinkingBlock = null;
+  thinkingBody = null;
+  thinkingTitle = null;
+  thinkingStartedAt = 0;
+}
+
+function appendThinkingDelta(delta) {
+  if (!assistantBody || !delta) return;
+  const message = assistantBody.closest('.message');
+  if (!message) return;
+  if (!thinkingBlock || !thinkingBlock.isConnected) {
+    thinkingStartedAt = Date.now();
+    thinkingBlock = document.createElement('details');
+    thinkingBlock.className = 'thinking-block is-streaming';
+    thinkingBlock.open = true;
+    const summary = document.createElement('summary');
+    summary.innerHTML = '<span class="thinking-dot" aria-hidden="true"></span><span class="thinking-title"></span><span class="thinking-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
+    thinkingTitle = summary.querySelector('.thinking-title');
+    thinkingTitle.textContent = activityCopy('Đang suy luận…', 'Thinking…');
+    thinkingBody = document.createElement('div');
+    thinkingBody.className = 'thinking-body';
+    thinkingBlock.append(summary, thinkingBody);
+    assistantBody.before(thinkingBlock);
+  }
+  thinkingBody.textContent = ((thinkingBody.textContent || '') + delta).slice(-24000);
+  thinkingBody.scrollTop = thinkingBody.scrollHeight;
+  const elapsedSec = Math.max(1, Math.round((Date.now() - thinkingStartedAt) / 1000));
+  if (thinkingTitle) {
+    thinkingTitle.textContent = activityCopy('Đang suy luận · ' + elapsedSec + ' giây', 'Thinking · ' + elapsedSec + 's');
+  }
+  if (messagesPinnedToBottom) {
+    const list = $('messages');
+    list.scrollTop = list.scrollHeight;
+  }
+}
+
+function finishThinkingBlock() {
+  if (!thinkingBlock) return;
+  thinkingBlock.classList.remove('is-streaming');
+  thinkingBlock.open = false;
+  if (thinkingTitle && thinkingStartedAt) {
+    const elapsedSec = Math.max(1, Math.round((Date.now() - thinkingStartedAt) / 1000));
+    thinkingTitle.textContent = activityCopy('Đã suy luận · ' + elapsedSec + ' giây', 'Thought for ' + elapsedSec + 's');
+  }
+}
+
+function formatToolDurationMs(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return '';
+  if (durationMs < 1000) return Math.round(durationMs) + 'ms';
+  return (durationMs / 1000).toFixed(durationMs < 10000 ? 1 : 0) + 's';
+}
+
+function recordToolEvent(event) {
+  if (!event || !running) return;
+  if (event.phase === 'start') {
+    turnToolCount += 1;
+    if (workingLabel) {
+      workingLabel.dataset.steps = language === 'en'
+        ? turnToolCount + (turnToolCount === 1 ? ' step' : ' steps')
+        : turnToolCount + ' bước';
+    }
+    return;
+  }
+  if (event.phase === 'end' && assistantActivity) {
+    const activeRow = [...assistantActivity.querySelectorAll('.activity-row')].at(-1);
+    if (!activeRow) return;
+    if (event.ok === false) activeRow.classList.add('is-error');
+    const formatted = formatToolDurationMs(event.durationMs);
+    if (formatted) {
+      let badge = activeRow.querySelector('.activity-duration');
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'activity-duration';
+        activeRow.append(badge);
+      }
+      badge.textContent = formatted;
+    }
+  }
+}
+
 function startWorkingLabel() {
   if (!assistantBody) return;
   if (workingTimer) clearInterval(workingTimer);
@@ -396,6 +496,10 @@ function startWorkingLabel() {
   });
   workingLabel = existing || document.createElement('div');
   workingLabel.className = 'worked-label working-live';
+  workingLabel.dataset.state = 'working';
+  workingLabel.dataset.steps = turnToolCount > 0
+    ? (language === 'en' ? turnToolCount + (turnToolCount === 1 ? ' step' : ' steps') : turnToolCount + ' bước')
+    : '';
   if (!workingLabel.isConnected) assistantBody.before(workingLabel);
   updateWorkingLabel();
   workingTimer = setInterval(() => updateWorkingLabel(), 1000);
@@ -405,7 +509,10 @@ function finishWorkingLabel(state) {
   if (workingTimer) clearInterval(workingTimer);
   workingTimer = null;
   updateWorkingLabel(state);
-  workingLabel?.classList.remove('working-live');
+  if (workingLabel) {
+    workingLabel.dataset.state = state || 'complete';
+    workingLabel.classList.remove('working-live');
+  }
 }
 
 function compactTechnicalHistory(turnMessage) {
@@ -419,6 +526,8 @@ function compactTechnicalHistory(turnMessage) {
   history.className = 'worked-history';
   const summary = document.createElement('summary');
   summary.className = 'worked-label';
+  summary.dataset.state = label.dataset.state || 'complete';
+  if (label.dataset.steps) summary.dataset.steps = label.dataset.steps;
   summary.innerHTML = '<span class="worked-history-copy"></span><span class="worked-history-caret" aria-hidden="true">' + uiIcon('caretRight') + '</span>';
   summary.querySelector('.worked-history-copy').textContent = label.textContent || '';
   const details = document.createElement('div');

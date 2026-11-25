@@ -47,17 +47,19 @@ export function renderTelemetryDashboard(
       ? 'Hạn mức tài khoản từ 9Router và hoạt động gần đây của RelayCode.'
       : `Rate limit, token và tốc độ phản hồi của ${providerLabel}.`);
   const modelStats = aggregate(visibleRecords);
-  const requestRows = modelStats.map(requestRow).join('');
+  const requestRows = modelStats.map((item) => requestRow(item, language)).join('');
   const quotaBadge = `${quotaCount} ${language === 'en' ? 'limits' : 'hạn mức'}`;
   const modelBadge = `${modelStats.length} ${language === 'en' ? 'models' : 'model'}`;
   const openProviderAction = activeProfile?.kind === '9router'
     ? `<button class="button secondary" id="openProvider">${utilityIcon('external')}Mở 9Router</button>`
     : '';
+  const safeNonce = safe(nonce);
+  const safeCspSource = safe(webview.cspSource);
 
   const document = `<!doctype html>
 <html lang="${language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-<style nonce="${nonce}">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src ${safeCspSource} 'nonce-${safeNonce}'; script-src 'nonce-${safeNonce}';">
+<style nonce="${safeNonce}">
 :root{color-scheme:dark;--canvas:#141617;--surface:#1b1d1f;--surface2:#202326;--line:#303438;--lineStrong:#41464b;--text:#f3f5f6;--muted:#92989e;--quiet:#6f757b;--accent:#62d7bd;--danger:#ed7f84;--warning:#deb95b}
 *{box-sizing:border-box}html{background:var(--canvas)}body{margin:0;background:var(--canvas);color:var(--text);font:13px/1.5 var(--vscode-font-family,Segoe UI,sans-serif)}button,select{font:inherit;color:inherit}
 .app{width:min(1240px,100%);margin:auto;padding:28px 32px 54px}.masthead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:30px;align-items:end;padding:14px 0 26px;border-bottom:1px solid var(--line)}.identity{display:grid;grid-template-columns:46px minmax(0,1fr);gap:14px;align-items:center}.hero-brand{width:46px;height:46px;padding:9px;border:1px solid var(--lineStrong);border-radius:12px;background:var(--surface)}.brand-symbol{display:grid;place-items:center;width:100%;height:100%;color:#f4f5f6}.brand-symbol svg,.brand-symbol img{display:block;width:100%;height:100%;object-fit:contain}.kicker{display:block;margin-bottom:4px;color:var(--accent);font-size:9px;font-weight:750;letter-spacing:.12em;text-transform:uppercase}.masthead h1{margin:0;font-size:29px;line-height:1.04;letter-spacing:-.04em}.masthead p{max-width:620px;margin:7px 0 0;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px}.button{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:35px;padding:0 13px;border:1px solid var(--lineStrong);border-radius:8px;background:var(--surface2);cursor:pointer;transition:background .14s,border-color .14s,transform .14s}.button:hover{border-color:#596067;background:#282b2e}.button:active{transform:translateY(1px)}.button.primary{border-color:rgba(98,215,189,.5);background:var(--accent);color:#10211d;font-weight:720}.button.primary:hover{background:#79e3ca}.button svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -110,6 +112,39 @@ body{background:linear-gradient(180deg,#121415 0,#101213 100%)}
 @media(max-width:680px){.app{padding-inline:12px}.quota-columns{display:none}.quota-row{grid-template-columns:1fr;gap:11px;padding:14px 0}.reset{grid-template-columns:auto 1fr;align-items:center;gap:8px;text-align:left}.account-head{grid-template-columns:36px minmax(0,1fr) auto}.account-head .plan{display:none}.request-head{display:none}.request-row{grid-template-columns:minmax(0,1fr) minmax(92px,auto);grid-template-areas:"model token" "model latency";column-gap:14px;row-gap:4px;min-height:74px;padding:12px 14px}.request-model{grid-area:model;align-self:center}.request-row>span{display:none}.request-row>b{grid-area:token;align-self:end;justify-self:stretch}.request-row>em{grid-area:latency;align-self:start;justify-self:stretch}}
 @media(max-width:470px){.app{padding:10px 8px 36px}.masthead{padding:14px}.masthead h1{font-size:22px}.identity{grid-template-columns:38px minmax(0,1fr)}.hero-brand{width:38px;height:38px}.actions{display:grid;grid-template-columns:1fr 1fr;width:100%}.actions .button{width:100%}.snapshot,.filters{grid-template-columns:1fr}.metric{border-left:0;border-top:1px solid var(--line)}.metric:first-child{border-top:0}.filter-bar{padding:10px}.notice{grid-template-columns:28px 1fr}.notice .button{grid-column:1/-1}.account-head{padding-inline:12px}.quota-list{padding-inline:12px}.view-tabs{display:grid;grid-template-columns:1fr 1fr}.view-tab{justify-content:center;padding-inline:8px}.view-tab b{display:none}.panel-heading{align-items:flex-start}.panel-heading span{max-width:45%;text-align:right}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}.button,.bar i{transition:none}}
+/* Unified minimal agent dashboard polish */
+:root{--canvas:#131416;--surface:#191b1e;--surface2:#202226;--line:rgba(255,255,255,.085);--lineStrong:rgba(255,255,255,.14);--text:#eceef2;--muted:#888e99;--quiet:#646a76;--accent:#5ec496;--danger:#e27980;--warning:#d8b357}
+body{background:var(--canvas);-webkit-font-smoothing:antialiased}
+.masthead{border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+.kicker{color:var(--muted)}
+.button{border-color:var(--line);background:rgba(255,255,255,.04);color:var(--text)}
+.button:hover{border-color:var(--lineStrong);background:rgba(255,255,255,.09)}
+.button.primary{border-color:transparent;background:#eceef2;color:#111316;font-weight:600}
+.button.primary:hover{background:#ffffff}
+.snapshot,.filter-bar,.account,.request-table{border-color:var(--line);border-radius:12px;background:var(--surface)}
+.metric-icon{border-color:var(--line);background:rgba(255,255,255,.035);color:var(--muted)}
+.metric.primary .metric-icon{border-color:var(--line);background:rgba(255,255,255,.05);color:var(--text)}
+.view-tabs{padding:4px;border-color:var(--line);border-radius:10px;background:var(--surface)}
+.view-tab{min-height:34px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-weight:560}
+.view-tab:hover{background:rgba(255,255,255,.05);color:var(--text)}
+.view-tab:before{display:none}
+.view-tab[aria-selected="true"],.view-tab[data-view="activity"][aria-selected="true"]{border:0;background:rgba(255,255,255,.09);color:#fff;box-shadow:none}
+.view-tab b{border-color:var(--line);background:rgba(0,0,0,.22);color:var(--muted)}
+.view-tab[aria-selected="true"] b{border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.08);color:#fff}
+.panel-heading,.quota-heading,.activity-heading{border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;padding:6px 2px 10px}
+.panel-heading h2,.quota-heading h2,.activity-heading h2{color:var(--text);font-size:12.5px;font-weight:600}
+.panel-heading h2:before{display:none}
+.account-head{padding:13px 16px;border-bottom-color:var(--line);background:rgba(255,255,255,.02)}
+.account-head:before{display:none}
+.account-brand,.model-brand,.request-brand,.hero-brand{border-color:var(--line);background:rgba(0,0,0,.24)}
+.plan{border-color:var(--line);background:rgba(255,255,255,.04);color:var(--muted)}
+.quota-gauge{height:7px;padding:0;border:0;border-radius:999px;background:rgba(255,255,255,.08)}
+.quota-gauge::-webkit-progress-bar{border-radius:999px;background:rgba(255,255,255,.08)}
+.quota-gauge::-webkit-progress-value{border-radius:999px}
+.select-trigger{border-color:var(--line);background:rgba(0,0,0,.22);border-radius:8px}
+.select-trigger:hover,.dashboard-select.open .select-trigger{border-color:var(--lineStrong);background:rgba(0,0,0,.3)}
+.select-menu{border-color:var(--line);border-radius:12px;background:#1e2024;box-shadow:0 14px 36px rgba(0,0,0,.48)}
+.dashboard-dialog{border-color:var(--line);border-radius:14px;background:#1e2024}
 </style></head><body><main class="app">
 <header class="masthead"><div class="identity">${brandMarkup(providerKey, providerLabel, 'hero-brand')}<div><span class="kicker">RelayCode usage</span><h1>Model activity</h1><p>${safe(providerDescription)}</p></div></div><nav class="actions">${openProviderAction}<button class="button secondary" id="clear">${utilityIcon('trash')}Xóa dữ liệu</button><button class="button primary" id="refresh">${utilityIcon('refresh')}Làm mới</button></nav></header>
 <section class="snapshot">
@@ -131,7 +166,7 @@ ${stateNotice(displayedQuota, providerLabel)}
   ${dashboardSelect('sort', 'Reset gần nhất', [['reset', 'Reset gần nhất'], ['remaining', 'Còn ít nhất'], ['name', 'Tên tài khoản']], 'reset')}
 </div></section>
 <div class="section-head panel-heading quota-heading"><h2>Quota by account</h2><span>${displayedQuota.fetchedAt ? `Cập nhật ${safe(relativeTime(displayedQuota.fetchedAt))}` : 'Chưa có rate limit mới'}</span></div>
-<section id="accounts" class="accounts">${displayedQuota.accounts.map(accountCard).join('') || emptyState(displayedQuota)}</section>
+<section id="accounts" class="accounts">${displayedQuota.accounts.map((item) => accountCard(item, language)).join('') || emptyState(displayedQuota)}</section>
 <p class="footnote">RelayCode chỉ hiển thị hạn mức provider thực sự trả về. Nếu API không gửi rate-limit headers, giao diện ghi rõ là chưa có dữ liệu thay vì tự ước đoán.</p>
 </section>
 <section id="activityPanel" class="tab-panel history" role="tabpanel" aria-labelledby="activityTab" tabindex="0" hidden><div class="section-head panel-heading activity-heading"><h2>Token usage by model</h2><span>${visibleRecords.length} request được lưu cục bộ</span></div>
@@ -145,7 +180,7 @@ ${stateNotice(displayedQuota, providerLabel)}
     <footer class="dialog-actions"><button class="button secondary" id="dialogCancel">Hủy</button><button class="button primary" id="dialogConfirm"></button></footer>
   </section>
 </div>
-<script nonce="${nonce}">
+<script nonce="${safeNonce}">
 const vscode=acquireVsCodeApi(),accounts=[...document.querySelectorAll('.account')],provider=document.getElementById('provider'),account=document.getElementById('account'),model=document.getElementById('model'),sort=document.getElementById('sort'),grid=document.getElementById('accounts');
 const viewTabs=[...document.querySelectorAll('.view-tab')],viewPanels=[...document.querySelectorAll('.tab-panel')];
 function setView(view,focus=false){viewTabs.forEach(tab=>{const active=tab.dataset.view===view;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;if(active&&focus)tab.focus()});viewPanels.forEach(panel=>panel.hidden=panel.id!==(view==='activity'?'activityPanel':'quotaPanel'));const previous=vscode.getState()||{};vscode.setState({...previous,dashboardView:view})}
@@ -214,6 +249,8 @@ function localizeTelemetryDocument(document: string): string {
     ['hạn mức còn lại', 'remaining quota'],
     ['Provider chưa gửi hạn mức', 'Provider has not sent a quota'],
     ['Chưa có dữ liệu hạn mức', 'No quota data'],
+    ['token đã ghi nhận', 'tokens recorded'],
+    ['Đã ghi nhận sử dụng', 'Usage recorded'],
     ['Không giới hạn', 'Unlimited'],
     ['Không có lịch', 'No schedule'],
     [' ngày nữa', ' days remaining'],
@@ -243,9 +280,16 @@ function localizeTelemetryDocument(document: string): string {
     ['Đóng', 'Close'],
     ['Hủy', 'Cancel']
   ];
-  return translations
-    .sort(([left], [right]) => right.length - left.length)
-    .reduce((result, [source, target]) => result.replaceAll(source, target), document);
+  const sorted = translations.sort(([left], [right]) => right.length - left.length);
+  const translateText = (segment: string): string =>
+    sorted.reduce((result, [source, target]) => result.replaceAll(source, target), segment);
+  return document.replace(/(<script\b[^>]*>[\s\S]*?<\/script>|<[^>]+>|[^<]+)/gi, (part) => {
+    if (part.startsWith('<script')) return translateText(part);
+    if (part.startsWith('<')) {
+      return part.replace(/(\baria-label=")([^"]*)(")/gi, (_, prefix, value, suffix) => `${prefix}${translateText(value)}${suffix}`);
+    }
+    return translateText(part);
+  });
 }
 
 function dashboardSelect(
@@ -266,27 +310,27 @@ function dashboardSelect(
   return `<div class="dashboard-select" data-select="${safe(id)}"><button type="button" class="select-trigger" aria-haspopup="listbox" aria-expanded="false"><span>${safe(initialLabel)}</span></button><div class="select-menu" role="listbox" hidden>${blankMenuOption}${menuOptions}</div><select id="${safe(id)}" aria-hidden="true" tabindex="-1">${blankNativeOption}${nativeOptions}</select></div>`;
 }
 
-function accountCard(account: QuotaAccount): string {
+function accountCard(account: QuotaAccount, language: 'vi' | 'en'): string {
   const minimum = account.quotas.reduce((result, item) => Math.min(result, item.remainingPercentage ?? 100), 100);
   const reset = account.quotas.reduce((result, item) => {
     const value = item.resetAt ? Date.parse(item.resetAt) : Number.MAX_SAFE_INTEGER;
     return Math.min(result, Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER);
   }, Number.MAX_SAFE_INTEGER);
-  const rows = account.quotas.map((item) => quotaRow(item, account.provider)).join('');
+  const rows = account.quotas.map((item) => quotaRow(item, account.provider, language)).join('');
   return `<article class="account" data-account="${safe(account.id)}" data-provider="${safe(account.provider)}" data-name="${safe(account.name.toLowerCase())}" data-remaining="${minimum}" data-reset="${reset}">
   <header class="account-head">${brandMarkup(brandKeyFor(account.provider), providerName(account.provider), 'account-brand')}<div class="account-name"><strong>${safe(providerName(account.provider))}</strong><span>${safe(account.email || account.name)}</span></div>${account.plan ? `<span class="plan">${safe(account.plan)}</span>` : '<span></span>'}<span class="state${account.active ? '' : ' off'}">${account.active ? 'Đang bật' : 'Đã tắt'}</span></header>
   ${rows ? '<div class="quota-columns"><span>Model</span><span>Hạn mức còn lại</span><span>Chu kỳ</span></div><div class="quota-list">' + rows + '</div>' : `<div class="account-error">${safe(account.error || 'Tài khoản chưa trả dữ liệu hạn mức.')}</div>`}
   ${rows && account.error ? `<div class="account-error">${safe(account.error)}</div>` : ''}</article>`;
 }
 
-function quotaRow(item: QuotaItem, provider: string): string {
+function quotaRow(item: QuotaItem, provider: string, language: 'vi' | 'en'): string {
   const known = item.unlimited || item.remainingPercentage !== undefined;
   const percent = item.unlimited ? 100 : Math.round(item.remainingPercentage ?? 0);
   const detail = item.unlimited
     ? 'Không giới hạn'
     : item.total !== undefined
-      ? `${compact(item.used ?? Math.max(0, item.total - (item.remaining ?? 0)))} / ${compact(item.total)}`
-      : item.remaining !== undefined ? `${compact(item.remaining)} còn lại` : item.used !== undefined ? `${compact(item.used)} token đã ghi nhận` : 'Provider chưa gửi hạn mức';
+      ? `${compact(item.used ?? Math.max(0, item.total - (item.remaining ?? 0)), language)} / ${compact(item.total, language)}`
+      : item.remaining !== undefined ? `${compact(item.remaining, language)} còn lại` : item.used !== undefined ? `${compact(item.used, language)} token đã ghi nhận` : 'Provider chưa gửi hạn mức';
   const modelKey = brandKeyFor(`${item.id} ${item.name}`, provider);
   const level = !known ? 'unknown' : percent <= 15 ? 'critical' : percent <= 40 ? 'low' : 'healthy';
   const gaugeValue = item.unlimited ? 100 : known ? percent : 0;
@@ -360,10 +404,11 @@ function aggregate(records: TelemetryRecord[]): ModelStats[] {
   return [...groups.values()].sort((left, right) => right.latest - left.latest);
 }
 
-function requestRow(item: ModelStats): string {
+function requestRow(item: ModelStats, language: 'vi' | 'en'): string {
   const average = item.calls ? Math.round(item.latency / item.calls) : 0;
   const key = brandKeyFor(item.model, item.provider);
-  return `<div class="request-row"><div class="request-model">${brandMarkup(key, item.model, 'request-brand')}<span><strong>${safe(item.model)}</strong><small>${number(item.calls)} request · ${safe(providerName(item.provider))}</small></span></div><span>${safe(item.profile)}</span><b>${compact(item.tokens)} tok</b><em>${number(average)} ms</em></div>`;
+  const requestLabel = language === 'en' ? (item.calls === 1 ? 'request' : 'requests') : 'request';
+  return `<div class="request-row"><div class="request-model">${brandMarkup(key, item.model, 'request-brand')}<span><strong>${safe(item.model)}</strong><small>${number(item.calls, language)} ${requestLabel} · ${safe(providerName(item.provider))}</small></span></div><span>${safe(item.profile)}</span><b>${compact(item.tokens, language)} tok</b><em>${number(average, language)} ms</em></div>`;
 }
 
 function metric(value: string, label: string, className = '', icon: UiIconName = 'pulse'): string {
@@ -423,12 +468,12 @@ function parseReset(value: string | undefined): string | undefined {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
 }
 
-function compact(value: number): string {
-  return new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 }).format(value);
+function compact(value: number, language: 'vi' | 'en' = 'vi'): string {
+  return new Intl.NumberFormat(language === 'en' ? 'en-US' : 'vi-VN', { maximumFractionDigits: 2 }).format(value);
 }
 
-function number(value: number): string {
-  return new Intl.NumberFormat('vi-VN', { notation: value >= 100_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value);
+function number(value: number, language: 'vi' | 'en' = 'vi'): string {
+  return new Intl.NumberFormat(language === 'en' ? 'en-US' : 'vi-VN', { notation: value >= 100_000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(value);
 }
 
 function safe(value: string): string {

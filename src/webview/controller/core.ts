@@ -52,6 +52,7 @@ function collapseIfStillNarrow() {
 function trackViewWidth() {
   const width = currentViewWidth();
   if (!Number.isFinite(width) || width <= 0) return;
+  if (typeof updateNarrowGuardBanner === 'function') updateNarrowGuardBanner(width);
   if (!resizeTrackingReady) {
     lastViewWidth = width;
     return;
@@ -191,6 +192,7 @@ let historyExpanded = false;
 let changesHidden = false;
 let lastChangeCount = 0;
 let lastPendingChangeCount = 0;
+let latestChangesState = null;
 let knownChangeSnapshots = new Map();
 let resolvedChangeSnapshots = new Map();
 let changeOperationBusy = false;
@@ -261,6 +263,7 @@ function renderPromptValue(value) {
   }
   if (cursor < source.length) fragment.append(document.createTextNode(source.slice(cursor)));
   editor.replaceChildren(fragment);
+  if (typeof syncPromptEmptyState === 'function') syncPromptEmptyState();
 }
 
 function setPromptSelection(offset) {
@@ -284,6 +287,10 @@ function setPromptSelection(offset) {
       remaining -= length;
       return false;
     }
+    if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR') {
+      if (remaining <= 1) { remaining === 0 ? range.setStartBefore(node) : range.setStartAfter(node); range.collapse(true); return true; }
+      remaining -= 1; return false;
+    }
     if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains('composer-rich-link')) {
       const length = (node.dataset.url || '').length;
       if (remaining <= length) {
@@ -296,7 +303,16 @@ function setPromptSelection(offset) {
       remaining -= length;
       return false;
     }
-    for (const child of node.childNodes) if (visit(child)) return true;
+    const children = [...node.childNodes];
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index];
+      if (visit(child)) return true;
+      const isBlock = child.nodeType === Node.ELEMENT_NODE && /^(?:DIV|P)$/.test(child.tagName);
+      if (isBlock && index < children.length - 1 && !promptTextFromNode(child).endsWith('\n')) {
+        if (remaining <= 1) { range.setStartAfter(child); range.collapse(true); return true; }
+        remaining -= 1;
+      }
+    }
     return false;
   };
   if (!visit(editor)) {
@@ -307,13 +323,17 @@ function setPromptSelection(offset) {
   selection.addRange(range);
 }
 
-function promptSelectionOffset() {
+function promptSelectionBoundary(edge = 'start') {
   const editor = $('prompt');
   const selection = window.getSelection();
-  if (!selection?.rangeCount || !editor.contains(selection.anchorNode)) return editor.value.length;
-  const range = selection.getRangeAt(0).cloneRange();
+  if (!selection?.rangeCount) return editor.value.length;
+  const activeRange = selection.getRangeAt(0);
+  const container = edge === 'end' ? activeRange.endContainer : activeRange.startContainer;
+  const offset = edge === 'end' ? activeRange.endOffset : activeRange.startOffset;
+  if (!editor.contains(container)) return editor.value.length;
+  const range = document.createRange();
   range.selectNodeContents(editor);
-  range.setEnd(selection.anchorNode, selection.anchorOffset);
+  range.setEnd(container, offset);
   return promptTextFromNode(range.cloneContents()).length;
 }
 
@@ -330,13 +350,15 @@ function initializePromptEditor() {
       get: () => editor.dataset.placeholder || '',
       set: (value) => { editor.dataset.placeholder = String(value || ''); }
     },
-    selectionStart: { configurable: true, get: promptSelectionOffset },
-    selectionEnd: { configurable: true, get: promptSelectionOffset }
+    selectionStart: { configurable: true, get: () => promptSelectionBoundary('start') },
+    selectionEnd: { configurable: true, get: () => promptSelectionBoundary('end') }
   });
   editor.setRangeText = (replacement, start, end) => {
     const source = editor.value;
-    editor.value = source.slice(0, start) + replacement + source.slice(end);
-    setPromptSelection(start + replacement.length);
+    const safeStart = Math.max(0, Math.min(source.length, start));
+    const safeEnd = Math.max(safeStart, Math.min(source.length, end));
+    editor.value = source.slice(0, safeStart) + replacement + source.slice(safeEnd);
+    setPromptSelection(safeStart + replacement.length);
   };
   editor.setSelectionRange = (start) => setPromptSelection(start);
 }
@@ -372,70 +394,48 @@ const providerMeta = {
 // Static shell labels are translated in place so changing language never
 // requires replacing the webview document.
 const liveLanguagePairs = [
-  ['Gateway local · tự động định tuyến', 'Local gateway · automatic routing'],
-  ['Kết nối provider', 'Connect provider'], ['Kết nối', 'Connect'], ['Lịch sử chat', 'Chat history'],
-  ['Lịch sử', 'History'], ['Số liệu sử dụng', 'Usage metrics'], ['Số liệu', 'Usage'], ['Cài đặt', 'Settings'],
-  ['Đóng', 'Close'], ['Xóa tất cả', 'Clear all'], ['Hoạt động provider', 'Provider activity'],
-  ['Token, chi phí ước tính, tốc độ và rate limit', 'Tokens, estimated cost, latency and rate limits'],
-  ['Kết nối công cụ', 'Tool connections'], ['Chọn dịch vụ và đăng nhập trong trình duyệt', 'Choose a service and sign in through your browser'],
-  ['MCP có thể kết nối', 'Available MCP connections'], ['Đã thêm', 'Added'], ['Thêm MCP khác', 'Add another MCP'],
-  ['Chọn một dịch vụ ở trên hoặc thêm MCP riêng.', 'Choose a service above or add a custom MCP.'],
-  ['Tên server', 'Server name'], ['Kết nối server', 'Connect server'], ['Cấu hình provider', 'Provider settings'],
-  ['Chọn nguồn model cho mọi yêu cầu', 'Choose the model source for every request'], ['Ngôn ngữ giao diện', 'Interface language'],
-  ['Giao diện tiếng Việt', 'Vietnamese interface'], ['Hồ sơ đang dùng', 'Active profile'], ['Xóa hồ sơ', 'Delete profile'],
-  ['+ Hồ sơ mới', '+ New profile'], ['Thêm', 'Add'], ['Tệp và thư mục', 'Files and folders'],
-  ['Đính kèm ngữ cảnh từ workspace', 'Attach context from workspace'], ['Đặt mục tiêu để agent tiếp tục theo đuổi', 'Set a goal for Agent to keep pursuing'],
-  ['Lập kế hoạch trước khi thực hiện', 'Plan before implementation'], ['Thêm skill vào yêu cầu', 'Add a skill to the request'],
-  ['Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Run a long task that can be paused and resumed'],
-  ['Goal đang bật', 'Goal is on'], ['Yêu cầu tiếp theo sẽ trở thành mục tiêu', 'Your next request will become the goal'],
-  ['Chọn model cho yêu cầu tiếp theo', 'Choose a model for the next request'], ['Tắt Goal', 'Turn off Goal'],
-  ['Bắt đầu một cuộc chat mới', 'Start a new chat'], ['Rút gọn ngữ cảnh cuộc chat', 'Compact this chat context'],
-  ['Tìm và chèn skill', 'Find and insert a skill'], ['Mở danh sách model', 'Open the model list'],
-  ['Mở danh sách chế độ làm việc', 'Open the work mode list'], ['Mở quyền thao tác của Agent', 'Open Agent permissions'],
-  ['Kiểm tra model cho chế độ hiện tại', 'Check models for the current mode'], ['Chuyển sang chế độ Agent', 'Switch to Agent mode'],
-  ['Chuyển sang chế độ Chat', 'Switch to Chat mode'], ['Mở lịch sử cuộc trò chuyện', 'Open conversation history'],
-  ['Mở số liệu sử dụng', 'Open usage metrics'],
-  ['Chuyển sang chế độ Plan', 'Switch to Plan mode'], ['Xem các file đã thay đổi', 'View changed files'],
-  ['Mở các thay đổi đang chờ review', 'Open changes awaiting review'], ['Bật hoặc tắt file đang mở trong ngữ cảnh', 'Toggle the open file in context'],
-  ['Tạo khung AGENTS.md cho dự án', 'Create an AGENTS.md scaffold for the project'], ['Xem provider, MCP và skills', 'View provider, MCP and skills status'],
-  ['Mở công cụ MCP', 'Open MCP tools'], ['Mở cấu hình', 'Open settings'], ['Mở Output Channel', 'Open Output Channel'],
-  ['Mở 9Router', 'Open 9Router'],
-  ['Giao diện', 'Interface'], ['Ngôn ngữ dùng trong RelayCode', 'Language used across RelayCode'], ['Hồ sơ', 'Profiles'], ['Lưu nhiều cấu hình provider riêng biệt', 'Save separate provider configurations'],
-  ['Provider và địa chỉ API đang dùng', 'Provider and API endpoint currently in use'], ['Chi phí ước tính', 'Estimated cost'], ['Không bắt buộc, tính theo một triệu token', 'Optional, estimated per one million tokens'],
-  ['Tên hồ sơ', 'Profile name'], ['Ví dụ: OpenAI cá nhân', 'For example: Personal OpenAI'], ['Endpoint và API key', 'Endpoint and API key'],
-  ['Nhập API key của provider', 'Enter the provider API key'], ['Tùy chọn', 'Optional'], ['Lưu và kết nối lại', 'Save and reconnect'],
+  ['Gateway local · tự động định tuyến', 'Local gateway · automatic routing'], ['Gateway local, nhiều model', 'Local gateway, many models'], ['Gateway local · nhiều tài khoản', 'Local gateway · multiple accounts'], ['API chính thức · cần API key', 'Official API · API key required'], ['Messages API · cần API key', 'Messages API · API key required'], ['Endpoint tùy chỉnh', 'Custom endpoint'], ['Local · không cần API key', 'Local · no API key required'],
+  ['Kết nối provider', 'Connect provider'], ['Kết nối', 'Connect'], ['Lịch sử chat', 'Chat history'], ['Lịch sử', 'History'], ['Số liệu sử dụng', 'Usage metrics'], ['Số liệu', 'Usage'], ['Cài đặt', 'Settings'], ['Đóng', 'Close'], ['Xóa tất cả', 'Clear all'], ['Xem tất cả', 'View all'], ['Hoạt động provider', 'Provider activity'],
+  ['Token, chi phí ước tính, tốc độ và rate limit', 'Tokens, estimated cost, latency and rate limits'], ['Xóa lịch sử số liệu', 'Clear usage history'], ['Kết nối công cụ', 'Tool connections'], ['Chọn dịch vụ và đăng nhập trong trình duyệt', 'Choose a service and sign in through your browser'], ['MCP có thể kết nối', 'Available MCP connections'], ['Đã thêm', 'Added'], ['Thêm MCP khác', 'Add another MCP'],
+  ['Chọn một dịch vụ ở trên hoặc thêm MCP riêng.', 'Choose a service above or add a custom MCP.'], ['Tên server', 'Server name'], ['Đăng nhập bằng trình duyệt (OAuth)', 'Sign in with browser (OAuth)'], ['Không xác thực', 'No authentication'], ['Command, ví dụ npx', 'Command, e.g. npx'], ['Args, phân cách bằng dấu cách', 'Args, separated by spaces'], ['Env JSON, ví dụ {"TOKEN":"…"}', 'Env JSON, e.g. {"TOKEN":"…"}'], ['Kết nối server', 'Connect server'],
+  ['Cấu hình provider', 'Provider settings'], ['Chọn nguồn model cho mọi yêu cầu', 'Choose the model source for every request'], ['Ngôn ngữ giao diện', 'Interface language'], ['Giao diện tiếng Việt', 'Vietnamese interface'], ['Hồ sơ đang dùng', 'Active profile'], ['Chưa chọn hồ sơ', 'No profile selected'], ['Xóa hồ sơ', 'Delete profile'], ['+ Hồ sơ mới', '+ New profile'],
+  ['Thêm', 'Add'], ['Tệp và thư mục', 'Files and folders'], ['Đính kèm ngữ cảnh từ workspace', 'Attach context from workspace'], ['Đặt mục tiêu để agent tiếp tục theo đuổi', 'Set a goal for Agent to keep pursuing'], ['Lập kế hoạch trước khi thực hiện', 'Plan before implementation'], ['Thêm skill vào yêu cầu', 'Add a skill to the request'],
+  ['Chạy tác vụ dài có thể tạm dừng và tiếp tục', 'Run a long task that can be paused and resumed'], ['Goal đang bật', 'Goal is on'], ['Yêu cầu tiếp theo sẽ trở thành mục tiêu', 'Your next request will become the goal'], ['Chọn model cho yêu cầu tiếp theo', 'Choose a model for the next request'], ['Tắt Goal', 'Turn off Goal'],
+  ['Bắt đầu một cuộc chat mới', 'Start a new chat'], ['Rút gọn ngữ cảnh cuộc chat', 'Compact this chat context'], ['Tìm và chèn skill', 'Find and insert a skill'], ['Mở danh sách model', 'Open the model list'], ['Mở danh sách chế độ làm việc', 'Open the work mode list'], ['Mở quyền thao tác của Agent', 'Open Agent permissions'],
+  ['Kiểm tra model cho chế độ hiện tại', 'Check models for the current mode'], ['Chuyển sang chế độ Agent', 'Switch to Agent mode'], ['Chuyển sang chế độ Chat', 'Switch to Chat mode'], ['Mở lịch sử cuộc trò chuyện', 'Open conversation history'], ['Mở số liệu sử dụng', 'Open usage metrics'], ['Chuyển sang chế độ Plan', 'Switch to Plan mode'],
+  ['Xem các file đã thay đổi', 'View changed files'], ['Mở các thay đổi đang chờ review', 'Open changes awaiting review'], ['Bật hoặc tắt file đang mở trong ngữ cảnh', 'Toggle the open file in context'], ['Tạo khung AGENTS.md cho dự án', 'Create an AGENTS.md scaffold for the project'], ['Xem provider, MCP và skills', 'View provider, MCP and skills status'], ['Mở công cụ MCP', 'Open MCP tools'], ['Mở cấu hình', 'Open settings'], ['Mở Output Channel', 'Open Output Channel'], ['Mở 9Router', 'Open 9Router'], ['Mở OmniRoute', 'Open OmniRoute'],
+  ['Giao diện', 'Interface'], ['Ngôn ngữ dùng trong RelayCode', 'Language used across RelayCode'], ['Hồ sơ', 'Profiles'], ['Lưu nhiều cấu hình provider riêng biệt', 'Save separate provider configurations'], ['Provider và địa chỉ API đang dùng', 'Provider and API endpoint currently in use'], ['Chi phí ước tính', 'Estimated cost'], ['Không bắt buộc, tính theo một triệu token', 'Optional, estimated per one million tokens'],
+  ['Tên hồ sơ', 'Profile name'], ['Ví dụ: OpenAI cá nhân', 'For example: Personal OpenAI'], ['Endpoint và API key', 'Endpoint and API key'], ['Nhập API key của provider', 'Enter the provider API key'], ['Tùy chọn', 'Optional'], ['Lưu và kết nối lại', 'Save and reconnect'], ['Lưu và kết nối', 'Save and connect'], ['Lưu trong Secret Storage', 'Stored in Secret Storage'],
   ['API key được lưu riêng và an toàn cho provider này', 'The API key is stored securely and separately for this provider'], ['Đã lưu API key an toàn', 'API key stored securely'], ['Chưa lưu API key', 'No API key saved'], ['Không cần API key · server local vẫn phải đang chạy', 'No API key required · the local server must still be running'],
-  ['Chẩn đoán', 'Diagnostics'], ['Xuất chẩn đoán', 'Export diagnostics'], ['Mở Cockpit', 'Open Cockpit'],
-  ['Thiết lập local', 'Set up local provider'], ['Connection center', 'Connection center'], ['Kết nối mô hình.', 'Connect a model.'],
-  ['Quản lý provider, kiểm tra API và mở bảng điều khiển tại một nơi.', 'Manage providers, check APIs and open dashboards in one place.'],
-  ['Mở trang quản lý', 'Open dashboard'], ['Kiểm tra kết nối', 'Check connection'], ['Ngắt kết nối', 'Disconnect'],
-  ['Kết nối thủ công', 'Connect manually'], ['Nói điều bạn muốn xây.', 'Describe what you want to build.'],
-  ['Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.', 'Agent can read the project, edit files and run commands in the workspace.'],
-  ['Nhập yêu cầu, dùng /, $ hoặc @…', 'Ask anything, use /, $ or @…'], ['Đọc, sửa file và chạy lệnh', 'Read, edit files and run commands'],
-  ['Trò chuyện trực tiếp với model', 'Chat directly with the model'], ['Lập kế hoạch trước khi hành động', 'Plan before taking action'],
-  ['Hỏi mọi thao tác', 'Ask for every action'], ['Luôn hỏi trước khi thực hiện', 'Always ask before acting'],
-  ['Cho phép sửa file', 'Allow file edits'], ['Chỉ hỏi khi chạy lệnh', 'Ask only before running commands'],
-  ['Không hỏi lại khi Agent hoạt động', 'Do not ask again while Agent is working'], ['Chọn model', 'Select model'],
-  ['Tìm model…', 'Search models…'], ['Kiểm tra model', 'Check models'], ['Gửi', 'Send'], ['Bật Full access?', 'Enable Full access?'],
-  ['Bật Full access', 'Enable Full access'], ['Hủy', 'Cancel'], ['Quay lại chat', 'Back to chat'],
-  ['Đang kiểm tra', 'Checking'], ['Đang gửi yêu cầu kiểm tra provider…', 'Sending a provider check request…'],
-  ['Đang kiểm tra provider hiện tại', 'Checking the current provider'], ['Độ trễ', 'Latency'], ['Chưa có endpoint', 'No endpoint'],
-  ['Đang làm việc', 'Working'], ['Tạm dừng', 'Pause'], ['Tiếp tục', 'Resume'], ['Xem', 'View'], ['Ẩn', 'Hide']
+  ['Chẩn đoán', 'Diagnostics'], ['Xuất chẩn đoán', 'Export diagnostics'], ['Mở Cockpit', 'Open Cockpit'], ['Thiết lập local', 'Set up local provider'], ['Trung tâm kết nối', 'Connection center'], ['Mở trung tâm kết nối', 'Open connection center'], ['Kết nối mô hình.', 'Connect a model.'],
+  ['Quản lý provider, kiểm tra API và mở bảng điều khiển tại một nơi.', 'Manage providers, check APIs and open dashboards in one place.'], ['Mở trang quản lý', 'Open dashboard'], ['Kiểm tra kết nối', 'Check connection'], ['Kiểm tra lại', 'Check again'], ['Ngắt kết nối', 'Disconnect'], ['Kết nối thủ công', 'Connect manually'],
+  ['Đang kiểm tra kết nối', 'Checking connection'], ['RelayCode đang xác nhận provider có thể nhận yêu cầu.', 'RelayCode is verifying that the provider can accept requests.'], ['Chưa kiểm tra sức khỏe API trong phiên này.', 'API health has not been checked in this session.'],
+  ['Nói điều bạn muốn xây.', 'Describe what you want to build.'], ['Agent sẽ đọc dự án, sửa file và chạy lệnh ngay trong workspace.', 'Agent can read the project, edit files and run commands in the workspace.'], ['Nhập yêu cầu, dùng /, $ hoặc @…', 'Ask anything, use /, $ or @…'],
+  ['Đọc, sửa file và chạy lệnh', 'Read, edit files and run commands'], ['Trò chuyện trực tiếp với model', 'Chat directly with the model'], ['Lập kế hoạch trước khi hành động', 'Plan before taking action'], ['Nhanh và cân bằng', 'Fast and balanced'], ['Suy luận kỹ hơn', 'Deeper reasoning'], ['Tối đa, nếu model hỗ trợ', 'Maximum, if supported by the model'],
+  ['Hỏi mọi thao tác', 'Ask for every action'], ['Luôn hỏi trước khi thực hiện', 'Always ask before acting'], ['Cho phép sửa file', 'Allow file edits'], ['Chỉ hỏi khi chạy lệnh', 'Ask only before running commands'], ['Không hỏi lại khi Agent hoạt động', 'Do not ask again while Agent is working'], ['Quyền thao tác', 'Action permissions'],
+  ['Chọn model', 'Select model'], ['Tìm model…', 'Search models…'], ['Kiểm tra model', 'Check models'], ['Lọc kết quả kiểm tra model', 'Filter model check results'], ['Tất cả', 'All'], ['Chạy được', 'Working'], ['Có lỗi', 'Issues'], ['Gửi', 'Send'],
+  ['Bật Full access?', 'Enable Full access?'], ['Bật Full access', 'Enable Full access'], ['Hủy', 'Cancel'], ['Quay lại chat', 'Back to chat'], ['Đang kiểm tra', 'Checking'], ['Đang gửi yêu cầu kiểm tra provider…', 'Sending a provider check request…'], ['Đang gửi yêu cầu kiểm tra…', 'Sending check request…'],
+  ['Đang kiểm tra provider hiện tại', 'Checking the current provider'], ['Độ trễ', 'Latency'], ['Chưa có endpoint', 'No endpoint'], ['Cấu hình', 'Configure'], ['Điều hướng RelayCode', 'RelayCode navigation'], ['Cuộn xuống cuối cuộc trò chuyện', 'Scroll to bottom of conversation'],
+  ['Tin nhắn tiếp theo', 'Next messages'], ['Xóa hàng đợi', 'Clear queue'], ['Thêm vào yêu cầu', 'Add to request'], ['Mở menu thêm', 'Open add menu'], ['Đang tải', 'Loading'],
+  ['Hoàn tác tất cả', 'Undo all'], ['Chấp nhận tất cả', 'Accept all'], ['0 file đã thay đổi', '0 files changed'], ['Đang làm việc', 'Working'], ['Tạm dừng', 'Pause'], ['Tiếp tục', 'Resume'], ['Xem', 'View'], ['Ẩn', 'Hide'],
+  ['Mở ngoài', 'Open externally'], ['Thả ảnh, video hoặc tệp vào đây', 'Drop images, videos or files here'], ['Khung chat đang khá hẹp · kéo rộng hơn để xem rõ', 'Sidebar is narrow · drag wider for best view']
 ];
 
 function translateLiveDom(languageValue) {
   const pairs = languageValue === 'en' ? liveLanguagePairs : liveLanguagePairs.map(([vi, en]) => [en, vi]);
   const translations = new Map(pairs);
+  const excluded = 'script,style,#messages,#prompt,#historyList,#profileMenu,code,pre';
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walker.nextNode())) {
-    if (node.parentElement?.closest('script,style')) continue;
+    if (node.parentElement?.closest(excluded)) continue;
     const raw = node.nodeValue || '';
     const trimmed = raw.trim();
     const replacement = translations.get(trimmed);
     if (replacement) node.nodeValue = raw.replace(trimmed, replacement);
   }
   document.querySelectorAll('[placeholder],[aria-label]').forEach((element) => {
+    if (element.closest('#messages,#prompt,#historyList,#profileMenu,code,pre')) return;
     for (const attribute of ['placeholder', 'aria-label']) {
       const value = element.getAttribute(attribute);
       const replacement = value ? translations.get(value.trim()) : undefined;
@@ -449,6 +449,7 @@ function applyLanguageUi() {
   document.body.dataset.language = language;
   updateRelayTooltips();
   $('uiLanguageLabel').textContent = language === 'en' ? 'English' : 'Tiếng Việt';
+  $('closeConfig').setAttribute('aria-label', uiCopy('Đóng cài đặt', 'Close settings'));
   document.querySelectorAll('#languageMenu [data-language]').forEach((option) => {
     const selected = option.dataset.language === language;
     option.classList.toggle('active', selected);
@@ -472,6 +473,7 @@ function applyLanguageUi() {
   renderModelMenu($('modelSearch').value);
   if (mcpPresetState.length || mcpServerState.length) renderMcpServers(mcpServerState, mcpPresetState);
   renderFollowUpQueue();
+  syncDynamicLanguageCopy();
 }
 
 function comparableEndpoint(value) {
@@ -494,20 +496,6 @@ const floatingSurfaces = ['historyPanel', 'telemetryPanel', 'mcpPanel', 'configP
 let activeUiDialog = null;
 let dialogReturnFocus = null;
 let queuedUiDialogs = [];
-if (!document.querySelector('#providerMenu [data-provider="omniroute"]')) {
-  const omniProviderOption = document.createElement('button');
-  omniProviderOption.type = 'button';
-  omniProviderOption.className = 'provider-option';
-  omniProviderOption.dataset.provider = 'omniroute';
-  omniProviderOption.innerHTML = '<span><strong>OmniRoute</strong><small>' + uiCopy('Gateway local · tự động định tuyến', 'Local gateway · automatic routing') + '</small></span>';
-  $('providerMenu').prepend(omniProviderOption);
-}
-if (!document.querySelector('#configProvider option[value="omniroute"]')) {
-  const omniProviderSelectOption = document.createElement('option');
-  omniProviderSelectOption.value = 'omniroute';
-  omniProviderSelectOption.textContent = 'OmniRoute';
-  $('configProvider').prepend(omniProviderSelectOption);
-}
 document.querySelectorAll('#providerMenu .provider-option').forEach((option) => {
   const meta = providerMeta[option.dataset.provider] || providerMeta['9router'];
   const slot = document.createElement('span');

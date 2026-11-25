@@ -62,9 +62,10 @@ export function formatWebSearchContext(response: WebSearchResponse): string {
 }
 
 export function formatWebCitations(results: WebSearchResult[], maxResults = 6): string {
-  const lines = results.slice(0, Math.max(1, maxResults)).map((result) =>
-    `- [${compactDomain(result.url)}](${result.url}) — ${safeCitationTitle(result.title)}`
-  );
+  const lines = results.slice(0, Math.max(1, maxResults)).map((result) => {
+    const safeUrl = result.url.replace(/\(/g, '%28').replace(/\)/g, '%29');
+    return `- [${compactDomain(result.url)}](${safeUrl}) — ${safeCitationTitle(result.title)}`;
+  });
   return lines.length ? `\n\n**Sources**\n${lines.join('\n')}` : '';
 }
 
@@ -188,7 +189,7 @@ export async function searchWebSources(query: string, signal?: AbortSignal, maxR
   try {
     const url = new URL(SEARCH_ENDPOINT);
     url.searchParams.set('q', normalizedQuery);
-    url.searchParams.set('kl', 'wt-wt');
+    if (!url.hostname.endsWith('bing.com')) url.searchParams.set('kl', 'wt-wt');
     const response = await fetch(url, {
       redirect: 'follow',
       signal: controller.signal,

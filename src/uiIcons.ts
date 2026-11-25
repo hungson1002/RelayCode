@@ -2,7 +2,6 @@ import arrowUp from '@phosphor-icons/core/regular/arrow-up.svg';
 import arrowCounterClockwise from '@phosphor-icons/core/regular/arrow-counter-clockwise.svg';
 import arrowRight from '@phosphor-icons/core/regular/arrow-right.svg';
 import arrowsClockwise from '@phosphor-icons/core/regular/arrows-clockwise.svg';
-import brain from '@phosphor-icons/core/regular/brain.svg';
 import broom from '@phosphor-icons/core/regular/broom.svg';
 import caretDown from '@phosphor-icons/core/regular/caret-down.svg';
 import caretRight from '@phosphor-icons/core/regular/caret-right.svg';
@@ -72,6 +71,8 @@ import x from '@phosphor-icons/core/regular/x.svg';
 import { materialCss, materialHtml, materialJavascript, materialTypescript } from './materialFileIcons';
 
 const arrowsOut = '<svg viewBox="0 0 256 256" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16" d="M160 40h56v56M152 104l64-64M96 216H40v-56M104 152l-64 64M216 160v56h-56M152 152l64 64M40 96V40h56M104 104 40 40"/></svg>';
+const linkIcon = '<svg viewBox="0 0 256 256" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="16" d="M94.06 161.94a48 48 0 0 1 0-67.88l32-32a48 48 0 0 1 67.88 67.88l-16 16M161.94 94.06a48 48 0 0 1 0 67.88l-32 32a48 48 0 0 1-67.88-67.88l16-16"/></svg>';
+const brain = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 3.2c.65 4.45 4.35 8.15 8.8 8.8-4.45.65-8.15 4.35-8.8 8.8-.65-4.45-4.35-8.15-8.8-8.8 4.45-.65 8.15-4.35 8.8-8.8Z"/></svg>';
 
 export const UI_ICONS = {
   arrowCounterClockwise,
@@ -134,6 +135,7 @@ export const UI_ICONS = {
   info,
   key,
   lightbulb,
+  link: linkIcon,
   listSearch,
   magnifyingGlass,
   paperclip,
@@ -147,6 +149,7 @@ export const UI_ICONS = {
   spinnerGap,
   stop,
   target,
+  terminal: terminalWindow,
   terminalWindow,
   trash,
   warning,

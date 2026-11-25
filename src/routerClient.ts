@@ -16,10 +16,16 @@ export function normalizeEndpoint(value: string): string {
 }
 
 export function parseSseData(block: string): string[] {
-  return block
+  const lines = block
     .split(/\r?\n/)
     .filter((line) => line.startsWith('data:'))
     .map((line) => line.slice(5).trim());
+  if (lines.length <= 1) return lines;
+  // Standard SSE joins multiple `data:` lines inside one event with `\n`.
+  // Some compatible gateways pack multiple complete JSON objects on adjacent
+  // `data:` lines without blank lines; keep them separate when each is complete.
+  const allSeparateObjects = lines.every((line) => line === '[DONE]' || (line.startsWith('{') && line.endsWith('}')));
+  return allSeparateObjects ? lines : [lines.join('\n')];
 }
 
 export function compatibleTextContent(value: unknown): string {
@@ -36,6 +42,89 @@ export function compatibleTextContent(value: unknown): string {
         ? record.content
         : '';
   }).join('');
+}
+
+export function compatibleReasoningContent(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const record = value as {
+    reasoning_content?: unknown;
+    reasoning?: unknown;
+    thinking?: unknown;
+    content?: unknown;
+  };
+  for (const field of [record.reasoning_content, record.reasoning, record.thinking]) {
+    if (typeof field === 'string' && field) return field;
+  }
+  if (Array.isArray(record.content)) {
+    return record.content.map((part) => {
+      if (!part || typeof part !== 'object') return '';
+      const block = part as { type?: unknown; text?: unknown; thinking?: unknown; content?: unknown };
+      if (typeof block.type === 'string' && /^(?:reasoning|reasoning_text|thinking|analysis)$/i.test(block.type)) {
+        return typeof block.thinking === 'string'
+          ? block.thinking
+          : typeof block.text === 'string'
+            ? block.text
+            : typeof block.content === 'string'
+              ? block.content
+              : '';
+      }
+      return '';
+    }).join('');
+  }
+  return '';
+}
+
+export function createThinkTagSplitter(
+  onVisible: (delta: string) => void,
+  onThinking?: (delta: string) => void
+): { push(chunk: string): void; flush(): void } {
+  let inThink = false;
+  let pending = '';
+  const OPEN_TAG = '<think>';
+  const CLOSE_TAG = '</think>';
+
+  const emit = (text: string, thinking: boolean) => {
+    if (!text) return;
+    if (thinking) onThinking?.(text);
+    else onVisible(text);
+  };
+
+  return {
+    push(chunk: string) {
+      if (!chunk) return;
+      pending += chunk;
+      while (pending) {
+        const tag = inThink ? CLOSE_TAG : OPEN_TAG;
+        const lower = pending.toLowerCase();
+        const idx = lower.indexOf(tag);
+        if (idx >= 0) {
+          emit(pending.slice(0, idx), inThink);
+          pending = pending.slice(idx + tag.length);
+          inThink = !inThink;
+          continue;
+        }
+        // Hold back a potential partial prefix of the open/close tag at chunk boundary.
+        let keep = 0;
+        const maxCheck = Math.min(tag.length - 1, pending.length);
+        for (let len = maxCheck; len >= 1; len--) {
+          if (tag.startsWith(lower.slice(-len))) {
+            keep = len;
+            break;
+          }
+        }
+        if (keep < pending.length) {
+          emit(pending.slice(0, pending.length - keep), inThink);
+          pending = pending.slice(pending.length - keep);
+        }
+        break;
+      }
+    },
+    flush() {
+      if (!pending) return;
+      emit(pending, inThink);
+      pending = '';
+    }
+  };
 }
 
 export function estimateTokens(value: unknown): number {
@@ -67,7 +156,7 @@ export function tuningBody(tuning?: RequestTuning): Record<string, string> {
   };
 }
 
-function completionTokenBody(model: string, endpoint: string, limit = 4_096): Record<string, number> {
+function completionTokenBody(model: string, endpoint: string, limit = 16_384): Record<string, number> {
   const usesOpenAiCompletionName = /api\.openai\.com/i.test(endpoint)
     && /^(?:gpt-5|o[1-4])(?:$|[/_.-])/i.test(model);
   return usesOpenAiCompletionName
@@ -146,11 +235,18 @@ export class RouterClient {
     if (image.url) {
       const target = new URL(image.url);
       if (!['http:', 'https:'].includes(target.protocol)) throw new Error('Provider trả về URL ảnh không an toàn.');
+      const imageHost = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+      const endpointHost = (() => { try { return new URL(normalizeEndpoint(this.config.endpoint)).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch { return ''; } })();
+      const isLocalTarget = imageHost === 'localhost' || imageHost === '::1' || /^(?:0|10|127)\.|^169\.254\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[0-1])\./.test(imageHost);
+      if (isLocalTarget && imageHost !== endpointHost) throw new Error('Provider trả về URL ảnh trỏ vào mạng nội bộ không an toàn.');
       const download = await fetch(target, { signal });
       if (!download.ok) throw new Error(`Không tải được ảnh do provider tạo, HTTP ${download.status}.`);
+      const maxImageBytes = 25 * 1024 * 1024;
+      const contentLength = Number(download.headers.get('content-length') || 0);
+      if (contentLength > maxImageBytes) throw new Error('Ảnh tạo ra lớn hơn giới hạn 25 MB.');
       const bytes = new Uint8Array(await download.arrayBuffer());
       if (!bytes.byteLength) throw new Error('Provider trả về file ảnh rỗng.');
-      if (bytes.byteLength > 25 * 1024 * 1024) throw new Error('Ảnh tạo ra lớn hơn giới hạn 25 MB.');
+      if (bytes.byteLength > maxImageBytes) throw new Error('Ảnh tạo ra lớn hơn giới hạn 25 MB.');
       return {
         bytes,
         mimeType: download.headers.get('content-type')?.split(';')[0] || detectImageMime(bytes),
@@ -165,7 +261,8 @@ export class RouterClient {
     messages: ChatMessage[],
     onDelta: (delta: string) => void,
     signal?: AbortSignal,
-    tuning?: RequestTuning
+    tuning?: RequestTuning,
+    onThinking?: (delta: string) => void
   ): Promise<RequestMetrics> {
     const startedAt = Date.now();
     const response = await fetch(`${normalizeEndpoint(this.config.endpoint)}/chat/completions`, {
@@ -184,15 +281,19 @@ export class RouterClient {
     if (/application\/json/i.test(response.headers.get('content-type') || '')) {
       try {
         const body = await response.clone().json() as {
-          choices?: Array<{ message?: { content?: unknown }; text?: unknown }>;
+          choices?: Array<{ message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; thinking?: unknown }; text?: unknown }>;
           output_text?: unknown;
           usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
+        const reasoning = compatibleReasoningContent(body.choices?.[0]?.message);
+        if (reasoning) onThinking?.(reasoning);
         const content = compatibleTextContent(body.choices?.[0]?.message?.content)
           || compatibleTextContent(body.choices?.[0]?.text)
           || compatibleTextContent(body.output_text);
         if (!content.trim()) throw new Error('Provider trả về phản hồi JSON nhưng không có nội dung.');
-        await emitCompleteResponseProgressively(content, onDelta, signal);
+        const splitter = createThinkTagSplitter(onDelta, onThinking);
+        await emitCompleteResponseProgressively(content, (chunk) => splitter.push(chunk), signal);
+        splitter.flush();
         return requestMetrics(startedAt, response.headers, body.usage?.prompt_tokens ?? estimateTokens(messages), body.usage?.completion_tokens ?? estimateTokens(content), !body.usage);
       } catch (error) {
         if (error instanceof Error && /không có nội dung/.test(error.message)) throw error;
@@ -205,6 +306,12 @@ export class RouterClient {
     const decoder = new TextDecoder();
     let buffer = '';
     let output = '';
+    let visibleOutput = '';
+    let reasoningOutput = '';
+    const splitter = createThinkTagSplitter((visibleChunk) => {
+      visibleOutput += visibleChunk;
+      onDelta(visibleChunk);
+    }, onThinking);
     let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
 
     stream: while (true) {
@@ -222,17 +329,25 @@ export class RouterClient {
         for (const data of parseSseData(block)) {
           if (data === '[DONE]') {
             void reader.cancel().catch(() => undefined);
-            if (!output.trim()) throw new Error('Provider đã kết thúc luồng nhưng không trả về nội dung.');
+            splitter.flush();
+            if (!visibleOutput.trim() && !output.trim()) throw new Error('Provider đã kết thúc luồng nhưng không trả về nội dung.');
             return requestMetrics(startedAt, response.headers, usage?.prompt_tokens ?? estimateTokens(messages), usage?.completion_tokens ?? estimateTokens(output), !usage);
           }
           try {
             const event = JSON.parse(data) as {
-              choices?: Array<{ delta?: { content?: unknown }; message?: { content?: unknown }; text?: unknown; finish_reason?: string | null }>;
+              choices?: Array<{ delta?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; thinking?: unknown }; message?: { content?: unknown; reasoning_content?: unknown; reasoning?: unknown; thinking?: unknown }; text?: unknown; finish_reason?: string | null }>;
               output_text?: unknown;
               usage?: { prompt_tokens?: number; completion_tokens?: number };
             };
             if (event.usage) usage = event.usage;
             const choice = event.choices?.[0];
+            const reasoningInc = compatibleReasoningContent(choice?.delta);
+            const reasoningFull = compatibleReasoningContent(choice?.message);
+            const reasoningDelta = reasoningInc || (reasoningFull.startsWith(reasoningOutput) ? reasoningFull.slice(reasoningOutput.length) : reasoningFull);
+            if (reasoningDelta) {
+              reasoningOutput += reasoningDelta;
+              onThinking?.(reasoningDelta);
+            }
             const incremental = compatibleTextContent(choice?.delta?.content);
             const complete = compatibleTextContent(choice?.message?.content)
               || compatibleTextContent(choice?.text)
@@ -240,7 +355,7 @@ export class RouterClient {
             const delta = incremental || (complete.startsWith(output) ? complete.slice(output.length) : complete);
             if (delta) {
               output += delta;
-              onDelta(delta);
+              splitter.push(delta);
             }
             if (event.choices?.some((choice) => choice.finish_reason != null)) {
               void reader.cancel().catch(() => undefined);
@@ -255,7 +370,8 @@ export class RouterClient {
         break;
       }
     }
-    if (!output.trim()) throw new Error('Provider đã kết thúc luồng nhưng không trả về nội dung.');
+    splitter.flush();
+    if (!visibleOutput.trim() && !output.trim()) throw new Error('Provider đã kết thúc luồng nhưng không trả về nội dung.');
     return requestMetrics(startedAt, response.headers, usage?.prompt_tokens ?? estimateTokens(messages), usage?.completion_tokens ?? estimateTokens(output), !usage);
   }
 
@@ -286,8 +402,8 @@ export class RouterClient {
     }
     const startedAt = Date.now();
     const messages = [{ role: 'user', content: 'hi' }];
-    const completionLimit = /^(gpt-5|o[1-4])/.test(model) && this.config.endpoint.includes('api.openai.com')
-      ? { max_completion_tokens: 16 }
+    const completionLimit = /^(?:gpt-5|o[1-4])(?:$|[/_.-])/i.test(model) && /api\.openai\.com/i.test(this.config.endpoint)
+      ? { max_completion_tokens: 64 }
       : { max_tokens: 16 };
     const response = await fetch(`${normalizeEndpoint(this.config.endpoint)}/chat/completions`, {
       method: 'POST',
@@ -384,6 +500,7 @@ export class RouterClient {
         blocks.push(buffer);
         buffer = '';
       }
+      let sawFinishReason = false;
       for (const block of blocks) {
         for (const data of parseSseData(block)) {
           if (data === '[DONE]') {
@@ -398,6 +515,9 @@ export class RouterClient {
               choices?: Array<{
                 delta?: {
                   content?: string | null;
+                  reasoning_content?: unknown;
+                  reasoning?: unknown;
+                  thinking?: unknown;
                   tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
                 };
                 finish_reason?: string | null;
@@ -406,12 +526,27 @@ export class RouterClient {
             };
             if (event.usage) usage = event.usage;
             const delta = event.choices?.[0]?.delta;
+            const reasoning = compatibleReasoningContent(delta);
+            if (reasoning) {
+              onProgress?.({ type: 'thinking', content: reasoning });
+            }
             if (delta?.content) {
               content += delta.content;
               onProgress?.({ type: 'content', content: delta.content });
             }
             for (const raw of delta?.tool_calls ?? []) {
-              const index = raw.index ?? 0;
+              let index = raw.index ?? calls.size;
+              const existing = calls.get(index);
+              // Some gateways omit `index` or reset it to 0 for each new tool
+              // call while emitting a distinct `id`. Never concatenate distinct calls.
+              if (raw.index === undefined && raw.id) {
+                const matchById = [...calls.entries()].find(([, item]) => item.id === raw.id);
+                index = matchById ? matchById[0] : calls.size;
+              } else if (raw.index === undefined && !raw.id && calls.size > 0) {
+                index = calls.size - 1;
+              } else if (existing && raw.id && existing.id && existing.id !== raw.id) {
+                index = calls.size;
+              }
               const current = calls.get(index) ?? { id: '', name: '', arguments: '' };
               if (raw.id) current.id = raw.id;
               if (raw.function?.name) current.name += raw.function.name;
@@ -419,16 +554,19 @@ export class RouterClient {
               calls.set(index, current);
               onProgress?.({ type: 'tool', name: current.name, arguments: current.arguments });
             }
-            if (event.choices?.some((choice) => choice.finish_reason != null)) {
-              // Kiro and some other compatible providers use finish_reason as
-              // the only protocol-level terminator: no [DONE] event follows.
-              void reader.cancel().catch(() => undefined);
-              break stream;
+            if (event.choices?.[0]?.finish_reason != null) {
+              // Finish draining remaining blocks in this chunk (which may carry
+              // the final usage object) before closing the stream.
+              sawFinishReason = true;
             }
           } catch {
             // Compatible gateways may emit keepalive events that are not JSON.
           }
         }
+      }
+      if (sawFinishReason) {
+        void reader.cancel().catch(() => undefined);
+        break stream;
       }
       if (done) break;
     }

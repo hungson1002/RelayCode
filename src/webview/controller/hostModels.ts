@@ -1,7 +1,7 @@
 export const CHAT_CONTROLLER_HOST_MODELS = String.raw`  } else if (data.type === 'modelRuntimeFailure') {
     if (data.profileId && data.profileId !== currentProfileId) return;
     if (!data.mode || data.mode === mode) {
-      const limited = /HTTP 429|rate.?limit|timeout|timed out|quĂ¡ thá»i gian/i.test(data.message || '');
+      const limited = /HTTP 429|rate.?limit|timeout|timed out|quá thời gian/i.test(data.message || '');
       modelHealth[data.model] = { status: limited ? 'limited' : 'error', message: data.message || '' };
       renderModelMenu($('modelSearch').value);
     }
@@ -40,7 +40,7 @@ export const CHAT_CONTROLLER_HOST_MODELS = String.raw`  } else if (data.type ===
     renderMcpOutcome(data);
   } else if (data.type === 'checkpoint') {
     const card = document.createElement('article'); card.className = 'checkpoint-card';
-    card.innerHTML = '<span>' + uiCopy('Git checkpoint đã tạo · ', 'Git checkpoint created · ') + data.checkpoint.hash + '</span><button>' + uiCopy('Khôi phục', 'Restore') + '</button>';
+    card.innerHTML = '<span>' + uiCopy('Git checkpoint đã tạo · ', 'Git checkpoint created · ') + escapeHtml(data.checkpoint.hash) + '</span><button>' + uiCopy('Khôi phục', 'Restore') + '</button>';
     card.querySelector('button').addEventListener('click', () => vscode.postMessage({ type: 'restoreCheckpoint', id: data.checkpoint.id }));
     $('messages').append(card); $('messages').scrollTop = $('messages').scrollHeight;
   } else if (data.type === 'checkpointRestored') {
@@ -78,6 +78,10 @@ export const CHAT_CONTROLLER_HOST_MODELS = String.raw`  } else if (data.type ===
     const list = $('attachmentList');
     list.replaceChildren();
     for (const [index, item] of (data.attachments || []).entries()) {
+      if (item.kind === 'video' || item.videoUrl) {
+        list.append(createVideoAttachmentNode(item, { compact: true, onRemove: () => vscode.postMessage({ type: 'removeAttachment', index }) }));
+        continue;
+      }
       const initialPreview = item.preview || item.modelPreview;
       if (initialPreview) {
         const preview = document.createElement('div'); preview.className = 'attachment-preview';

@@ -13,11 +13,12 @@ const vsix = resolve(`${manifest.name}-${manifest.version}.vsix`);
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-const packaged = spawnSync(npm, ['run', 'package'], { stdio: 'inherit' });
+const useShell = process.platform === 'win32';
+const packaged = spawnSync(npm, ['run', 'package'], { stdio: 'inherit', shell: useShell });
 if (packaged.status !== 0) process.exit(packaged.status ?? 1);
 
 const command = target === 'vscode'
   ? ['vsce', 'publish', '--packagePath', vsix, '--no-dependencies']
   : ['ovsx', 'publish', vsix];
-const published = spawnSync(npx, command, { stdio: 'inherit' });
+const published = spawnSync(npx, command, { stdio: 'inherit', shell: useShell });
 process.exit(published.status ?? 1);

@@ -2,7 +2,7 @@
   "name": "relaycode-huxon",
   "displayName": "RelayCode — AI Coding Agent",
   "description": "A focused AI coding workspace with Agent, Chat, Plan, multi-provider routing, MCP tools and safe reviewable changes.",
-  "version": "2.0.12",
+  "version": "2.0.17",
   "publisher": "huxon",
   "icon": "media/icon.png",
   "license": "MIT",
@@ -196,6 +196,7 @@
         },
         "nineRouter.endpoint": {
           "type": "string",
+          "scope": "application",
           "default": "http://127.0.0.1:20128/v1",
           "description": "🔗 9Router OpenAI-compatible API endpoint URL."
         },
@@ -233,6 +234,7 @@
         },
         "nineRouter.commandAllowList": {
           "type": "array",
+          "scope": "application",
           "items": {
             "type": "string"
           },
@@ -241,6 +243,7 @@
         },
         "nineRouter.commandDenyList": {
           "type": "array",
+          "scope": "application",
           "items": {
             "type": "string"
           },
@@ -287,6 +290,7 @@
         },
         "nineRouter.routerCommand": {
           "type": "string",
+          "scope": "application",
           "default": "9router",
           "description": "🚀 9Router CLI executable name or path. Used to start the local server."
         },

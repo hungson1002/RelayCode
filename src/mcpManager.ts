@@ -112,10 +112,12 @@ interface PendingOAuth {
 
 export class McpManager implements vscode.Disposable {
   private readonly connections = new Map<string, Connection>();
+  private readonly inFlightConnections = new Map<string, Promise<Connection>>();
   private readonly errors = new Map<string, string>();
   private readonly pendingOAuth = new Map<string, PendingOAuth>();
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   private callbackServer: http.Server | undefined;
+  private callbackServerPromise: Promise<string> | undefined;
   private callbackUrl = '';
 
   public readonly onDidChange = this.changeEmitter.event;
@@ -402,6 +404,16 @@ export class McpManager implements vscode.Disposable {
   private async connect(server: McpServerConfig): Promise<Connection> {
     const existing = this.connections.get(server.id);
     if (existing) return existing;
+    const inFlight = this.inFlightConnections.get(server.id);
+    if (inFlight) return inFlight;
+    const task = this.connectInternal(server).finally(() => {
+      if (this.inFlightConnections.get(server.id) === task) this.inFlightConnections.delete(server.id);
+    });
+    this.inFlightConnections.set(server.id, task);
+    return task;
+  }
+
+  private async connectInternal(server: McpServerConfig): Promise<Connection> {
     const client = this.createClient();
     try {
       if (server.transport === 'stdio') {
@@ -411,7 +423,13 @@ export class McpManager implements vscode.Disposable {
         let extraEnv: Record<string, string> = {};
         try { extraEnv = JSON.parse((await this.context.secrets.get(`${MCP_ENV_PREFIX}${server.id}`)) || '{}') as Record<string, string>; } catch { /* Ignore malformed optional env. */ }
         const inherited = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-        await client.connect(new StdioClientTransport({ command: server.command!, args: server.args, env: { ...inherited, ...extraEnv }, cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath }));
+        const rawCommand = server.command!;
+        const rawArgs = server.args ?? [];
+        const needsWindowsCmdWrapper = process.platform === 'win32'
+          && (/\.(?:cmd|bat)$/i.test(rawCommand) || /^(?:npx|npm|pnpm|yarn|uvx)$/i.test(rawCommand.trim()));
+        const command = needsWindowsCmdWrapper ? (process.env.ComSpec || 'cmd.exe') : rawCommand;
+        const args = needsWindowsCmdWrapper ? ['/d', '/s', '/c', rawCommand, ...rawArgs] : rawArgs;
+        await client.connect(new StdioClientTransport({ command, args, env: { ...inherited, ...extraEnv }, cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath }));
       } else {
         if (server.authMode === 'oauth') {
           const callbackUrl = await this.ensureCallbackServer();
@@ -584,20 +602,26 @@ export class McpManager implements vscode.Disposable {
 
   private async ensureCallbackServer(): Promise<string> {
     if (this.callbackServer?.listening && this.callbackUrl) return this.callbackUrl;
-    this.callbackServer = http.createServer((request, response) => {
-      void this.handleOAuthCallback(request, response);
-    });
-    await new Promise<void>((resolve, reject) => {
-      const server = this.callbackServer!;
-      server.once('error', reject);
-      server.listen(0, () => {
-        server.off('error', reject);
-        resolve();
+    if (this.callbackServerPromise) return this.callbackServerPromise;
+    this.callbackServerPromise = (async () => {
+      const server = http.createServer((request, response) => {
+        void this.handleOAuthCallback(request, response);
       });
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', () => {
+          server.off('error', reject);
+          resolve();
+        });
+      });
+      this.callbackServer = server;
+      const address = server.address() as AddressInfo;
+      this.callbackUrl = `http://localhost:${address.port}/relaycode/callback`;
+      return this.callbackUrl;
+    })().finally(() => {
+      this.callbackServerPromise = undefined;
     });
-    const address = this.callbackServer.address() as AddressInfo;
-    this.callbackUrl = `http://localhost:${address.port}/relaycode/callback`;
-    return this.callbackUrl;
+    return this.callbackServerPromise;
   }
 
   private async handleOAuthCallback(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {

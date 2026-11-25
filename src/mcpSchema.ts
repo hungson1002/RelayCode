@@ -58,7 +58,8 @@ function normalizeNode(
   root: JsonObject,
   activeReferences: Set<string>,
   warnings: string[],
-  budget: { remaining: number }
+  budget: { remaining: number },
+  inPropertyMap = false
 ): unknown {
   budget.remaining -= 1;
   if (budget.remaining < 0) {
@@ -68,13 +69,13 @@ function normalizeNode(
   // JSON Schema allows boolean schemas. Preserve them because keywords such as
   // `additionalProperties` require an actual boolean in provider tool schemas.
   if (typeof value === 'boolean') return value;
-  if (Array.isArray(value)) return value.map((item) => normalizeNode(item, root, activeReferences, warnings, budget));
+  if (Array.isArray(value)) return value.map((item) => normalizeNode(item, root, activeReferences, warnings, budget, false));
   if (!isObject(value)) return value;
 
-  if (typeof value.$ref === 'string') {
+  if (!inPropertyMap && typeof value.$ref === 'string') {
     const reference = value.$ref;
     const siblingSource = Object.fromEntries(Object.entries(value).filter(([key]) => key !== '$ref'));
-    const siblings = normalizeNode(siblingSource, root, activeReferences, warnings, budget) as JsonObject;
+    const siblings = normalizeNode(siblingSource, root, activeReferences, warnings, budget, false) as JsonObject;
     const target = localReference(root, reference);
     if (target === undefined) {
       warnings.push(`Unresolved schema reference: ${reference}`);
@@ -86,14 +87,16 @@ function normalizeNode(
     }
     const nextReferences = new Set(activeReferences);
     nextReferences.add(reference);
-    const resolved = normalizeNode(target, root, nextReferences, warnings, budget);
+    const resolved = normalizeNode(target, root, nextReferences, warnings, budget, false);
     return mergeReferencedSchema(isObject(resolved) ? resolved : {}, siblings);
   }
 
   const result: JsonObject = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key === '$defs' || key === 'definitions' || key === '$schema' || key === '$id') continue;
-    result[key] = normalizeNode(child, root, activeReferences, warnings, budget);
+    // Only strip JSON Schema metadata keywords at schema-object level, never
+    // inside `properties` where a tool parameter itself may be named `definitions`.
+    if (!inPropertyMap && (key === '$defs' || key === 'definitions' || key === '$schema' || key === '$id')) continue;
+    result[key] = normalizeNode(child, root, activeReferences, warnings, budget, !inPropertyMap && key === 'properties');
   }
   return result;
 }

@@ -183,7 +183,10 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
     if (stored) {
       try { await access(stored); return stored; } catch { /* reinstall */ }
     }
-    const releaseResponse = await fetch(RELEASE_API, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'RelayCode' } });
+    const releaseResponse = await fetch(RELEASE_API, {
+      headers: { accept: 'application/vnd.github+json', 'user-agent': 'RelayCode' },
+      signal: AbortSignal.timeout(30_000)
+    });
     if (!releaseResponse.ok) throw new Error(`Không tải được tunnel-client (HTTP ${releaseResponse.status}).`);
     const release = await releaseResponse.json() as ReleaseResponse;
     const platform = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
@@ -196,7 +199,10 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
     await mkdir(installDirectory, { recursive: true });
     const archivePath = join(installDirectory, asset.name);
     const [archive, checksums] = await Promise.all([this.download(asset.browser_download_url), this.download(checksumAsset.browser_download_url)]);
-    const expected = new TextDecoder().decode(checksums).split(/\r?\n/).find((line) => line.trim().endsWith(asset.name))?.trim().split(/\s+/)[0];
+    const expected = new TextDecoder().decode(checksums)
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/))
+      .find((parts) => parts.length >= 2 && parts[1]!.replace(/^\*/, '') === asset.name)?.[0];
     const actual = createHash('sha256').update(archive).digest('hex');
     if (!expected || expected.toLowerCase() !== actual) throw new Error('Checksum tunnel-client không khớp; đã dừng cài đặt.');
     await writeFile(archivePath, archive);
@@ -239,10 +245,11 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
   }
 
   private async startRuntime(binary: string, apiKey: string): Promise<void> {
-    this.lastRuntimeLaunch = { binary, apiKey };
     this.restartAttempt = 0;
     this.stopRuntime();
+    this.lastRuntimeLaunch = undefined;
     await this.launchRuntime(binary, apiKey);
+    this.lastRuntimeLaunch = { binary, apiKey };
   }
 
   private async launchRuntime(binary: string, apiKey: string): Promise<void> {
@@ -262,7 +269,10 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
     });
     this.runtime = child;
     await new Promise<void>((resolvePromise, reject) => {
-      const timer = setTimeout(resolvePromise, 900);
+      const timer = setTimeout(() => {
+        this.restartAttempt = 0;
+        resolvePromise();
+      }, 900);
       child.once('error', (error) => { clearTimeout(timer); reject(error); });
       child.once('exit', (code) => {
         clearTimeout(timer);
@@ -295,7 +305,10 @@ export class ChatGptTunnelSetup implements vscode.Disposable {
   }
 
   private async download(url: string): Promise<Uint8Array> {
-    const response = await fetch(url, { headers: { 'user-agent': 'RelayCode' } });
+    const response = await fetch(url, {
+      headers: { 'user-agent': 'RelayCode' },
+      signal: AbortSignal.timeout(60_000)
+    });
     if (!response.ok) throw new Error(`Tải tunnel-client thất bại (HTTP ${response.status}).`);
     return new Uint8Array(await response.arrayBuffer());
   }

@@ -10,12 +10,25 @@ const MAX_TITLE_LENGTH = 52;
 const NEW_CHAT_TITLE = 'Cuộc trò chuyện mới';
 
 function firstSentence(prompt: string): string {
-  return prompt
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/[`*_#>\[\](){}]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(/(?:[.!?]\s+|\n)/, 1)[0] ?? '';
+  const cleaned = prompt
+    .replace(/<(file|selection|git-diff|attachment|terminal|problems)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<\/?[a-z][a-z0-9-]*(?:\s+[^>]*)?>/gi, ' ')
+    .replace(/(?:^|\s)(?:\$[a-z0-9_.:-]+|@(?:selection|terminal|git-diff|problems|file:[^\s]+|folder:[^\s]+))/gi, ' ')
+    .replace(/https?:\/\/[^\s)]+/gi, ' ')
+    .replace(/[`*_#>\[\](){}]/g, ' ');
+  const firstLine = cleaned
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .find(Boolean) ?? '';
+  const withoutListPrefix = firstLine.replace(/^\d+\.\s+/, '');
+  const sentence = withoutListPrefix.split(/(?:[.!?]\s+)/, 1)[0]?.trim() ?? '';
+  // Split long rambling comma-separated Vietnamese/English prompts on the first natural clause
+  // when the first clause already carries enough meaning (>= 14 chars).
+  if (sentence.length > MAX_TITLE_LENGTH) {
+    const clause = sentence.split(/(?:,\s+(?:với\s+lại|cả\s+|và\s+|rồi\s+|nhưng\s+|nhé\b|also\b|and\s+|plus\b)|;\s+)/i, 1)[0]?.trim() ?? '';
+    if (clause.length >= 14) return clause;
+  }
+  return sentence;
 }
 
 function capitalizeFirst(value: string): string {
@@ -74,7 +87,7 @@ export function smartSessionTitle(prompt: string): string {
     .replace(/^(sửa|fix|thêm|add|đổi|change|tạo|create|làm|make)\s+(?:(?:lại|vậy|cái)\s+)+/iu, '$1 ');
   const questionLead = /^(có\s+cách\s+nào(?:\s+để)?|làm\s+sao(?:\s+để)?|how\s+(?:can|do)\s+i)\s+/iu.test(title);
 
-  const conversationalPrefix = /^(?:(?:xin\s+)?chào(?:\s+bạn)?|hello|hi|hey|nhé|này|ờ|à|bạn\s+ơi|xin\s+hỏi|cho\s+(?:tôi|mình)\s+hỏi)[,.!?;:\s-]*|^(?:(?:bạn\s+)?có\s+thể\s+|bạn\s+|hãy\s+|vui\s+lòng\s+|làm\s+ơn\s+|tôi\s+muốn\s+|mình\s+muốn\s+|giúp\s+(?:tôi|mình)\s+|cho\s+(?:tôi|mình)\s+)/iu;
+  const conversationalPrefix = /^(?:(?:xin\s+)?chào(?:\s+bạn)?|hello|hi|hey|nhé|này|ờ|à|bạn\s+ơi|xin\s+hỏi|cho\s+(?:tôi|mình)\s+hỏi|là\s+bạn\s+vừa|nên\s+cho\s+nó|nên\s+)[,.!?;:\s-]*|^(?:(?:bạn\s+)?có\s+thể\s+|bạn\s+|hãy\s+|vui\s+lòng\s+|làm\s+ơn\s+|tôi\s+muốn\s+|mình\s+muốn\s+|giúp\s+(?:tôi|mình)\s+|cho\s+(?:tôi|mình)\s+|can\s+you\s+|could\s+you\s+|please\s+|i\s+want\s+(?:you\s+)?to\s+)/iu;
   for (let pass = 0; pass < 4; pass += 1) {
     const concise = title.replace(conversationalPrefix, '').trim();
     if (concise === title) break;
@@ -146,4 +159,20 @@ export function smartSessionTitleFromTurns(turns: SessionTitleTurn[]): string {
   const slash = first.trim().match(/^\/([a-z-]+)/i)?.[1];
   if (slash) return compactTitle(capitalizeFirst(slash.replace(/-/g, ' ')));
   return smartSessionTitle(first);
+}
+
+export function cleanGeneratedTitle(raw: string): string | undefined {
+  const firstLine = String(raw || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean) ?? '';
+  const stripped = firstLine
+    .replace(/^(?:title|tiêu\s*đề)\s*[:：-]\s*/iu, '')
+    .replace(/^["'“”‘’`*#\-\s]+|["'“”‘’`*#.\s!?]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!stripped || stripped.length < 2) return undefined;
+  if (/^(?:cuộc\s+trò\s+chuyện\s+mới|new\s+chat|untitled|conversation|chat)$/i.test(stripped)) return undefined;
+  return compactTitle(capitalizeFirst(normalizeAcronyms(stripped)));
 }

@@ -61,12 +61,21 @@ export type WebviewMessage =
   | { type: 'openCockpit' }
   | { type: 'openExternal'; url: string }
   | { type: 'openFile'; path: string }
+  | { type: 'openMediaExternal'; path: string }
   | { type: 'openAssistantResponse'; content: string }
   | { type: 'openPlanArtifact'; turnIndex: number }
-  | { type: 'pickFiles'; kind: 'files' | 'images' | 'resources' }
+  | { type: 'pickFiles'; kind: 'files' | 'images' | 'media' | 'resources' }
   | { type: 'pasteImage'; name: string; mimeType: string; dataUrl: string }
+  | { type: 'attachLocalPaths'; paths: string[] }
   | { type: 'removeAttachment'; index: number }
   | { type: 'loadSession'; id: string }
+  | { type: 'renameSession'; id: string; title: string }
+  | { type: 'togglePinSession'; id: string }
+  | { type: 'exportSessionMarkdown'; id: string }
+  | { type: 'rollbackToTurn'; turnIndex: number }
+  | { type: 'searchWorkspacePaths'; kind: 'file' | 'folder'; query: string; requestId?: number }
+  | { type: 'insertCode'; code: string }
+  | { type: 'runCodeBlock'; command: string }
   | { type: 'deleteSession'; id: string }
   | { type: 'deleteAllSessions' }
   | { type: 'editMessage'; index: number; prompt: string; mode: ChatMode; model: string }
@@ -180,16 +189,38 @@ export function isWebviewMessage(candidate: unknown): candidate is WebviewMessag
       return isString(value.url, 8_000);
     case 'openFile':
       return isString(value.path, 32_000);
+    case 'openMediaExternal':
+      return isString(value.path, 32_000) && value.path.trim().length > 0;
     case 'openAssistantResponse':
       return isString(value.content, 2_000_000);
     case 'openPlanArtifact':
       return Number.isSafeInteger(value.turnIndex) && Number(value.turnIndex) >= 0;
     case 'pickFiles':
-      return isOneOf(value.kind, ['files', 'images', 'resources']);
+      return isOneOf(value.kind, ['files', 'images', 'media', 'resources']);
     case 'pasteImage':
       return isString(value.name, 500)
         && isString(value.mimeType, 200)
-        && isString(value.dataUrl, 25_000_000);
+        && isString(value.dataUrl, 250_000_000);
+    case 'attachLocalPaths':
+      return Array.isArray(value.paths)
+        && value.paths.length > 0
+        && value.paths.length <= 50
+        && value.paths.every((item) => isString(item, 32_000) && item.trim().length > 0);
+    case 'renameSession':
+      return isString(value.id, 300) && value.id.trim().length > 0 && isString(value.title, 200) && value.title.trim().length > 0;
+    case 'togglePinSession':
+    case 'exportSessionMarkdown':
+      return isString(value.id, 300) && value.id.trim().length > 0;
+    case 'rollbackToTurn':
+      return Number.isSafeInteger(value.turnIndex) && Number(value.turnIndex) >= 0;
+    case 'searchWorkspacePaths':
+      return isOneOf(value.kind, ['file', 'folder'])
+        && isString(value.query, 300)
+        && (value.requestId === undefined || (Number.isSafeInteger(value.requestId) && Number(value.requestId) >= 0));
+    case 'insertCode':
+      return isString(value.code, 500_000) && value.code.length > 0;
+    case 'runCodeBlock':
+      return isString(value.command, 50_000) && value.command.trim().length > 0;
     case 'removeAttachment':
       return Number.isSafeInteger(value.index) && Number(value.index) >= 0;
     case 'editMessage':

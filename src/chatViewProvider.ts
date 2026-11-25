@@ -1,11 +1,26 @@
 import * as vscode from 'vscode';
 import { createHash } from 'node:crypto';
-import { relative, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { AgentRuntime, compactProgressCommentary } from './agentRuntime';
 import { AgentHarness, type AgentHarnessEvent } from './agentHarness';
 import { normalizeEndpoint } from './routerClient';
 import { localizeProviderError } from './providerErrorMessages';
-import { smartSessionTitleFromTurns } from './sessionTitle';
+import { cleanGeneratedTitle, smartSessionTitleFromTurns } from './sessionTitle';
+import {
+  detectMediaMime,
+  extractVideoKeyframes,
+  extractVideoPoster,
+  formatFileSize,
+  formatMediaDuration,
+  isImageMedia,
+  isModelSupportedImageMime,
+  isVideoMedia,
+  prepareLargeImageForModel,
+  probeVideoMetadata,
+  transcribeVideoAudio,
+  type VideoMetadata
+} from './mediaUtils';
+import { formatSessionAsMarkdown, SessionStore } from './sessionStore';
 import { buildSessionSummary, sessionSummaryForDisplay, sessionSummaryForPrompt } from './sessionSummary';
 import { detectResponseLanguage, responseLanguageInstruction } from './responseLanguage';
 import { RouterProcessManager, type RouterLaunchProgress, type RouterRuntimeStatus } from './routerProcessManager';
@@ -15,7 +30,8 @@ import { ProviderProfileStore, TelemetryStore, type ProviderProfile } from './pr
 import { MCP_PRESETS, McpManager, type McpServerConfig } from './mcpManager';
 import { GitCheckpointManager } from './gitCheckpoint';
 import { LocalRuntimeManager } from './localRuntimeManager';
-import { applyForward, applyReverse, countLineChanges, createDiffHunks } from './diffHunks';
+import { applyForward, applyReverse, countLineChanges, createDiffHunks, isBinaryContent } from './diffHunks';
+import { WorkspaceSandbox } from './workspaceSandbox';
 import { discoverSkills, selectedSkills, skillCatalog, skillInstructionsFor, type AgentSkill } from './skillRegistry';
 import { formatProjectInstructions, loadProjectInstructions } from './projectInstructions';
 import { renderChatViewHtml } from './webview/chatViewHtml';
@@ -65,6 +81,23 @@ const CHANGE_REVIEW_SCHEME = 'relaycode-review';
 interface StoredAttachment {
   name: string;
   path?: string;
+  mimeType?: string;
+  size?: number;
+}
+
+interface AttachmentView {
+  name: string;
+  path?: string;
+  kind?: 'image' | 'video' | 'file';
+  mimeType?: string;
+  size?: number;
+  sizeLabel?: string;
+  preview?: string;
+  modelPreview?: string;
+  videoUrl?: string;
+  poster?: string;
+  durationLabel?: string;
+  resolution?: string;
 }
 
 interface StoredPlanArtifact {
@@ -86,6 +119,7 @@ interface StoredTurn {
   attachments?: StoredAttachment[];
   artifact?: StoredPlanArtifact;
   chatGptActivity?: ChatGptBridgeActivity;
+  taskId?: string;
 }
 
 interface StoredSession {
@@ -98,6 +132,9 @@ interface StoredSession {
   activeSkills?: string[];
   summary?: string;
   kind?: 'chatgpt-web';
+  aiTitled?: boolean;
+  manualTitle?: boolean;
+  pinned?: boolean;
 }
 
 interface StoredComposerPreferences {
@@ -167,7 +204,7 @@ interface PendingApproval {
 }
 
 interface ApprovalPresentation {
-  kind: 'command' | 'action';
+  kind: 'command' | 'edit' | 'action';
   title: string;
   message: string;
   command?: string;
@@ -185,6 +222,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private stopGeneration = 0;
   private routerProcess = new RouterProcessManager();
   private pendingAttachments: Array<{ path: string; name: string; mimeType: string; size: number }> = [];
+  private readonly mediaResourceRoots = new Set<string>();
+  private readonly videoMetaCache = new Map<string, { meta: VideoMetadata; poster?: string }>();
+  private readonly titleGenerationInFlight = new Set<string>();
+  private readonly sessionStore: SessionStore<StoredSession>;
+  private workspacePathCache: { fetchedAt: number; files: string[]; folders: string[] } | undefined;
   private approvals = new Map<string, PendingApproval>();
   private pendingApprovalByKey = new Map<string, Promise<boolean>>();
   private readonly similarApprovalRules = new Set<string>();
@@ -234,11 +276,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private connectionGeneration = 0;
   private webviewInitialized = false;
   private webviewStartupTimer: NodeJS.Timeout | undefined;
+  private webviewMessageDisposable: vscode.Disposable | undefined;
   private disposing = false;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
     this.output.appendLine(`[activate] RelayCode ${String(context.extension.packageJSON.version || 'unknown')} · ${context.extensionUri.fsPath}`);
     this.profileStore = new ProviderProfileStore(context);
+    this.sessionStore = new SessionStore<StoredSession>(context.globalStorageUri.fsPath, context.globalState, CHAT_SESSIONS_STATE);
     this.telemetryStore = new TelemetryStore(context);
     this.quotaService = new NineRouterQuotaService(context);
     this.interaction = {
@@ -294,11 +338,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.view = view;
     this.webviewInitialized = false;
     if (this.webviewStartupTimer) clearTimeout(this.webviewStartupTimer);
-    view.webview.options = { enableScripts: true, localResourceRoots: [this.context.globalStorageUri] };
+    this.webviewMessageDisposable?.dispose();
+    this.syncWebviewResourceRoots(view);
     // Register the bridge before assigning HTML. Antigravity can execute a
     // webview immediately, so installing the listener afterwards may lose the
     // one-shot `ready` message and leave provider/model state uninitialized.
-    this.context.subscriptions.push(registerChatViewMessageHandler(view.webview, (message) => this.onMessage(message)));
+    const messageDisposable = registerChatViewMessageHandler(view.webview, (message) => this.onMessage(message));
+    this.webviewMessageDisposable = messageDisposable;
+    view.onDidDispose(() => {
+      messageDisposable.dispose();
+      if (this.webviewMessageDisposable === messageDisposable) this.webviewMessageDisposable = undefined;
+      if (this.view === view) {
+        this.view = undefined;
+        this.webviewInitialized = false;
+      }
+    });
     view.webview.html = this.html(view.webview);
     this.output.appendLine(`[webview] resolved · ${String(this.context.extension.packageJSON.version || 'unknown')}`);
     // Do not depend exclusively on webview -> host messaging for startup.
@@ -711,17 +765,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.stopActiveTurn();
         await this.setGoalStatus('paused', 'Đã tạm dừng. Có thể tiếp tục từ checkpoint gần nhất.');
       } else if (message.type === 'resumeGoal') {
+        if (this.abortController) return;
         const recovered = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
         const goal = this.context.workspaceState.get<StoredGoal>(GOAL_STATE);
-        if (recovered?.checkpoint && recovered.mode !== 'chat') {
-          await this.setGoalStatus('running', 'Đang tiếp tục từ checkpoint gần nhất.');
-          await this.send({
-            type: 'send',
-            prompt: recovered.prompt,
-            mode: recovered.mode,
-            model: message.model || recovered.checkpoint.model || recovered.model,
-            includeSelection: false
-          }, recovered.checkpoint, recovered.runId);
+        if (recovered?.checkpoint && recovered.mode !== 'chat' && this.resumingRunId !== recovered.runId) {
+          this.resumingRunId = recovered.runId;
+          try {
+            await this.setGoalStatus('running', 'Đang tiếp tục từ checkpoint gần nhất.');
+            await this.send({
+              type: 'send',
+              prompt: recovered.prompt,
+              mode: recovered.mode,
+              model: message.model || recovered.checkpoint.model || recovered.model,
+              includeSelection: false
+            }, recovered.checkpoint, recovered.runId);
+          } finally {
+            if (this.resumingRunId === recovered.runId) this.resumingRunId = undefined;
+          }
         } else if (goal?.objective && message.model) {
           await this.setGoalStatus('running', 'Đang tiếp tục mục tiêu.');
           await this.send({
@@ -873,6 +933,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         await this.pickFiles(message.kind);
       } else if (message.type === 'pasteImage') {
         await this.pasteImage(message);
+      } else if (message.type === 'attachLocalPaths') {
+        await this.attachLocalPaths(message.paths);
+      } else if (message.type === 'openMediaExternal') {
+        await this.openMediaExternal(message.path);
       } else if (message.type === 'removeAttachment') {
         this.pendingAttachments.splice(message.index, 1);
         await this.postAttachments();
@@ -882,6 +946,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           return;
         }
         await this.loadSession(message.id);
+      } else if (message.type === 'renameSession') {
+        await this.renameSession(message.id, message.title);
+      } else if (message.type === 'togglePinSession') {
+        await this.togglePinSession(message.id);
+      } else if (message.type === 'exportSessionMarkdown') {
+        await this.exportSessionMarkdown(message.id);
+      } else if (message.type === 'rollbackToTurn') {
+        await this.rollbackToTurn(message.turnIndex);
+      } else if (message.type === 'searchWorkspacePaths') {
+        await this.searchWorkspacePaths(message.kind, message.query, message.requestId);
+      } else if (message.type === 'insertCode') {
+        await this.insertCodeAtCursor(message.code);
+      } else if (message.type === 'runCodeBlock') {
+        await this.runCodeBlockInTerminal(message.command);
       } else if (message.type === 'deleteSession') {
         await this.deleteSession(message.id);
       } else if (message.type === 'deleteAllSessions') {
@@ -926,6 +1004,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       } else if (message.type === 'collapseSidebar') {
         if (!this.view?.visible) return;
         await vscode.commands.executeCommand('workbench.action.closeSidebar');
+        if (this.view?.visible) {
+          await vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+        }
       } else if (message.type === 'checkModels') {
         await this.checkModels(message.mode ?? 'chat');
       } else if (message.type === 'cancelModelCheck') {
@@ -975,7 +1056,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       } else if (message.type === 'send') {
         const recovered = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
         const isContinuation = /^(tiếp tục|tiep tuc|continue|resume|làm tiếp|lam tiep)[\s.!…]*$/i.test(message.prompt.trim());
-        if (isContinuation && recovered?.checkpoint && recovered.mode !== 'chat') {
+        const sameSession = !recovered?.sessionId || recovered.sessionId === this.currentSessionId;
+        if (isContinuation && sameSession && message.mode !== 'chat' && recovered?.checkpoint && recovered.mode !== 'chat') {
           await this.send({
             ...message,
             prompt: recovered.prompt,
@@ -1286,14 +1368,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (this.context.globalState.get(DISCONNECTED_STATE, false)) return;
     if (this.connectionProbeRunning || this.abortController || this.modelCheckController) return;
     this.connectionProbeRunning = true;
-    const provider = this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');
+    const profile = this.profileStore.active();
+    const provider = profile?.kind ?? this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');
+    const endpoint = profile?.endpoint ?? this.endpoint;
     try {
-      const apiKey = await this.getApiKey(provider);
+      const apiKey = profile ? await this.profileStore.apiKey(profile) : await this.getApiKey(provider);
       if (provider !== 'omniroute' && provider !== 'ollama' && provider !== 'lm-studio' && !apiKey.trim()) return;
       if (provider === '9router') {
-        if (!(await this.routerProcess.isRunning(this.endpoint))) throw new Error('9Router chưa phản hồi health check.');
+        const running = profile?.endpoint && profile.endpoint !== this.endpoint
+          ? await this.routerProcess.isRunning(profile.endpoint)
+          : await this.routerProcess.isRunning(this.endpoint);
+        if (!running) throw new Error('9Router chưa phản hồi health check.');
       } else {
-        await createProvider({ kind: provider, endpoint: this.endpoint, apiKey })
+        await createProvider({ kind: provider, endpoint, apiKey })
           .listModels(AbortSignal.timeout(7_000));
       }
       this.lastConnectionCheckAt = Date.now();
@@ -1712,15 +1799,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private async openWorkspaceFile(input: string): Promise<void> {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!workspaceRoot) throw new Error('Chưa mở workspace.');
-    const normalized = decodeURIComponent(input).replace(/^file:\/\//i, '').trim();
-    const location = normalized.match(/^(.*):(\d+)(?::(\d+))?$/);
-    const rawPath = location?.[1] || normalized;
-    const path = await import('node:path');
-    const root = path.resolve(workspaceRoot);
-    const target = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(root, rawPath);
-    if (target !== root && !target.startsWith(`${root}${path.sep}`)) throw new Error('File nằm ngoài workspace.');
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders?.length) throw new Error('Chưa mở workspace.');
+    let decoded = input.trim();
+    try { decoded = decodeURIComponent(decoded); } catch { /* Keep raw path if filename contains literal % */ }
+    const location = decoded.match(/^(.*):(\d+)(?::(\d+))?$/);
+    const rawCandidate = location?.[1] || decoded;
+    const rawPath = /^file:\/\//i.test(rawCandidate)
+      ? vscode.Uri.parse(rawCandidate).fsPath
+      : rawCandidate;
+    let target: string | undefined;
+    for (const folder of folders) {
+      try {
+        target = new WorkspaceSandbox(folder.uri.fsPath).resolvePath(rawPath);
+        break;
+      } catch { /* Try next workspace folder */ }
+    }
+    if (!target) throw new Error('File nằm ngoài workspace.');
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(target));
     const editor = await vscode.window.showTextDocument(document, { preview: true });
     const line = Math.max(0, Number(location?.[2] || 1) - 1);
@@ -1731,6 +1826,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private async restoreCheckpoint(id: string): Promise<void> {
+    if (this.abortController || this.changeOperationBusy) {
+      this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi khôi phục checkpoint.', 'warning');
+      return;
+    }
     const choice = await this.interaction.choose({
       title: 'Khôi phục checkpoint?',
       message: 'Toàn bộ file Git sẽ trở về trạng thái trước tác vụ Agent.',
@@ -1762,9 +1861,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (!prompt && !hasAttachments) return;
     const stopGeneration = this.stopGeneration;
     const storedResume = resumeRunId ? this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE) : undefined;
-    if (storedResume?.sessionId) this.currentSessionId = storedResume.sessionId;
-    this.changesVisible = true;
+    if (storedResume?.sessionId) {
+      this.currentSessionId = storedResume.sessionId;
+      // Preserve existing session history when resuming after an IDE reload so
+      // saveSession() does not overwrite previous turns with a single turn.
+      if (!this.transcript.length) {
+        const storedSession = this.context.globalState
+          .get<StoredSession[]>(CHAT_SESSIONS_STATE, [])
+          .find((item) => item.id === storedResume.sessionId);
+        if (storedSession?.turns.length) {
+          this.transcript = storedSession.turns.slice();
+          this.history = this.transcript
+            .filter((turn) => !turn.error)
+            .map((turn) => ({ role: turn.role, content: turn.content }));
+        }
+      }
+    }
+    const hasChangesForSession = [...this.changes.values()].some((change) => change.sessionId === this.currentSessionId);
     this.visibleChangesSessionId = storedResume?.sessionId ?? this.currentSessionId;
+    this.changesVisible = hasChangesForSession;
     const goalControl = prompt.trim().match(/^\/goal\s+(pause|resume|clear|edit)$/i)?.[1]?.toLowerCase();
     if (goalControl === 'pause') {
       this.stopActiveTurn();
@@ -1827,7 +1942,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           serviceTier: message.serviceTier
         }
       : undefined;
-    let effectiveModel = message.model;
     const monthlyLimit = config.get<number>('monthlyCostLimit', 0);
     if (monthlyLimit > 0) {
       const monthStart = new Date();
@@ -1849,73 +1963,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.activeRunMode = message.mode;
     this.pendingSteering = [];
     this.currentTaskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const recent = this.context.globalState.get<string[]>(RECENT_MODELS_STATE, []);
-    const nextRecent = [message.model, ...recent.filter((item) => item !== message.model)].slice(0, 8);
-    await this.context.globalState.update(RECENT_MODELS_STATE, nextRecent);
-    await this.post({ type: 'recentModels', models: nextRecent });
-    const attachments = this.pendingAttachments.slice();
-    const attachmentNote = await this.attachmentPrompt(attachments);
-    if (!this.skillsLoaded && /(?:^|\s)\$[A-Za-z0-9][\w.:-]*/.test(prompt)) await this.refreshSkills();
-    for (const skill of selectedSkills(prompt, this.skills)) this.activeSkillNames.add(skill.name.toLowerCase());
-    const activeSkills = this.skills.filter((skill) => this.activeSkillNames.has(skill.name.toLowerCase()));
-    const selectedSkillInstructions = skillInstructionsFor(activeSkills);
-    const contextualPrompt = (await this.withEditorContext(prompt, message.includeSelection, message.mode)) + attachmentNote;
-    const enrichedPrompt = contextualPrompt
-      + (message.mode === 'chat' && selectedSkillInstructions ? `\n\n${selectedSkillInstructions}` : '');
-    const attachmentViews = await this.attachmentViews(attachments);
-    const selectedModelSupportsVision = this.models.find((item) => item.id === message.model)?.capabilities?.vision === true;
-    const requestContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.modelPreview)
-      ? [
-          { type: 'text', text: enrichedPrompt },
-          ...attachmentViews.flatMap((item) => item.modelPreview ? [{ type: 'image_url' as const, image_url: { url: item.modelPreview } }] : [])
-        ]
-      : enrichedPrompt;
-    const startedAt = Date.now();
-    const lastUserTurn = [...this.transcript].reverse().find((turn) => turn.role === 'user');
-    const resumesExistingTurn = Boolean(resumeCheckpoint && lastUserTurn?.content.trim() === prompt);
-    if (resumesExistingTurn) {
-      while (this.transcript.at(-1)?.error) this.transcript.pop();
-    }
-    const previousTurns = this.transcript
-      .filter((turn) => !turn.error)
-      .slice(-12)
-      .map((turn) => ({ role: turn.role, content: turn.content }));
     const runId = resumeRunId || `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const runGeneration = this.activeRunState.begin();
-    const activeRun: StoredActiveRun = {
+    let effectiveModel = message.model;
+    let answer = '';
+    let activeRun: StoredActiveRun = {
       runId,
       sessionId: this.currentSessionId,
       prompt,
       answer: '',
       mode: message.mode,
       model: message.model,
-      startedAt,
+      startedAt: Date.now(),
       checkpoint: resumeCheckpoint
     };
-    await this.persistActiveRun(activeRun, runGeneration);
-    if (!resumesExistingTurn) {
-      this.transcript.push({ role: 'user', content: prompt, timestamp: startedAt, attachments: attachments.map((item) => ({ name: item.name, path: item.path })) });
-      await this.saveSession(message.mode, message.model);
-    }
-    this.pendingAttachments = [];
-    await this.postAttachments();
-    await this.post({
-      type: 'turnStart',
-      mode: message.mode,
-      prompt,
-      attachments: attachmentViews,
-      timestamp: startedAt,
-      turnIndex: this.transcript.length - 1,
-      resume: resumesExistingTurn
-    });
-
-    let answer = '';
+    const taskChangeIds = new Set<string>();
     const planChatSummary = message.mode === 'plan'
       ? ((responseLanguage === 'en' || (responseLanguage === 'same' && config.get<'vi' | 'en'>('language', 'en') === 'en'))
         ? 'Plan is ready. Open the Implementation Plan tab to review, revise or proceed.'
         : 'Đã lập xong kế hoạch. Mở tab Kế hoạch thực hiện để xem, chỉnh sửa hoặc thực hiện.')
       : '';
-    const taskChangeIds = new Set<string>();
     const onDelta = (delta: string) => {
       // Keep streamed model text untouched. Language is controlled by the
       // system instruction; rewriting words in the stream could corrupt code
@@ -1932,18 +1999,90 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     };
 
     try {
-      const hookRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (message.mode === 'agent' && hookRoot) {
-        await this.hooks.run('beforeAgent', hookRoot, (description) => this.askApproval(description), (chunk) => {
-          const previous = this.context.workspaceState.get<string>(LAST_TERMINAL_STATE, '');
-          void this.context.workspaceState.update(LAST_TERMINAL_STATE, `${previous}${chunk}`.slice(-20_000));
-          this.output.append(chunk);
-        }, turnController.signal);
-      }
+      const recent = this.context.globalState.get<string[]>(RECENT_MODELS_STATE, []);
+      const nextRecent = [message.model, ...recent.filter((item) => item !== message.model)].slice(0, 8);
+      await this.context.globalState.update(RECENT_MODELS_STATE, nextRecent);
+      await this.post({ type: 'recentModels', models: nextRecent });
+      const attachments = this.pendingAttachments.slice();
+      const attachmentNote = await this.attachmentPrompt(attachments);
+      if (!this.skillsLoaded && /(?:^|\s)\$[A-Za-z0-9][\w.:-]*/.test(prompt)) await this.refreshSkills();
+      for (const skill of selectedSkills(prompt, this.skills)) this.activeSkillNames.add(skill.name.toLowerCase());
+      const activeSkills = this.skills.filter((skill) => this.activeSkillNames.has(skill.name.toLowerCase()));
+      const selectedSkillInstructions = skillInstructionsFor(activeSkills);
+      const contextualPrompt = (await this.withEditorContext(prompt, message.includeSelection, message.mode)) + attachmentNote;
+      const enrichedPrompt = contextualPrompt
+        + (message.mode === 'chat' && selectedSkillInstructions ? `\n\n${selectedSkillInstructions}` : '');
+      const attachmentViews = await this.attachmentViews(attachments);
+      const selectedModelSupportsVision = this.models.find((item) => item.id === message.model)?.capabilities?.vision === true;
       const requestProfile = this.profileStore.active();
       const provider = requestProfile?.kind ?? this.context.globalState.get<ProviderKind>(PROVIDER_KIND_STATE, '9router');
       const requestEndpoint = requestProfile?.endpoint ?? this.endpoint;
       const apiKey = requestProfile ? await this.profileStore.apiKey(requestProfile) : await this.getApiKey(provider);
+      const visionPayload = await this.buildVisionAttachmentPayload(
+        attachments,
+        attachmentViews,
+        selectedModelSupportsVision,
+        requestEndpoint,
+        apiKey,
+        turnController.signal
+      );
+      const contextualWithMedia = contextualPrompt + visionPayload.extraNote;
+      const enrichedWithMedia = enrichedPrompt + visionPayload.extraNote;
+      const requestContent: ChatMessage['content'] = selectedModelSupportsVision && visionPayload.imageParts.length
+        ? [
+            { type: 'text', text: enrichedWithMedia },
+            ...visionPayload.imageParts
+          ]
+        : enrichedWithMedia;
+      const startedAt = Date.now();
+      const lastUserTurn = [...this.transcript].reverse().find((turn) => turn.role === 'user');
+      const resumesExistingTurn = Boolean(resumeCheckpoint && lastUserTurn?.content.trim() === prompt);
+      if (resumesExistingTurn) {
+        while (this.transcript.at(-1)?.error) this.transcript.pop();
+      }
+      const previousTurns = this.transcript
+        .filter((turn) => !turn.error)
+        .slice(-12)
+        .map((turn) => ({ role: turn.role, content: turn.content }));
+      activeRun = {
+        runId,
+        sessionId: this.currentSessionId,
+        prompt,
+        answer: '',
+        mode: message.mode,
+        model: message.model,
+        startedAt,
+        checkpoint: resumeCheckpoint
+      };
+      await this.persistActiveRun(activeRun, runGeneration);
+      if (!resumesExistingTurn) {
+        this.transcript.push({ role: 'user', content: prompt, timestamp: startedAt, taskId: this.currentTaskId, attachments: attachments.map((item) => ({ name: item.name, path: item.path, mimeType: item.mimeType, size: item.size })) });
+        await this.saveSession(message.mode, message.model);
+      }
+      this.pendingAttachments = [];
+      await this.postAttachments();
+      await this.post({
+        type: 'turnStart',
+        mode: message.mode,
+        prompt,
+        attachments: attachmentViews,
+        timestamp: startedAt,
+        turnIndex: this.transcript.length - 1,
+        resume: resumesExistingTurn
+      });
+
+      const hookRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const hookPolicy = {
+        allow: config.get<string[]>('commandAllowList', []),
+        deny: config.get<string[]>('commandDenyList', [])
+      };
+      if (message.mode === 'agent' && hookRoot && vscode.workspace.isTrusted) {
+        await this.hooks.run('beforeAgent', hookRoot, (description) => this.askApproval(description, { requireExplicit: true }), (chunk) => {
+          const previous = this.context.workspaceState.get<string>(LAST_TERMINAL_STATE, '');
+          void this.context.workspaceState.update(LAST_TERMINAL_STATE, `${previous}${chunk}`.slice(-20_000));
+          this.output.append(chunk);
+        }, turnController.signal, hookPolicy);
+      }
       const providerClient = createProvider({ kind: provider, endpoint: requestEndpoint, apiKey });
       const verifySelectedModel = async () => {
         if (provider === '9router' && !(await this.routerProcess.isRunning(requestEndpoint))) {
@@ -1994,6 +2133,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }
       if (message.mode === 'chat') {
         this.history.push({ role: 'user', content: requestContent });
+        let chatSucceeded = false;
+        try {
         const previousUserPrompt = [...this.history.slice(0, -1)].reverse()
           .find((item) => item.role === 'user')?.content;
         const webQuery = buildWebSearchQuery(prompt, previousUserPrompt ? textOnlyContent(previousUserPrompt) : '');
@@ -2046,7 +2187,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
             const metrics = await providerClient.streamChat(candidate, chatHistory, (delta) => {
               touchActivity();
               onDelta(delta);
-            }, candidateController.signal, tuningForModel(candidate));
+            }, candidateController.signal, tuningForModel(candidate), (thinkingDelta) => {
+              touchActivity();
+              void this.post({ type: 'thinkingDelta', delta: thinkingDelta });
+            });
             if (!answer.trim()) throw new Error(`Model ${candidate} đã kết thúc nhưng không trả về nội dung.`);
             await this.recordMetrics(candidate, metrics);
             lastError = undefined;
@@ -2083,6 +2227,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (citations) onDelta(citations);
         answer = answer.trim();
         this.history.push({ role: 'assistant', content: answer });
+        chatSucceeded = true;
+        } finally {
+          if (!chatSucceeded && this.history.at(-1)?.role === 'user') this.history.pop();
+        }
       } else {
         const activeDocument = vscode.window.activeTextEditor?.document.uri;
         const activeWorkspace = activeDocument ? vscode.workspace.getWorkspaceFolder(activeDocument) : undefined;
@@ -2206,12 +2354,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           selectedSkillInstructions,
           sessionSummaryForPrompt(this.sessionSummary)
         ].filter(Boolean).join('\n\n');
-        const agentContent: ChatMessage['content'] = selectedModelSupportsVision && attachmentViews.some((item) => item.modelPreview)
+        const agentContent: ChatMessage['content'] = selectedModelSupportsVision && visionPayload.imageParts.length
           ? [
-              { type: 'text', text: contextualPrompt },
-              ...attachmentViews.flatMap((item) => item.modelPreview ? [{ type: 'image_url' as const, image_url: { url: item.modelPreview } }] : [])
+              { type: 'text', text: contextualWithMedia },
+              ...visionPayload.imageParts
             ]
-          : contextualPrompt;
+          : contextualWithMedia;
         const agentPrompt = config.get<boolean>('planBeforeRun', false) && message.mode === 'agent'
           ? typeof agentContent === 'string'
             ? `${agentContent}\n\nTrước khi dùng tool, hãy nêu kế hoạch ngắn 2-5 bước rồi mới thực hiện.`
@@ -2313,6 +2461,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 if (turnContext?.browser && !browserToolUsed) browserPendingText += delta;
                 else onDelta(delta);
               },
+              onThinking: (delta) => {
+                touchActivity();
+                if (message.mode !== 'plan') void this.post({ type: 'thinkingDelta', delta });
+              },
               onCommentary: (content) => {
                 touchActivity();
                 if (message.mode !== 'plan') void this.post({ type: 'commentary', content });
@@ -2337,6 +2489,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
                 void this.context.workspaceState.update(LAST_TERMINAL_STATE, `${previous}${event.chunk}`.slice(-20_000));
                 this.output.append(event.chunk);
                 void this.post({ type: 'toolOutput', ...event });
+              },
+              onToolEvent: (event) => {
+                touchActivity();
+                if (message.mode !== 'plan') void this.post({ type: 'toolEvent', event });
               },
               onMetrics: (metrics) => void this.recordMetrics(candidate, metrics),
               onToolFailure: (failure) => {
@@ -2409,6 +2565,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           }
         : undefined;
       const completedAnswer = answer.trim();
+      if (message.mode !== 'chat') {
+        this.history.push(
+          { role: 'user', content: prompt },
+          { role: 'assistant', content: completedAnswer || planChatSummary || 'Agent kết thúc nhưng model không trả về nội dung.' }
+        );
+      }
       this.transcript.push({
         role: 'assistant',
         content: planChatSummary || completedAnswer || 'Agent kết thúc nhưng model không trả về nội dung.',
@@ -2440,6 +2602,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       });
       this.output.appendLine(`[turn:${runId}] turnEnd posted`);
       await this.saveSession(message.mode, effectiveModel);
+      this.scheduleAiSessionTitle(this.currentSessionId, prompt, finalAnswer, effectiveModel, providerClient);
       await this.clearActiveRun(runId, runGeneration);
       if (this.context.workspaceState.get<StoredGoal>(GOAL_STATE)?.status === 'running') {
         await this.setGoalStatus('ready', 'Hoàn thành và sẵn sàng để review.');
@@ -2459,7 +2622,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const goal = this.context.workspaceState.get<StoredGoal>(GOAL_STATE);
         if (goal?.status === 'running') {
           await this.setGoalStatus('paused', 'Đã tạm dừng. Có thể tiếp tục từ checkpoint gần nhất.');
-        } else if (!goal && !this.disposing) {
+        } else if (!this.disposing) {
           await this.clearActiveRun(runId, runGeneration);
         }
         return;
@@ -2481,9 +2644,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       }
     } finally {
       const hookRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      if (message.mode === 'agent' && hookRoot && !this.disposing) {
+      if (message.mode === 'agent' && hookRoot && vscode.workspace.isTrusted && !this.disposing) {
         try {
-          await this.hooks.run('afterAgent', hookRoot, (description) => this.askApproval(description), (chunk) => this.output.append(chunk));
+          const hookPolicy = {
+            allow: config.get<string[]>('commandAllowList', []),
+            deny: config.get<string[]>('commandDenyList', [])
+          };
+          await this.hooks.run('afterAgent', hookRoot, (description) => this.askApproval(description, { requireExplicit: true }), (chunk) => this.output.append(chunk), undefined, hookPolicy);
         } catch (error) {
           this.output.appendLine(`[hook:afterAgent] ${this.errorText(error)}`);
         }
@@ -2574,13 +2741,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const permission = this.context.globalState.get<string>(PERMISSION_MODE_STATE, 'ask');
     const presentation = approvalPresentation(description);
     // Full Access means exactly that: all workspace operations are approved,
-    // including Git commit/push. Other permission modes keep their normal gates.
-    if (permission === 'full') return Promise.resolve(true);
-    if (!options.requireExplicit && permission === 'edit' && presentation.kind !== 'command' && !/test/i.test(description)) return Promise.resolve(true);
+    // including Git commit/push. Explicit hook confirmations remain gated unless Full Access.
+    if (!options.requireExplicit && permission === 'full') return Promise.resolve(true);
+    if (!options.requireExplicit && permission === 'edit' && presentation.kind === 'edit') return Promise.resolve(true);
     if (!options.requireExplicit && presentation.similarRule && this.similarApprovalRules.has(presentation.similarRule)) {
       return Promise.resolve(true);
     }
-    const key = [presentation.kind, presentation.message, presentation.command || ''].join('|').trim();
+    const isExternalBridge = /^ChatGPT Web\b/i.test(description);
+    const key = [
+      isExternalBridge ? 'bridge' : 'agent',
+      options.requireExplicit ? 'explicit' : 'normal',
+      presentation.kind,
+      presentation.message,
+      presentation.command || ''
+    ].join('|').trim();
     const existing = this.pendingApprovalByKey.get(key);
     if (existing) return existing;
 
@@ -2595,7 +2769,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     let rejectPending!: (error: Error) => void;
     const pending = new Promise<boolean>((resolve, reject) => {
       rejectPending = reject;
-      const allowAlways = presentation.kind !== 'command' || Boolean(commandApprovalHash);
+      const allowAlways = (!isExternalBridge && presentation.kind === 'edit') || Boolean(commandApprovalHash);
       const approvalMessage = {
         type: 'approval',
         id,
@@ -2827,9 +3001,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private binaryContent(value: Uint8Array): boolean {
-    if (!value.byteLength) return false;
-    const sample = value.subarray(0, Math.min(value.byteLength, 512));
-    return sample.some((byte) => byte === 0 || (byte < 8 && byte !== 9 && byte !== 10 && byte !== 13));
+    return isBinaryContent(value);
   }
 
   private async postChangesState(): Promise<void> {
@@ -3007,6 +3179,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const afterUri = vscode.Uri.from({ scheme: CHANGE_REVIEW_SCHEME, path: `/${reviewId}/after/${fileName}` });
     this.reviewDocuments.set(beforeUri.toString(), Buffer.from(change.original).toString('utf8'));
     this.reviewDocuments.set(afterUri.toString(), Buffer.from(change.updated).toString('utf8'));
+    while (this.reviewDocuments.size > 40) {
+      const oldestKey = this.reviewDocuments.keys().next().value;
+      if (!oldestKey) break;
+      this.reviewDocuments.delete(oldestKey);
+    }
     await vscode.commands.executeCommand(
       'vscode.diff',
       beforeUri,
@@ -3075,7 +3252,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         if (change.staged) change.existed = true;
       } else {
         change.updated = applyReverse(change.updated, hunk);
-        if (!change.staged) await vscode.workspace.fs.writeFile(vscode.Uri.file(change.path), change.updated);
+        if (!change.staged) {
+          if (!change.existed && this.bytesEqual(change.original, change.updated)) {
+            await vscode.workspace.fs.delete(vscode.Uri.file(change.path), { useTrash: false }).then(undefined, () => undefined);
+          } else {
+            await vscode.workspace.fs.writeFile(vscode.Uri.file(change.path), change.updated);
+          }
+        }
       }
       if (this.bytesEqual(change.original, change.updated)) {
         this.changes.delete(id);
@@ -3174,15 +3357,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  private sessionSummaries(): Array<Pick<StoredSession, 'id' | 'title' | 'updatedAt' | 'kind'>> {
-    return this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, [])
-      .map(({ id, title, updatedAt, turns, kind }) => ({
-        id,
-        title: kind === 'chatgpt-web' ? title || smartSessionTitleFromTurns(turns) : smartSessionTitleFromTurns(turns) || title,
-        updatedAt,
-        kind
-      }))
-      .sort((left, right) => right.updatedAt - left.updatedAt);
+  private sessionSummaries(): Array<Pick<StoredSession, 'id' | 'title' | 'updatedAt' | 'kind' | 'pinned'> & { preview?: string; turnCount?: number }> {
+    const legacy = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
+    const legacyById = new Map(legacy.map((item) => [item.id, item]));
+    const index = this.sessionStore.listIndex();
+    if (!index.length && legacy.length) {
+      return legacy
+        .map(({ id, title, updatedAt, turns, kind, aiTitled, manualTitle, pinned }) => {
+          const summary = {
+            id,
+            title: kind === 'chatgpt-web' ? title || smartSessionTitleFromTurns(turns) : smartSessionTitleFromTurns(turns) || title,
+            updatedAt,
+            kind,
+            pinned
+          };
+          if ((aiTitled || manualTitle) && title?.trim()) summary.title = title.trim();
+          return summary;
+        })
+        .sort((left, right) => right.updatedAt - left.updatedAt);
+    }
+    return index.map((entry) => {
+      const legacySession = legacyById.get(entry.id);
+      const turns = legacySession?.turns ?? [];
+      const fallbackTitle = entry.kind === 'chatgpt-web'
+        ? entry.title || smartSessionTitleFromTurns(turns)
+        : (entry.aiTitled || entry.manualTitle) && entry.title?.trim()
+          ? entry.title.trim()
+          : (turns.length ? smartSessionTitleFromTurns(turns) : entry.title) || entry.title;
+      return {
+        id: entry.id,
+        title: fallbackTitle,
+        updatedAt: entry.updatedAt,
+        kind: entry.kind,
+        pinned: entry.pinned,
+        preview: entry.preview,
+        turnCount: entry.turnCount
+      };
+    });
   }
 
   private async saveSession(mode: ChatMode, model: string): Promise<void> {
@@ -3190,6 +3401,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       .filter((change) => change.sessionId === this.currentSessionId)
       .map((change) => vscode.workspace.asRelativePath(change.path));
     this.sessionSummary = buildSessionSummary(this.transcript, changedFiles);
+    const existing = await this.sessionStore.load(this.currentSessionId);
     const session: StoredSession = {
       id: this.currentSessionId,
       title: smartSessionTitleFromTurns(this.transcript),
@@ -3198,10 +3410,226 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       model,
       turns: this.transcript,
       activeSkills: [...this.activeSkillNames],
-      summary: this.sessionSummary
+      summary: this.sessionSummary,
+      ...(existing?.aiTitled ? { aiTitled: true } : {}),
+      ...(existing?.manualTitle ? { manualTitle: true } : {}),
+      ...(existing?.pinned ? { pinned: true } : {})
     };
+    if ((existing?.aiTitled || existing?.manualTitle) && existing.title.trim()) {
+      session.title = existing.title.trim();
+    }
+    await this.sessionStore.save(session);
+    await this.post({ type: 'sessions', sessions: this.sessionSummaries() });
+  }
+
+  private async renameSession(id: string, rawTitle: string): Promise<void> {
+    const cleaned = rawTitle.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!cleaned) return;
+    await this.sessionStore.updateMetadata(id, (session) => ({ ...session, title: cleaned, manualTitle: true }));
+    await this.post({ type: 'sessions', sessions: this.sessionSummaries() });
+  }
+
+  private async togglePinSession(id: string): Promise<void> {
+    await this.sessionStore.updateMetadata(id, (session) => ({ ...session, pinned: !session.pinned }));
+    await this.post({ type: 'sessions', sessions: this.sessionSummaries() });
+  }
+
+  private async exportSessionMarkdown(id: string): Promise<void> {
+    const session = await this.sessionStore.load(id);
+    if (!session) throw new Error('Không tìm thấy cuộc trò chuyện này.');
+    const markdown = formatSessionAsMarkdown(session);
+    const slug = (session.title || 'relaycode-chat').toLowerCase().replace(/[^a-z0-9\u00C0-\u024F]+/gi, '-').replace(/^-|-$/g, '').slice(0, 48) || 'relaycode-chat';
+    const target = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(`${slug}.md`),
+      filters: { Markdown: ['md'] },
+      saveLabel: 'Xuất Markdown'
+    });
+    if (!target) return;
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(markdown));
+    this.interaction.notify('Đã xuất cuộc trò chuyện ra file Markdown.', 'success');
+  }
+
+  private async rollbackToTurn(turnIndex: number): Promise<void> {
+    if (this.abortController || this.changeOperationBusy) {
+      this.interaction.notify('Hãy dừng tác vụ đang chạy trước khi quay lại checkpoint.', 'warning');
+      return;
+    }
+    if (!Number.isInteger(turnIndex) || turnIndex < 0 || turnIndex >= this.transcript.length) return;
+    const target = this.transcript[turnIndex];
+    if (!target || target.role !== 'user') return;
+    const affectedTaskIds = new Set(
+      this.transcript.slice(turnIndex).map((turn) => turn.taskId).filter((id): id is string => Boolean(id))
+    );
+    const affectedChanges = [...this.changes.entries()].filter(([, change]) =>
+      change.sessionId === this.currentSessionId && affectedTaskIds.has(change.taskId)
+    );
+    const choice = await this.interaction.choose({
+      title: 'Quay lại trước tin nhắn này?',
+      message: affectedChanges.length
+        ? `Hoàn tác ${affectedChanges.length} file đã sửa từ lượt này trở đi và cắt lịch sử chat về đúng mốc này.`
+        : 'Cắt lịch sử chat về đúng trước tin nhắn này và đưa nội dung lại vào ô nhập.',
+      detail: 'Nội dung tin nhắn sẽ được đưa lại vào ô nhập để bạn sửa hoặc gửi lại.',
+      tone: affectedChanges.length ? 'danger' : 'warning',
+      icon: 'clockCounterClockwise',
+      actions: [
+        { id: 'cancel', label: 'Hủy', kind: 'secondary' },
+        { id: 'rollback', label: 'Quay lại mốc này', kind: affectedChanges.length ? 'danger' : 'primary' }
+      ]
+    });
+    if (choice !== 'rollback') return;
+    if (affectedChanges.length) {
+      this.changeOperationBusy = true;
+      await this.post({ type: 'changeOperation', busy: true });
+      try {
+        const resolvedIds: string[] = [];
+        for (const [id, change] of affectedChanges) {
+          if (await this.restoreChange(change, 'force')) {
+            this.changes.delete(id);
+            resolvedIds.push(id);
+          }
+        }
+        if (resolvedIds.length) await this.post({ type: 'changeResolved', ids: resolvedIds, action: 'undone' });
+      } finally {
+        this.changeOperationBusy = false;
+        await this.post({ type: 'changeOperation', busy: false });
+      }
+    }
+    this.transcript = this.transcript.slice(0, turnIndex);
+    this.history = this.transcript
+      .filter((turn) => !turn.error)
+      .map((turn) => ({ role: turn.role, content: turn.content }));
+    const mode = this.composerPreferences().lastMode ?? 'agent';
+    const model = this.composerPreferences().models?.[mode] ?? this.context.globalState.get(DEFAULT_MODEL_STATE, '');
+    await this.saveSession(mode, model);
+    await this.post({ type: 'truncateTurns', fromIndex: turnIndex });
+    await this.post({ type: 'restoreComposerPrompt', prompt: target.content });
+    await this.postChangesState();
+    this.interaction.notify('Đã quay lại đúng trước tin nhắn đã chọn.', 'success');
+  }
+
+  private async searchWorkspacePaths(kind: 'file' | 'folder', rawQuery: string, requestId?: number): Promise<void> {
+    const now = Date.now();
+    if (!this.workspacePathCache || now - this.workspacePathCache.fetchedAt > 15_000) {
+      const uris = await vscode.workspace.findFiles(
+        '**/*',
+        '**/{node_modules,.git,dist,out,build,coverage,.next,.venv,venv,__pycache__,.cache,.turbo,target}/**',
+        1200
+      );
+      const files = uris.map((uri) => vscode.workspace.asRelativePath(uri, false).replace(/\\/g, '/')).sort();
+      const folderSet = new Set<string>();
+      for (const file of files) {
+        const parts = file.split('/');
+        parts.pop();
+        let current = '';
+        for (const part of parts) {
+          current = current ? `${current}/${part}` : part;
+          folderSet.add(current);
+        }
+      }
+      this.workspacePathCache = { fetchedAt: now, files, folders: [...folderSet].sort() };
+    }
+    const pool = kind === 'folder' ? this.workspacePathCache.folders : this.workspacePathCache.files;
+    const needle = rawQuery.trim().toLowerCase().replace(/\\/g, '/');
+    const scored = pool
+      .map((item) => {
+        const lower = item.toLowerCase();
+        const base = lower.split('/').pop() ?? lower;
+        if (!needle) return { item, score: 1 };
+        if (base === needle) return { item, score: 100 };
+        if (base.startsWith(needle)) return { item, score: 85 };
+        if (lower.startsWith(needle)) return { item, score: 75 };
+        if (base.includes(needle)) return { item, score: 60 };
+        if (lower.includes(needle)) return { item, score: 45 };
+        // Subsequence fuzzy check
+        let qi = 0;
+        for (let i = 0; i < lower.length && qi < needle.length; i++) {
+          if (lower[i] === needle[qi]) qi++;
+        }
+        return qi === needle.length ? { item, score: 25 } : null;
+      })
+      .filter((entry): entry is { item: string; score: number } => Boolean(entry))
+      .sort((a, b) => b.score - a.score || a.item.length - b.item.length || a.item.localeCompare(b.item))
+      .slice(0, 25)
+      .map((entry) => entry.item);
+    await this.post({ type: 'workspacePathSuggestions', kind, query: rawQuery, requestId, items: scored });
+  }
+
+  private async insertCodeAtCursor(code: string): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (editor) {
+      await editor.edit((builder) => {
+        builder.replace(editor.selection, code);
+      });
+      this.interaction.notify('Đã chèn đoạn mã vào vị trí con trỏ.', 'success');
+      return;
+    }
+    const doc = await vscode.workspace.openTextDocument({ content: code });
+    await vscode.window.showTextDocument(doc, { preview: false });
+  }
+
+  private async runCodeBlockInTerminal(command: string): Promise<void> {
+    if (!vscode.workspace.isTrusted) {
+      throw new Error('Hãy tin cậy workspace trước khi chạy lệnh trong Terminal.');
+    }
+    const trimmed = command.trim();
+    if (!trimmed) return;
+    if (!await this.askApproval(`Agent muốn chạy: ${trimmed}`)) return;
+    const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal('RelayCode');
+    terminal.show(true);
+    terminal.sendText(trimmed, true);
+  }
+
+  private scheduleAiSessionTitle(
+    sessionId: string,
+    prompt: string,
+    answer: string,
+    model: string,
+    providerClient: ProviderClient
+  ): void {
+    if (this.disposing || !model || this.titleGenerationInFlight.has(sessionId)) return;
+    const cleanedPrompt = prompt.trim();
+    if (cleanedPrompt.length < 2 && !answer.trim()) return;
     const sessions = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
-    await this.context.globalState.update(CHAT_SESSIONS_STATE, [session, ...sessions.filter((item) => item.id !== session.id)].slice(0, 30));
+    const current = sessions.find((item) => item.id === sessionId);
+    if (!current || current.aiTitled || current.manualTitle || current.kind === 'chatgpt-web') return;
+    this.titleGenerationInFlight.add(sessionId);
+    void this.generateAiSessionTitle(sessionId, cleanedPrompt, answer, model, providerClient)
+      .catch((error) => this.output.appendLine(`[session-title] skipped: ${this.errorText(error)}`))
+      .finally(() => { this.titleGenerationInFlight.delete(sessionId); });
+  }
+
+  private async generateAiSessionTitle(
+    sessionId: string,
+    prompt: string,
+    answer: string,
+    model: string,
+    providerClient: ProviderClient
+  ): Promise<void> {
+    let raw = '';
+    const snippetPrompt = prompt.slice(0, 500);
+    const snippetAnswer = answer.slice(0, 500);
+    await providerClient.streamChat(
+      model,
+      [
+        {
+          role: 'system',
+          content: 'Generate a concise, specific 3-7 word conversation title summarizing the user intent. Match the language of the user message (Vietnamese or English). Output ONLY the title text — no quotes, no prefixes, no markdown, no trailing period.'
+        },
+        {
+          role: 'user',
+          content: `User request:\n${snippetPrompt}\n\nAssistant reply:\n${snippetAnswer}`
+        }
+      ],
+      (delta) => {
+        if (raw.length < 200) raw += delta;
+      },
+      AbortSignal.timeout(12_000)
+    );
+    const generated = cleanGeneratedTitle(raw);
+    if (!generated || this.disposing) return;
+    await this.sessionStore.updateMetadata(sessionId, (session) =>
+      session.manualTitle ? undefined : { ...session, title: generated, aiTitled: true }
+    );
     await this.post({ type: 'sessions', sessions: this.sessionSummaries() });
   }
 
@@ -3234,14 +3662,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private async loadSession(id: string): Promise<void> {
-    const session = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []).find((item) => item.id === id);
+    const session = await this.sessionStore.load(id);
     if (!session) throw new Error('Không tìm thấy cuộc trò chuyện này.');
     this.currentSessionId = session.id;
-    this.changesVisible = true;
     this.visibleChangesSessionId = session.id;
-    for (const [changeId, change] of this.changes) {
-      if (!change.sessionId) this.changes.set(changeId, { ...change, sessionId: session.id });
-    }
+    this.changesVisible = [...this.changes.values()].some((change) => change.sessionId === session.id);
     this.transcript = session.turns;
     this.sessionSummary = session.summary || buildSessionSummary(
       session.turns,
@@ -3260,11 +3685,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       ...turn,
       attachments: turn.attachments
         ? await this.attachmentViews(await Promise.all(turn.attachments.map(async (attachment) => {
-            let size = 0;
+            let size = attachment.size ?? 0;
             if (attachment.path) {
-              try { size = (await vscode.workspace.fs.stat(vscode.Uri.file(attachment.path))).size; } catch { size = 0; }
+              try { size = (await vscode.workspace.fs.stat(vscode.Uri.file(attachment.path))).size; } catch { /* keep stored size */ }
             }
-            return { name: attachment.name, path: attachment.path ?? '', mimeType: '', size };
+            const mimeType = detectMediaMime(attachment.path || attachment.name, attachment.mimeType ?? '');
+            return { name: attachment.name, path: attachment.path ?? '', mimeType, size };
           })))
         : []
     })));
@@ -3293,16 +3719,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       if (!attachment.path) continue;
       try {
         const stat = await vscode.workspace.fs.stat(vscode.Uri.file(attachment.path));
-        const extension = attachment.path.split('.').pop()?.toLowerCase() ?? '';
-        const mimeType = extension === 'png'
-          ? 'image/png'
-          : ['jpg', 'jpeg'].includes(extension)
-            ? 'image/jpeg'
-            : extension === 'webp'
-              ? 'image/webp'
-              : extension === 'gif'
-                ? 'image/gif'
-                : 'application/octet-stream';
+        const mimeType = detectMediaMime(attachment.path, attachment.mimeType ?? '');
+        this.registerMediaResourcePath(attachment.path);
         restoredAttachments.push({ path: attachment.path, name: attachment.name, mimeType, size: stat.size });
       } catch {
         // Tệp đính kèm đã bị xóa; vẫn cho phép sửa và gửi lại phần văn bản.
@@ -3332,8 +3750,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async deleteSession(id: string): Promise<void> {
     this.output.appendLine(`[session] delete requested: ${id}`);
-    const sessions = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
-    const session = sessions.find((item) => item.id === id);
+    const session = await this.sessionStore.load(id);
     if (!session) return;
     if (this.abortController) {
       const choice = await this.interaction.choose({
@@ -3391,7 +3808,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       });
       if (choice !== 'delete') return;
     }
-    await this.context.globalState.update(CHAT_SESSIONS_STATE, sessions.filter((item) => item.id !== id));
+    await this.sessionStore.delete(id);
     const activeRun = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
     if (activeRun?.sessionId === id) {
       await this.clearActiveRun(activeRun.runId);
@@ -3446,7 +3863,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   private async deleteAllSessions(): Promise<void> {
-    const sessions = this.context.globalState.get<StoredSession[]>(CHAT_SESSIONS_STATE, []);
+    const sessions = this.sessionStore.listIndex();
     if (!sessions.length) return;
     if (this.abortController) {
       const choice = await this.interaction.choose({
@@ -3513,6 +3930,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       });
       if (choice !== 'delete') return;
     }
+    await this.sessionStore.deleteAll();
     await this.context.globalState.update(CHAT_SESSIONS_STATE, []);
     const activeRun = this.context.workspaceState.get<StoredActiveRun>(ACTIVE_RUN_STATE);
     if (activeRun) {
@@ -3523,36 +3941,128 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     await this.post({ type: 'sessions', sessions: [] });
   }
 
-  private async attachmentViews(attachments: Array<{ path: string; name: string; mimeType: string; size: number }>): Promise<Array<{ name: string; preview?: string; modelPreview?: string }>> {
-    return Promise.all(attachments.map(async (item) => {
-      const extension = item.path.split('.').pop()?.toLowerCase() ?? '';
-      const extensionMime = extension === 'png'
-        ? 'image/png'
-        : ['jpg', 'jpeg'].includes(extension)
-          ? 'image/jpeg'
-          : extension === 'webp'
-            ? 'image/webp'
-            : extension === 'gif'
-              ? 'image/gif'
-              : '';
-      // `pickFiles()` uses image/* as a broad hint. It is not a valid
-      // image media type in a data URL, so prefer the concrete extension.
-      const declaredMime = String(item.mimeType || '').toLowerCase();
-      const mime = declaredMime.startsWith('image/') && declaredMime !== 'image/*'
-        ? declaredMime
-        : extensionMime;
-      if (!mime || !item.path || item.size > 5 * 1024 * 1024) return { name: item.name };
-      try {
-        const fileUri = vscode.Uri.file(item.path);
-        const bytes = await vscode.workspace.fs.readFile(fileUri);
-        const modelPreview = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
-        // Keep the preview self-contained. A workspace or pasted image can
-        // live outside the webview's localResourceRoots, while data: URLs are
-        // explicitly allowed by the chat CSP and also survive transcript restore.
-        return { name: item.name, preview: modelPreview, modelPreview };
-      } catch {
-        return { name: item.name };
+  private syncWebviewResourceRoots(targetView: vscode.WebviewView | undefined = this.view): void {
+    if (!targetView) return;
+    const roots: vscode.Uri[] = [
+      this.context.globalStorageUri,
+      ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri),
+      ...[...this.mediaResourceRoots].map((dir) => vscode.Uri.file(dir))
+    ];
+    targetView.webview.options = { enableScripts: true, localResourceRoots: roots };
+  }
+
+  private registerMediaResourcePath(filePath: string): void {
+    if (!filePath) return;
+    const parent = dirname(resolve(filePath));
+    if (!parent || this.mediaResourceRoots.has(parent)) return;
+    this.mediaResourceRoots.add(parent);
+    this.syncWebviewResourceRoots();
+  }
+
+  private async cachedVideoInfo(filePath: string, size: number): Promise<{ meta: VideoMetadata; poster?: string }> {
+    const cacheKey = `${filePath}:${size}`;
+    const cached = this.videoMetaCache.get(cacheKey);
+    if (cached) return cached;
+    const meta = await probeVideoMetadata(filePath);
+    const poster = await extractVideoPoster(filePath, meta.durationSeconds);
+    const entry = { meta, poster };
+    this.videoMetaCache.set(cacheKey, entry);
+    if (this.videoMetaCache.size > 40) {
+      const oldest = this.videoMetaCache.keys().next().value;
+      if (oldest) this.videoMetaCache.delete(oldest);
+    }
+    return entry;
+  }
+
+  private async buildVisionAttachmentPayload(
+    attachments: Array<{ path: string; name: string; mimeType: string; size: number }>,
+    views: AttachmentView[],
+    supportsVision: boolean,
+    endpoint: string,
+    apiKey: string,
+    signal?: AbortSignal
+  ): Promise<{ extraNote: string; imageParts: Array<{ type: 'image_url'; image_url: { url: string } }> }> {
+    const imageParts: Array<{ type: 'image_url'; image_url: { url: string } }> = [];
+    const notes: string[] = [];
+    for (let index = 0; index < attachments.length; index++) {
+      const item = attachments[index]!;
+      const view = views[index];
+      if (!item.path) continue;
+      if (view?.kind === 'video' || isVideoMedia(item.path, item.mimeType)) {
+        const { meta } = await this.cachedVideoInfo(item.path, item.size);
+        if (supportsVision) {
+          await this.post({ type: 'status', message: 'Đang trích xuất khung hình video…' });
+          const keyframes = await extractVideoKeyframes(item.path, meta, 6);
+          if (keyframes.length) {
+            const stamps = keyframes.map((frame, frameIndex) => `Frame ${frameIndex + 1} @ ${formatMediaDuration(frame.timestampSeconds) || `${Math.round(frame.timestampSeconds)}s`}`).join(', ');
+            notes.push(`Video "${item.name}" keyframes attached (${keyframes.length} frames: ${stamps}). Cite timestamps like [0:12] when referencing moments in the video.`);
+            for (const frame of keyframes) {
+              imageParts.push({ type: 'image_url', image_url: { url: frame.dataUrl } });
+            }
+          }
+        }
+        if (meta.audioCodec) {
+          const transcript = await transcribeVideoAudio(item.path, endpoint, apiKey, meta, signal);
+          if (transcript) {
+            notes.push(`<video-transcript name="${item.name}">\n${transcript}\n</video-transcript>`);
+          }
+        }
+        continue;
       }
+      if (!supportsVision) continue;
+      if (view?.modelPreview) {
+        imageParts.push({ type: 'image_url', image_url: { url: view.modelPreview } });
+        continue;
+      }
+      if (view?.kind === 'image' || isImageMedia(item.path, item.mimeType)) {
+        const prepared = await prepareLargeImageForModel(item.path, item.mimeType, item.size);
+        if (prepared) imageParts.push({ type: 'image_url', image_url: { url: prepared } });
+      }
+    }
+    return {
+      extraNote: notes.length ? `\n\n${notes.join('\n\n')}` : '',
+      imageParts
+    };
+  }
+
+  private async attachmentViews(attachments: Array<{ path: string; name: string; mimeType: string; size: number }>): Promise<AttachmentView[]> {
+    return Promise.all(attachments.map(async (item): Promise<AttachmentView> => {
+      const mime = detectMediaMime(item.path || item.name, item.mimeType);
+      const sizeLabel = item.size > 0 ? formatFileSize(item.size) : undefined;
+      if (item.path && isVideoMedia(item.path, mime)) {
+        this.registerMediaResourcePath(item.path);
+        const videoUrl = this.view?.webview.asWebviewUri(vscode.Uri.file(item.path)).toString();
+        const { meta, poster } = await this.cachedVideoInfo(item.path, item.size);
+        const durationLabel = formatMediaDuration(meta.durationSeconds) || undefined;
+        const resolution = meta.width && meta.height ? `${meta.width}×${meta.height}` : undefined;
+        return {
+          name: item.name,
+          path: item.path,
+          kind: 'video',
+          mimeType: mime,
+          size: item.size,
+          sizeLabel,
+          videoUrl,
+          poster,
+          durationLabel,
+          resolution
+        };
+      }
+      if (item.path && isImageMedia(item.path, mime)) {
+        this.registerMediaResourcePath(item.path);
+        if (item.size <= 5 * 1024 * 1024 && isModelSupportedImageMime(mime)) {
+          try {
+            const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(item.path));
+            const modelPreview = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`;
+            return { name: item.name, path: item.path, kind: 'image', mimeType: mime, size: item.size, sizeLabel, preview: modelPreview, modelPreview };
+          } catch {
+            return { name: item.name, path: item.path, kind: 'image', mimeType: mime, size: item.size, sizeLabel };
+          }
+        }
+        const preview = this.view?.webview.asWebviewUri(vscode.Uri.file(item.path)).toString();
+        return { name: item.name, path: item.path, kind: 'image', mimeType: mime, size: item.size, sizeLabel, preview };
+      }
+      return { name: item.name, path: item.path || undefined, kind: 'file', mimeType: mime, size: item.size, sizeLabel };
     }));
   }
 
@@ -3563,17 +4073,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private async pasteImage(message: Extract<WebviewMessage, { type: 'pasteImage' }>): Promise<void> {
     await this.post({ type: 'attachmentLoading', active: true, count: 1 });
     try {
-      const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([a-zA-Z0-9+/=]+)$/.exec(message.dataUrl);
-      if (!match) throw new Error('Ảnh từ clipboard không đúng định dạng được hỗ trợ.');
+      const match = /^data:((?:image\/(?:png|jpeg|webp|gif|bmp|avif))|(?:video\/(?:mp4|webm|quicktime|ogg|x-matroska|x-msvideo)));base64,([a-zA-Z0-9+/=]+)$/.exec(message.dataUrl);
+      if (!match) throw new Error('Media từ clipboard không đúng định dạng được hỗ trợ.');
       const mimeType = match[1] ?? '';
       const encoded = match[2] ?? '';
       const bytes = Buffer.from(encoded, 'base64');
-      if (bytes.byteLength > 5 * 1024 * 1024) throw new Error('Ảnh dán vào phải nhỏ hơn 5 MB.');
-      const extension = mimeType === 'image/jpeg' ? 'jpg' : (mimeType.split('/')[1] || 'png');
+      const extMap: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'video/quicktime': 'mov',
+        'video/x-matroska': 'mkv',
+        'video/x-msvideo': 'avi'
+      };
+      const extension = extMap[mimeType] || (mimeType.split('/')[1] || 'bin');
       const directory = vscode.Uri.joinPath(this.context.globalStorageUri, 'pasted-images');
       await vscode.workspace.fs.createDirectory(directory);
       const uri = vscode.Uri.joinPath(directory, `paste-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${extension}`);
       await vscode.workspace.fs.writeFile(uri, bytes);
+      this.registerMediaResourcePath(uri.fsPath);
       this.pendingAttachments.push({ path: uri.fsPath, name: message.name || `clipboard.${extension}`, mimeType, size: bytes.byteLength });
       await this.postAttachments();
     } finally {
@@ -3581,29 +4097,52 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
   }
 
-  private async pickFiles(kind: 'files' | 'images' | 'resources'): Promise<void> {
+  private async pickFiles(kind: 'files' | 'images' | 'media' | 'resources'): Promise<void> {
+    const mediaExts = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'mp4', 'm4v', 'webm', 'mov', 'mkv', 'avi', 'ogv', '3gp', 'flv', 'wmv'];
+    const videoExts = ['mp4', 'm4v', 'webm', 'mov', 'mkv', 'avi', 'ogv', '3gp', 'flv', 'wmv'];
+    const imageExts = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'];
     const uris = await vscode.window.showOpenDialog({
       canSelectMany: true,
       canSelectFiles: true,
       canSelectFolders: kind === 'resources',
-      openLabel: kind === 'images' ? 'Chọn ảnh' : kind === 'resources' ? 'Thêm vào yêu cầu' : 'Đính kèm tệp',
-      filters: kind === 'images' ? { Images: ['png', 'jpg', 'jpeg', 'webp', 'gif'] } : { Files: ['*'] }
+      openLabel: kind === 'media'
+        ? 'Chọn ảnh hoặc video'
+        : kind === 'images'
+          ? 'Chọn ảnh'
+          : kind === 'resources'
+            ? 'Thêm vào yêu cầu'
+            : 'Đính kèm tệp',
+      filters: kind === 'media'
+        ? { 'Images & Videos': mediaExts, Videos: videoExts, Images: imageExts }
+        : kind === 'images'
+          ? { Images: imageExts }
+          : { Files: ['*'] }
     });
     if (!uris?.length) return;
-    await this.post({ type: 'attachmentLoading', active: true, count: uris.length });
+    await this.attachLocalPaths(uris.map((uri) => uri.fsPath), kind === 'images' ? 'image/*' : '');
+  }
+
+  private async attachLocalPaths(paths: string[], hintMime = ''): Promise<void> {
+    if (!paths.length) return;
+    await this.post({ type: 'attachmentLoading', active: true, count: paths.length });
     const fs = await import('node:fs/promises');
     try {
-      for (const uri of uris) {
-        const stat = await fs.stat(uri.fsPath);
-        if (stat.isDirectory()) {
-          this.pendingAttachments.push({ path: uri.fsPath, name: uri.path.split('/').pop() ?? uri.fsPath, mimeType: 'application/x-directory', size: 0 });
-          continue;
+      for (const rawPath of paths) {
+        const filePath = rawPath.trim();
+        if (!filePath) continue;
+        try {
+          const stat = await fs.stat(filePath);
+          const name = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+          if (stat.isDirectory()) {
+            this.pendingAttachments.push({ path: filePath, name, mimeType: 'application/x-directory', size: 0 });
+            continue;
+          }
+          const mimeType = detectMediaMime(filePath, hintMime);
+          this.registerMediaResourcePath(filePath);
+          this.pendingAttachments.push({ path: filePath, name, mimeType, size: stat.size });
+        } catch {
+          // Skip paths that cannot be read on disk.
         }
-        if (stat.size > 20 * 1024 * 1024) {
-          this.interaction.notify(`Bỏ qua ${uri.path.split('/').pop()}: tệp lớn hơn 20 MB.`, 'warning');
-          continue;
-        }
-        this.pendingAttachments.push({ path: uri.fsPath, name: uri.path.split('/').pop() ?? uri.fsPath, mimeType: kind === 'images' ? 'image/*' : 'application/octet-stream', size: stat.size });
       }
       await this.postAttachments();
     } finally {
@@ -3611,11 +4150,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
   }
 
+  private async openMediaExternal(filePath: string): Promise<void> {
+    const resolved = resolve(filePath);
+    const parent = dirname(resolved);
+    const allowedByMediaRoot = this.mediaResourceRoots.has(parent);
+    const allowedByStorage = resolved.toLowerCase().startsWith(resolve(this.context.globalStorageUri.fsPath).toLowerCase());
+    const allowedByWorkspace = (vscode.workspace.workspaceFolders ?? []).some((folder) =>
+      resolved.toLowerCase().startsWith(resolve(folder.uri.fsPath).toLowerCase())
+    );
+    if (!allowedByMediaRoot && !allowedByStorage && !allowedByWorkspace) {
+      throw new Error('Không thể mở tệp ngoài phạm vi đính kèm hiện tại.');
+    }
+    const fs = await import('node:fs/promises');
+    await fs.stat(resolved);
+    await vscode.env.openExternal(vscode.Uri.file(resolved));
+  }
+
   private async attachmentPrompt(attachments: Array<{ path: string; name: string; mimeType: string; size: number }>): Promise<string> {
     if (!attachments.length) return '';
-    const sections = [`Tệp đính kèm:\n${attachments.map((item) => `- ${item.name} (${item.path})`).join('\n')}`];
+    const lines = await Promise.all(attachments.map(async (item) => {
+      const mime = detectMediaMime(item.path || item.name, item.mimeType);
+      const sizeText = item.size > 0 ? formatFileSize(item.size) : '';
+      if (item.path && isVideoMedia(item.path, mime)) {
+        const { meta } = await this.cachedVideoInfo(item.path, item.size);
+        const details = [
+          'video',
+          sizeText,
+          formatMediaDuration(meta.durationSeconds),
+          meta.width && meta.height ? `${meta.width}×${meta.height}` : '',
+          meta.videoCodec ? `codec:${meta.videoCodec}` : ''
+        ].filter(Boolean).join(' · ');
+        return `- ${item.name} (${item.path}) [${details}]`;
+      }
+      return sizeText ? `- ${item.name} (${item.path}) [${sizeText}]` : `- ${item.name} (${item.path})`;
+    }));
+    const sections = [`Tệp đính kèm:\n${lines.join('\n')}`];
     for (const item of attachments.slice(0, 8)) {
-      if (item.mimeType.startsWith('image/') || item.size > 200_000) continue;
+      const mime = detectMediaMime(item.path || item.name, item.mimeType);
+      if (mime.startsWith('image/') || mime.startsWith('video/') || mime.startsWith('audio/') || item.size > 200_000) continue;
       try {
         const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(item.path));
         const sample = bytes.slice(0, 60_000);
@@ -3721,7 +4293,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     if (command === '/compact') {
       const before = this.transcript.length;
-      if (before > 8) this.transcript = this.transcript.slice(-8);
+      if (before > 8) {
+        this.transcript = this.transcript.slice(-8);
+        this.history = this.transcript
+          .filter((turn) => !turn.error)
+          .map((turn) => ({ role: turn.role, content: turn.content }));
+        await this.saveSession(mode, model);
+        await this.loadSession(this.currentSessionId);
+      }
       await this.post({
         type: 'notice',
         message: before > 8
@@ -3749,6 +4328,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       return true;
     }
     if (command === '/hooks') {
+      if (!vscode.workspace.isTrusted) {
+        await this.post({ type: 'notice', message: '**Hãy tin cậy workspace trước khi tạo hoặc sửa `.relaycode/hooks.json`.**' });
+        return true;
+      }
       const root = vscode.workspace.workspaceFolders?.[0]?.uri;
       if (!root) return true;
       const directory = vscode.Uri.joinPath(root, '.relaycode');
@@ -3810,6 +4393,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       return true;
     }
     if (command === '/init') {
+      if (!vscode.workspace.isTrusted) {
+        await this.post({ type: 'notice', message: '**Hãy tin cậy workspace trước khi tạo `AGENTS.md`.**' });
+        return true;
+      }
       const root = vscode.workspace.workspaceFolders?.[0]?.uri;
       if (!root) {
         await this.post({ type: 'notice', message: '**Không có workspace để tạo `AGENTS.md`.**' });
@@ -3868,10 +4455,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     for (const raw of mentions.files) {
       const folders = vscode.workspace.workspaceFolders;
       if (!folders?.length) break;
-      const uri = vscode.Uri.joinPath(folders[0]!.uri, raw);
+      let resolvedPath: string | undefined;
+      for (const folder of folders) {
+        try {
+          resolvedPath = new WorkspaceSandbox(folder.uri.fsPath).resolvePath(raw);
+          break;
+        } catch { /* Try next folder */ }
+      }
+      if (!resolvedPath) {
+        sections.push(`File context blocked (outside workspace): ${raw}`);
+        continue;
+      }
       try {
-        const bytes = await vscode.workspace.fs.readFile(uri);
-        sections.push(`<file path="${raw}">\n${new TextDecoder().decode(bytes).slice(0, 30_000)}\n</file>`);
+        const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(resolvedPath));
+        if (isBinaryContent(bytes)) {
+          sections.push(`<file path="${raw}">\n[Binary file, ${bytes.byteLength} bytes]\n</file>`);
+        } else {
+          sections.push(`<file path="${raw}">\n${new TextDecoder().decode(bytes).slice(0, 30_000)}\n</file>`);
+        }
       } catch {
         sections.push(`File context not found: ${raw}`);
       }
@@ -3889,7 +4490,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (mentions.terminal) {
       sections.push(`<terminal>\n${this.context.workspaceState.get<string>(LAST_TERMINAL_STATE, 'No captured terminal output.')}\n</terminal>`);
     }
-    if (mentions.gitDiff) {
+    if (mentions.gitDiff && vscode.workspace.isTrusted) {
       try {
         const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (root) {
@@ -4063,6 +4664,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.disposing = true;
     for (const resolveDialog of this.dialogResolvers.values()) resolveDialog({});
     this.dialogResolvers.clear();
+    for (const approval of this.approvals.values()) approval.resolve(false);
+    this.approvals.clear();
+    this.pendingApprovalByKey.clear();
+    for (const resolveFailure of this.toolFailureResolvers.values()) resolveFailure({ action: 'skip' });
+    this.toolFailureResolvers.clear();
+    this.webviewMessageDisposable?.dispose();
+    this.webviewMessageDisposable = undefined;
     this.abortController?.abort();
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
     if (this.changesPostTimer) clearTimeout(this.changesPostTimer);
@@ -4073,8 +4681,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.planPanel?.dispose();
     this.metricsPanel?.dispose();
     this.routerProcess.dispose();
-    this.chatGptBridge.dispose();
-    this.mcpManager.dispose();
     this.output.dispose();
   }
 }
@@ -4378,6 +4984,22 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     ' sẽ bị xóa khỏi lịch sử.': ' will be removed from history.',
     'Thao tác này không thể hoàn tác.': 'This action cannot be undone.',
     'Xóa cuộc trò chuyện': 'Delete conversation',
+    'Đổi tên cuộc trò chuyện': 'Rename conversation',
+    'Ảnh & Video': 'Images & Videos',
+    'Chọn ảnh hoặc video': 'Select images or videos',
+    'Mở ngoài': 'Open externally',
+    'Đang trích xuất khung hình video…': 'Extracting video keyframes…',
+    'Thả ảnh, video hoặc tệp vào đây': 'Drop images, videos or files here',
+    'Khung chat đang khá hẹp · kéo rộng hơn để xem rõ': 'Sidebar is narrow · drag wider for best view',
+    'Tìm cuộc trò chuyện…': 'Search conversations…',
+    'Tìm cuộc trò chuyện': 'Search conversations',
+    'Rút gọn': 'Compact',
+    'Đang đọc lỗi IDE': 'Reading IDE diagnostics',
+    'Đang tìm biểu tượng': 'Finding workspace symbols',
+    'Đang phân tích song song': 'Analyzing in parallel',
+    'Xuất Markdown': 'Export Markdown',
+    'Quay lại trước tin nhắn này?': 'Revert to before this message?',
+    'Quay lại mốc này': 'Revert to here',
     'Xóa': 'Delete',
     'Đã sao chép': 'Copied',
     'Sao chép': 'Copy',
@@ -4482,6 +5104,35 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     ' công cụ sẵn sàng': ' tools ready',
     ' sẵn sàng': ' ready',
     ' đã kết nối': ' connected',
+    'Gateway local · tự động định tuyến': 'Local gateway · automatic routing',
+    'Hoàn tác tất cả': 'Undo all',
+    'Chấp nhận tất cả': 'Accept all',
+    '0 file đã thay đổi': '0 files changed',
+    'Trung tâm kết nối': 'Connection center',
+    'Xem tất cả': 'View all',
+    'Chưa chọn hồ sơ': 'No profile selected',
+    'Đang kiểm tra kết nối': 'Checking connection',
+    'RelayCode đang xác nhận provider có thể nhận yêu cầu.': 'RelayCode is verifying that the provider can accept requests.',
+    'Đang gửi yêu cầu kiểm tra…': 'Sending check request…',
+    'Cuộn xuống cuối cuộc trò chuyện': 'Scroll to bottom of conversation',
+    'Thêm vào yêu cầu': 'Add to request',
+    'Đang tải': 'Loading',
+    'Lọc kết quả kiểm tra model': 'Filter model check results',
+    'Tất cả': 'All',
+    'Chạy được': 'Working',
+    'Có lỗi': 'Issues',
+    'Điều hướng RelayCode': 'RelayCode navigation',
+    'Điều khiển ảnh': 'Image controls',
+    'Thu nhỏ': 'Zoom out',
+    'Phóng to': 'Zoom in',
+    'Đặt lại': 'Reset',
+    'Mở OmniRoute': 'Open OmniRoute',
+    'Mở Cockpit': 'Open Cockpit',
+    'Command, ví dụ npx': 'Command, e.g. npx',
+    'Xem Git diff hiện tại': 'View current Git diff',
+    'Đang kiểm tra provider hiện tại': 'Checking the current provider',
+    'Độ trễ': 'Latency',
+    'Chưa có endpoint': 'No endpoint',
     'Ngắt': 'Disconnect',
     'Đóng': 'Close',
     'Hủy': 'Cancel',
@@ -4495,18 +5146,139 @@ function localizeUiDocument(document: string, language: 'vi' | 'en'): string {
     .reduce((result, [source, target]) => result.replaceAll(source, target), document);
 }
 
-function localizeUiPayload(value: unknown, language: 'vi' | 'en'): unknown {
+const NON_LOCALIZED_MESSAGE_TYPES = new Set([
+  'delta',
+  'toolOutput',
+  'changePreview',
+  'changesState',
+  'contextBudget',
+  'favoriteModels',
+  'recentModels',
+  'telemetry',
+  'profiles',
+  'profileLoaded',
+  'sessions',
+  'attachments',
+  'restoreSession',
+  'turnStart',
+  'commentary',
+  'intermediateStep',
+  'chatGptWebActivity',
+  'turnReady',
+  'changeOperation',
+  'changeResolved',
+  'openConfig',
+  'openMcpPanel',
+  'openModelPicker',
+  'languageChanged',
+  'composerPreferences',
+  'modelSwitched',
+  'modelCheckStart',
+  'modelCheck',
+  'modelCheckProgress',
+  'modelCheckEnd',
+  'setComposerMode',
+  'focusSkillPicker',
+  'planRevision',
+  'editGoalComposer',
+  'openChanges',
+  'reset',
+  'truncateTurns',
+  'cancelPendingInteractions',
+  'stopAcknowledged',
+  'agentRecoveryDismissed',
+  'closeChangeReview',
+  'attachmentLoading',
+  'skills',
+  'providerKeyState',
+  'configSaved',
+  'checkpoint',
+  'checkpointRestored',
+  'activeTurnState',
+  'bootstrap',
+  'permissionMode',
+  'activityComplete',
+  'toolEvent',
+  'thinkingDelta',
+  'workspacePathSuggestions',
+  'restoreComposerPrompt',
+  'browserOpened'
+]);
+
+const NON_LOCALIZED_PAYLOAD_KEYS = new Set([
+  'id',
+  'runId',
+  'sessionId',
+  'taskId',
+  'profileId',
+  'serverId',
+  'model',
+  'from',
+  'provider',
+  'endpoint',
+  'path',
+  'command',
+  'prompt',
+  'answer',
+  'objective',
+  'plan',
+  'content',
+  'delta',
+  'chunk',
+  'hash',
+  'url',
+  'dataUrl',
+  'preview',
+  'modelPreview',
+  'videoUrl',
+  'poster',
+  'sizeLabel',
+  'durationLabel',
+  'resolution',
+  'type',
+  'mode',
+  'tone',
+  'icon',
+  'kind',
+  'action',
+  'status',
+  'progress',
+  'changes',
+  'models',
+  'turns',
+  'hunks',
+  'records',
+  'servers',
+  'presets',
+  'profiles',
+  'sessions',
+  'skills',
+  'attachments',
+  'artifact',
+  'milestones'
+]);
+
+function localizeUiPayload(value: unknown, language: 'vi' | 'en', isRoot = true): unknown {
   if (language !== 'en') return value;
   if (typeof value === 'string') return localizeUiDocument(value, language);
-  if (Array.isArray(value)) return value.map((item) => localizeUiPayload(item, language));
+  if (Array.isArray(value)) return value.map((item) => localizeUiPayload(item, language, false));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, localizeUiPayload(item, language)]));
+    const record = value as Record<string, unknown>;
+    if (isRoot && typeof record.type === 'string' && NON_LOCALIZED_MESSAGE_TYPES.has(record.type)) {
+      return value;
+    }
+    return Object.fromEntries(
+      Object.entries(record).map(([key, item]) => [
+        key,
+        NON_LOCALIZED_PAYLOAD_KEYS.has(key) ? item : localizeUiPayload(item, language, false)
+      ])
+    );
   }
   return value;
 }
 
 function approvalPresentation(description: string): ApprovalPresentation {
-  const commandMatch = description.match(/^(?:Agent muốn chạy(?: test)?|ChatGPT Web wants to run):\s*([\s\S]+)$/iu);
+  const commandMatch = description.match(/^(?:Agent muốn chạy(?: test)?|Hook\s+\w+\s+muốn chạy|ChatGPT Web wants to run(?: test)?):\s*([\s\S]+)$/iu);
   if (commandMatch) {
     const command = commandMatch[1]?.trim() ?? '';
     return {
@@ -4519,8 +5291,9 @@ function approvalPresentation(description: string): ApprovalPresentation {
       similarRule: similarCommandRule(command)
     };
   }
+  const isFileEdit = /^(?:Agent muốn (?:sửa|tạo thư mục|tạo ảnh|xóa|di chuyển)|ChatGPT Web muốn (?:sửa|xóa))\b/iu.test(description);
   return {
-    kind: 'action',
+    kind: isFileEdit ? 'edit' : 'action',
     title: 'RelayCode',
     message: description
   };
@@ -4537,10 +5310,16 @@ function similarCommandRule(command: string): string | undefined {
   const tokens = normalized.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
   if (!tokens.length) return undefined;
   const executable = tokens[0]!.replace(/^["']|["']$/g, '').toLowerCase();
-  if (['powershell', 'pwsh', 'cmd', 'bash', 'sh', 'zsh'].includes(executable)) {
+  const baseExe = executable.replace(/^.*[\\/]/, '');
+  if ([
+    'powershell', 'powershell.exe', 'pwsh', 'pwsh.exe', 'cmd', 'cmd.exe',
+    'bash', 'bash.exe', 'sh', 'sh.exe', 'zsh',
+    'python', 'python.exe', 'python3', 'python3.exe',
+    'node', 'node.exe', 'npx', 'npx.cmd', 'deno', 'bun', 'ruby', 'perl', 'php'
+  ].includes(baseExe)) {
     return `exact:${normalized}`;
   }
-  const count = executable === 'npm' && tokens[1]?.toLowerCase() === 'run'
+  const count = (baseExe === 'npm' || baseExe === 'npm.cmd') && tokens[1]?.toLowerCase() === 'run'
     ? 3
     : Math.min(2, tokens.length);
   return `prefix:${tokens.slice(0, count).join(' ').toLowerCase()}`;

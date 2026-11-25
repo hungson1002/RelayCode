@@ -21,6 +21,16 @@ function inlineMarkdown(source) {
     return token;
   };
   let text = escapeHtml(source);
+  text = text.replace(/\x60([^\x60\r\n]+)\x60/g, (_, code) => {
+    const plain = String(code).replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+    const looksLikeUrl = /^https?:\/\//i.test(plain);
+    const looksLikeFile = !looksLikeUrl && /^(?:[a-z]:[\\/]|\.{0,2}[\\/])?.+\.[a-z0-9]{1,10}(?::\d+(?::\d+)?)?$/i.test(plain);
+    const looksLikeProse = plain.length > 90 && plain.trim().split(/\s+/).length > 14 && !/[{};=]/.test(plain);
+    if (looksLikeProse) return code;
+    return reserve(looksLikeFile
+      ? '<button type="button" class="file-link" data-file="' + encodeURIComponent(plain) + '">' + fileTypeIcon(plain) + '<span>' + code + '</span></button>'
+      : '<code class="inline-code">' + code + '</code>');
+  });
   text = text.replace(/\(\[([^\]]+)\]\((https?:\/\/[^)]+)\)\)/gi, (_, label, rawTarget) => {
     const target = String(rawTarget).replace(/&amp;/g, '&');
     return reserve('<span class="rich-link-group">(' + richLinkMarkup(target, label) + ')</span>');
@@ -38,19 +48,19 @@ function inlineMarkdown(source) {
     const line = location && !/\bline\s+\d+/i.test(label) ? '<span class="file-line">(line ' + location[1] + ')</span>' : '';
     return reserve('<button type="button" class="file-link" data-file="' + encodeURIComponent(target) + '">' + fileTypeIcon(target) + '<span>' + label + '</span>' + line + '</button>');
   });
-  text = text.replace(/\x60([^\x60\r\n]+)\x60/g, (_, code) => {
-    const plain = String(code).replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
-    const looksLikeUrl = /^https?:\/\//i.test(plain);
-    const looksLikeFile = !looksLikeUrl && /^(?:[a-z]:[\\/]|\.{0,2}[\\/])?.+\.[a-z0-9]{1,10}(?::\d+(?::\d+)?)?$/i.test(plain);
-    const looksLikeProse = plain.length > 90 && plain.trim().split(/\s+/).length > 14 && !/[{};=]/.test(plain);
-    if (looksLikeProse) return code;
-    return reserve(looksLikeFile
-      ? '<button type="button" class="file-link" data-file="' + encodeURIComponent(plain) + '">' + fileTypeIcon(plain) + '<span>' + code + '</span></button>'
-      : '<code class="inline-code">' + code + '</code>');
-  });
   text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   text = text.replace(/\((\+[\d.,]+)\s+(-[\d.,]+)\)/g, (_, added, removed) => reserve('<span class="diff-inline">(<b class="diff-add">' + added + '</b><b class="diff-remove">' + removed + '</b>)</span>'));
-  text = text.replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_, prefix, url) => prefix + reserve(richLinkMarkup(url)));
+  text = text.replace(/\[((?:\d{1,2}:)?\d{1,2}:\d{2})\]/g, (_, stamp) => {
+    const parts = String(stamp).split(':').map(Number);
+    const seconds = parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
+    return reserve('<button type="button" class="video-timestamp-link" data-video-ts="' + seconds + '">' + stamp + '</button>');
+  });
+  text = text.replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_, prefix, rawUrl) => {
+    const trimmed = String(rawUrl).replace(/[.,;:!?)]+$/, '');
+    const trailing = String(rawUrl).slice(trimmed.length);
+    const target = trimmed.replace(/&amp;/g, '&');
+    return prefix + reserve(richLinkMarkup(target)) + trailing;
+  });
   return text.replace(/\u0000(\d+)\u0000/g, (_, index) => tokens[Number(index)] || '');
 }
 
@@ -82,12 +92,34 @@ function bindRichContent(container) {
     button.classList.add('copied');
     button.innerHTML = uiIcon('check');
     button.setAttribute('aria-label', uiCopy('Đã sao chép', 'Copied'));
+    if (typeof refreshFloatingHint === 'function') refreshFloatingHint(button);
     window.setTimeout(() => {
       if (!button.isConnected) return;
       button.classList.remove('copied');
       button.innerHTML = uiIcon('copy');
       button.setAttribute('aria-label', uiCopy('Sao chép', 'Copy'));
+      if (typeof refreshFloatingHint === 'function') refreshFloatingHint(button);
     }, 1400);
+  }));
+  container.querySelectorAll('[data-code-insert]').forEach((button) => button.addEventListener('click', () => {
+    const value = decodeURIComponent(button.dataset.codeInsert || '');
+    vscode.postMessage({ type: 'insertCode', code: value });
+    button.classList.add('copied');
+    button.setAttribute('aria-label', uiCopy('Đã chèn vào editor', 'Inserted into editor'));
+    if (typeof refreshFloatingHint === 'function') refreshFloatingHint(button);
+    window.setTimeout(() => {
+      if (!button.isConnected) return;
+      button.classList.remove('copied');
+      button.setAttribute('aria-label', uiCopy('Chèn vào editor', 'Insert at cursor'));
+      if (typeof refreshFloatingHint === 'function') refreshFloatingHint(button);
+    }, 1200);
+  }));
+  container.querySelectorAll('[data-code-run]').forEach((button) => button.addEventListener('click', () => {
+    const command = decodeURIComponent(button.dataset.codeRun || '').replace(/^\$\s*/gm, '').trim();
+    if (command) vscode.postMessage({ type: 'runCodeBlock', command });
+  }));
+  container.querySelectorAll('[data-video-ts]').forEach((button) => button.addEventListener('click', () => {
+    if (typeof seekChatVideoTo === 'function') seekChatVideoTo(Number(button.dataset.videoTs || 0));
   }));
 }
 
@@ -116,7 +148,7 @@ function submitTaskChoices(container) {
   send();
 }
 
-function bindTaskChoices(container, previousState = new Map()) {
+function bindTaskChoices(container, previousState = new Map(), choiceHost = container) {
   const choices = [...container.querySelectorAll('.task-checkbox')];
   if (!choices.length) return;
   choices.forEach((choice) => {
@@ -129,7 +161,7 @@ function bindTaskChoices(container, previousState = new Map()) {
   continueButton.type = 'button';
   continueButton.className = 'task-continue';
   continueButton.innerHTML = uiIcon('arrowRight') + '<span>' + uiCopy('Tiếp tục với lựa chọn', 'Continue with selections') + '</span>';
-  continueButton.addEventListener('click', () => submitTaskChoices(container));
+  continueButton.addEventListener('click', () => submitTaskChoices(choiceHost));
   actions.append(continueButton);
   container.append(actions);
   updateTaskChoiceButtons();
@@ -196,18 +228,28 @@ function renderCodeBlock(lines, languageHint = '') {
   const explicitShell = /^(?:sh|shell|bash|zsh|fish|powershell|ps1|cmd|console|terminal)$/.test(languageName);
   const inferredShell = commands.length > 0 && commands.every((line) => /^(?:\$\s*)?(?:npm|pnpm|yarn|bun|npx|node|deno|python|python3|pip|pip3|uv|git|cargo|go|dotnet|code|docker|docker-compose|make|cmake|gradle|mvn)\b/i.test(line));
   if (explicitShell || inferredShell) {
-    return '<div class="markdown-terminal"><div class="markdown-terminal-head"><span aria-hidden="true">' + uiIcon('terminalWindow') + '</span><b>Terminal</b></div><div class="markdown-terminal-code"><code>' + content + '</code></div></div>';
+    const encoded = encodeURIComponent(rawContent);
+    return '<div class="markdown-terminal"><div class="markdown-terminal-head"><span aria-hidden="true">' + uiIcon('terminalWindow') + '</span><b>Terminal</b><div class="markdown-code-actions"><button type="button" class="markdown-code-run" data-code-run="' + encoded + '" aria-label="' + uiCopy('Chạy trong Terminal', 'Run in Terminal') + '">' + uiIcon('arrowRight') + '<span>' + uiCopy('Chạy', 'Run') + '</span></button><button type="button" class="markdown-code-copy" data-code-copy="' + encoded + '" aria-label="' + uiCopy('Sao chép', 'Copy') + '">' + uiIcon('copy') + '</button></div></div><div class="markdown-terminal-code"><code>' + content + '</code></div></div>';
   }
   const labels = { text: 'Plain text', plaintext: 'Plain text', txt: 'Plain text', json: 'JSON', js: 'JavaScript', javascript: 'JavaScript', ts: 'TypeScript', typescript: 'TypeScript', html: 'HTML', css: 'CSS', markdown: 'Markdown', md: 'Markdown', python: 'Python', py: 'Python' };
   const label = labels[languageName] || (languageName ? languageName.charAt(0).toUpperCase() + languageName.slice(1) : 'Plain text');
-  return '<div class="markdown-code-block"><div class="markdown-code-head"><span>' + escapeHtml(label) + '</span><button type="button" class="markdown-code-copy" data-code-copy="' + encodeURIComponent(rawContent) + '" aria-label="' + uiCopy('Sao chép', 'Copy') + '">' + uiIcon('copy') + '</button></div><pre><code>' + content + '</code></pre></div>';
+  const encoded = encodeURIComponent(rawContent);
+  return '<div class="markdown-code-block"><div class="markdown-code-head"><span>' + escapeHtml(label) + '</span><div class="markdown-code-actions"><button type="button" class="markdown-code-insert" data-code-insert="' + encoded + '" aria-label="' + uiCopy('Chèn vào editor', 'Insert at cursor') + '">' + uiIcon('plus') + '<span>' + uiCopy('Chèn', 'Insert') + '</span></button><button type="button" class="markdown-code-copy" data-code-copy="' + encoded + '" aria-label="' + uiCopy('Sao chép', 'Copy') + '">' + uiIcon('copy') + '</button></div></div><pre><code>' + content + '</code></pre></div>';
 }
 
-function renderMarkdownInto(container, source) {
-  const cleanSource = String(source || '')
-    .replace(/(?:\x60{1,3}[ \t]*)?(?:<|＜)?[|｜][ \t]*DSML[ \t]*[|｜][ \t]*(?:function_calls?|tool_calls?)(?:>|＞)?(?:[ \t]*\x60{1,3})?/giu, '')
-    .replace(/\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu, '');
-  const lines = cleanSource.replace(/\r\n/g, '\n').split('\n');
+function renderMarkdownInto(container, source, choiceHost = container) {
+  const rawLines = String(source || '').replace(/\r\n/g, '\n').split('\n');
+  let insideFence = false;
+  const lines = rawLines.map((line) => {
+    if (/^\s*\x60{3}/.test(line)) {
+      insideFence = !insideFence;
+      return line;
+    }
+    if (insideFence) return line;
+    return line
+      .replace(/(?:\x60{1,3}[ \t]*)?(?:<|＜)?[|｜][ \t]*DSML[ \t]*[|｜][ \t]*(?:function_calls?|tool_calls?)(?:>|＞)?(?:[ \t]*\x60{1,3})?/giu, '')
+      .replace(/\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu, '');
+  });
   let html = '';
   let list = '';
   let paragraph = [];
@@ -299,7 +341,7 @@ function renderMarkdownInto(container, source) {
   if (inCode || code.length) html += renderCodeBlock(code, codeLanguage);
   container.innerHTML = html;
   bindRichContent(container);
-  bindTaskChoices(container, previousTaskState);
+  bindTaskChoices(container, previousTaskState, choiceHost);
 }
 
 `;

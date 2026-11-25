@@ -30,6 +30,23 @@ export class IntegratedTerminalManager implements vscode.Disposable {
 
   public async run(command: string): Promise<void> {
     const terminal = this.open();
+    if (!terminal.shellIntegration && typeof vscode.window.onDidChangeTerminalShellIntegration === 'function') {
+      await new Promise<void>((resolveWait) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          listener.dispose();
+          resolveWait();
+        };
+        const listener = vscode.window.onDidChangeTerminalShellIntegration((event) => {
+          if (event.terminal === terminal) finish();
+        });
+        const timer = setTimeout(finish, 2000);
+        if (terminal.shellIntegration) finish();
+      });
+    }
     if (terminal.shellIntegration) {
       terminal.shellIntegration.executeCommand(command);
       return;

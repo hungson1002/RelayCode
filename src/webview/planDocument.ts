@@ -25,10 +25,17 @@ function inlineMarkdown(value: string): string {
 export function inlineIcon(source: string): string {
   const trimmed = source.trim();
   if (/^<svg[\s>]/i.test(trimmed)) return trimmed;
-  const comma = source.indexOf(',');
-  if (!source.startsWith('data:image/svg+xml') || comma < 0) return '';
+  if (trimmed.startsWith('data:image/svg+xml;base64,')) {
+    try {
+      return Buffer.from(trimmed.slice('data:image/svg+xml;base64,'.length), 'base64').toString('utf8');
+    } catch {
+      return '';
+    }
+  }
+  const comma = trimmed.indexOf(',');
+  if (!trimmed.startsWith('data:image/svg+xml') || comma < 0) return '';
   try {
-    return decodeURIComponent(source.slice(comma + 1));
+    return decodeURIComponent(trimmed.slice(comma + 1));
   } catch {
     return '';
   }
@@ -205,6 +212,16 @@ export function renderPlanDocumentHtml(webview: Pick<vscode.Webview, 'cspSource'
 .file-tree-code{margin:16px 0 24px;border:1px solid var(--line);border-radius:9px;background:var(--code);overflow:hidden}.tree-code-toolbar{display:flex;align-items:center;min-height:34px;padding:0 10px;border-bottom:1px solid var(--line);color:var(--muted);font:11px var(--vscode-font-family)}.tree-code-toolbar>span{flex:1}.tree-code-toolbar button{height:26px;padding:0 5px;border:0;background:transparent;color:var(--muted);font-size:11px;font-weight:500}.tree-code-toolbar button:hover{background:var(--hover);color:var(--fg)}.tree-code-toolbar .symbol,.tree-code-toolbar .symbol svg{width:14px;height:14px}.document .file-tree-code pre{max-height:480px;margin:0;padding:16px;border:0;border-radius:0;background:transparent;scrollbar-width:thin}.document .file-tree-code pre code{display:block;min-width:max-content;color:var(--fg);font:12px/1.72 var(--vscode-editor-font-family);white-space:pre}.tree-connector{color:color-mix(in srgb,var(--fg) 58%,transparent);font-weight:450}.tree-node{color:color-mix(in srgb,var(--fg) 96%,white);font-weight:650}.tree-comment{color:color-mix(in srgb,var(--muted) 78%,transparent);font-weight:400}
 @media(max-width:620px){.document .file-tree-code pre{padding:13px}.document .file-tree-code pre code{font-size:11px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+/* Unified minimal plan document craft */
+.toolbar{min-height:56px;border-bottom-color:rgba(255,255,255,.08)}
+button,summary{height:32px;border-color:rgba(255,255,255,.11);border-radius:8px;font-weight:550;transition:background-color .12s ease,border-color .12s ease}
+.primary{background:#eceef2;color:#111316;font-weight:600}.primary:hover{background:#ffffff}
+.menu{padding:5px;border-color:rgba(255,255,255,.11);border-radius:12px;box-shadow:0 14px 36px rgba(0,0,0,.44)}
+.menu button{border-radius:8px}
+.review-note{border:1px solid rgba(255,255,255,.1);border-left:2px solid rgba(255,255,255,.32);border-radius:10px;background:rgba(255,255,255,.025)}
+.review-note .symbol{color:var(--fg);opacity:.8}
+.document pre,.file-tree-code{border-color:rgba(255,255,255,.09);border-radius:10px}
+.document blockquote{border-left:2px solid rgba(255,255,255,.22);background:transparent;padding:4px 0 4px 14px}
 </style></head><body><main class="shell">
 <header class="toolbar"><div class="identity"><div class="identity-row"><strong>Implementation Plan</strong><span>${escapeHtml(generated)}</span></div></div><div class="actions">
 <button id="copy"><span class="symbol">${icon('copy')}</span>${copy}</button>

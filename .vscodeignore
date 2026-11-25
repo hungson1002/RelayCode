@@ -10,7 +10,9 @@ docs/PUBLISHING.md
 node_modules/**
 coverage/**
 .playwright-mcp/**
+old-vsix/**
 *.vsix
+*.log
 .gitignore
 tsconfig.json
 esbuild.mjs

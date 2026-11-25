@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.18
+- Rebuilt the entire RelayCode UI with a unified minimal Agent Design System (`agentDesignSystem.ts`): seamless borderless header, calm Antigravity-style live execution UI with silky luminous text glide (`rcTextShimmer`) and orbital ring spinner (`rcOrbitSpin`), compact inline step/thinking/command disclosures, redesigned popups/menus/Settings/MCP/Connection Center/Dialogs/Change Tray/Plan Document/Telemetry Dashboard, and viewport-clamped floating tooltips across all icon buttons.
+- Added unlimited-size local image and video attachments with drag-and-drop/paste, inline playback, lightbox video player, clickable `[MM:SS]` timestamp jump chips, and optional `ffmpeg` poster, keyframe, and audio transcription extraction (`mediaUtils.ts`).
+- Upgraded the Agent runtime and harness with parallel read-only tool execution, LSP diagnostics (`get_diagnostics`) and symbol search (`find_symbol`), a Doom-Loop repetition guard, 60-step budget, streamed reasoning/thinking extraction (`<think>` + provider reasoning fields), live tool timing events, `@file:` / `@folder:` workspace path autocomplete, and code-block Insert/Run actions.
+- Replaced WorkspaceState history with disk-backed `SessionStore` (up to 200 sessions) supporting search, pin, manual rename, AI auto-titling, Markdown export, and per-turn checkpoint rollback.
+- Fixed false diff/deletion floods after read-only operations by hardening workspace snapshots (heavy-directory filtering, transient lock/cap guards, case-insensitive Windows keys, EOL-only filtering, binary diff fast-path, and bounded Myers line counting) and read-only command/intent classification.
+- Fixed composer popup overlap while typing, narrow sidebar auto-collapse on both primary and secondary sidebars, invisible contenteditable placeholder, Vietnamese/English localization consistency across all surfaces, and SSE tool-call merging / PowerShell quoting / MCP schema / safety policy edge cases.
+
 ## 2.0.12
 - Full Access now runs workspace commands without approval prompts, including Git commit and push.
 - Updated ChatGPT Web command task state and tool instructions to match Full Access behavior.

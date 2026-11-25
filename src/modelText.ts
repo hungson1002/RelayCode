@@ -33,16 +33,55 @@ function removeLeakedDraft(value: string): string {
 
 function removeRepeatedBlocks(value: string): string {
   const seen = new Set<string>();
-  return value
-    .split(/\n{2,}/)
+  const lines = value.split('\n');
+  const blocks: Array<{ text: string; fenced: boolean }> = [];
+  let current: string[] = [];
+  let inFence = false;
+  let currentFenced = false;
+  const flush = () => {
+    if (!current.length) return;
+    blocks.push({ text: current.join('\n'), fenced: currentFenced });
+    current = [];
+    currentFenced = false;
+  };
+  for (const line of lines) {
+    const isFence = /^\s*```/.test(line);
+    if (isFence) {
+      if (!inFence) {
+        flush();
+        inFence = true;
+        currentFenced = true;
+        current.push(line);
+      } else {
+        current.push(line);
+        flush();
+        inFence = false;
+      }
+      continue;
+    }
+    if (inFence) {
+      current.push(line);
+      continue;
+    }
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    current.push(line);
+  }
+  flush();
+
+  return blocks
     .filter((block) => {
-      const key = block.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+      if (block.fenced) return true;
+      const key = block.text.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
       if (key.length < 40 || !seen.has(key)) {
         if (key.length >= 40) seen.add(key);
         return true;
       }
       return false;
     })
+    .map((block) => block.text)
     .join('\n\n');
 }
 

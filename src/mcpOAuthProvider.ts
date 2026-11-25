@@ -44,7 +44,13 @@ export class McpOAuthProvider implements OAuthClientProvider {
 
   public async clientInformation(): Promise<OAuthClientInformationMixed | undefined> {
     const saved = await this.read<StoredClientInformation>('client');
-    return saved?.redirectUrl === this.callbackUrl ? saved.value : undefined;
+    if (!saved?.value) return undefined;
+    if (saved.redirectUrl === this.callbackUrl) return saved.value;
+    // Allow token refresh with the registered client_id across IDE restarts
+    // when only the ephemeral localhost callback port changed.
+    const existingTokens = await this.tokens();
+    if (existingTokens?.refresh_token) return saved.value;
+    return undefined;
   }
 
   public saveClientInformation(value: OAuthClientInformationMixed): Promise<void> {

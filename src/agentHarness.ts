@@ -1,4 +1,4 @@
-import type { AgentRunCheckpoint, StreamCallbacks } from './types';
+import type { AgentRunCheckpoint, AgentToolLifecycleEvent, RequestMetrics, StreamCallbacks } from './types';
 
 export type AgentHarnessPhase = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed';
 
@@ -19,6 +19,28 @@ export interface AgentHarnessEvent {
   model: string;
   durationMs?: number;
   error?: string;
+  stats?: AgentHarnessStats;
+}
+
+export interface AgentHarnessToolTrace {
+  id: string;
+  tool: string;
+  kind: AgentToolLifecycleEvent['kind'];
+  target?: string;
+  startedAt: number;
+  durationMs?: number;
+  ok?: boolean;
+}
+
+export interface AgentHarnessStats {
+  steps: number;
+  toolCalls: number;
+  failedTools: number;
+  filesRead: number;
+  filesEdited: number;
+  commandsRun: number;
+  totalTokens: number;
+  totalToolDurationMs: number;
 }
 
 export interface AgentHarnessSnapshot {
@@ -30,6 +52,8 @@ export interface AgentHarnessSnapshot {
   completedAt?: number;
   lastStatus?: string;
   error?: string;
+  stats: AgentHarnessStats;
+  recentTools: AgentHarnessToolTrace[];
 }
 
 export interface AgentHarnessOptions {
@@ -53,6 +77,18 @@ export class AgentHarness {
   private completedAt: number | undefined;
   private lastStatus: string | undefined;
   private failure: string | undefined;
+  private readonly stats: AgentHarnessStats = {
+    steps: 0,
+    toolCalls: 0,
+    failedTools: 0,
+    filesRead: 0,
+    filesEdited: 0,
+    commandsRun: 0,
+    totalTokens: 0,
+    totalToolDurationMs: 0
+  };
+  private readonly toolTraces: AgentHarnessToolTrace[] = [];
+  private readonly activeTools = new Map<string, AgentHarnessToolTrace>();
 
   public constructor(private readonly options: AgentHarnessOptions) {}
 
@@ -65,7 +101,9 @@ export class AgentHarness {
       startedAt: this.startedAt,
       completedAt: this.completedAt,
       lastStatus: this.lastStatus,
-      error: this.failure
+      error: this.failure,
+      stats: { ...this.stats },
+      recentTools: this.toolTraces.slice(-24).map((item) => ({ ...item }))
     };
   }
 
@@ -99,14 +137,63 @@ export class AgentHarness {
     const abortFromParent = () => {
       controller.abort(signal?.reason instanceof Error ? signal.reason : new Error('Agent run was stopped.'));
     };
-    if (signal?.aborted) abortFromParent();
-    else signal?.addEventListener('abort', abortFromParent, { once: true });
+    if (signal?.aborted) {
+      abortFromParent();
+      const reason = controller.signal.reason instanceof Error ? controller.signal.reason : new Error('Agent run was stopped.');
+      this.completedAt = Date.now();
+      this.failure = errorText(reason);
+      this.phase = 'cancelled';
+      this.emit({
+        runId: this.options.runId,
+        phase: 'cancelled',
+        timestamp: this.completedAt,
+        model,
+        durationMs: this.durationMs(),
+        error: this.failure
+      });
+      this.controller = undefined;
+      throw reason;
+    }
+    signal?.addEventListener('abort', abortFromParent, { once: true });
 
     const routedCallbacks: StreamCallbacks = {
       ...callbacks,
       onStatus: (status) => {
         this.lastStatus = status;
         callbacks.onStatus(status);
+      },
+      onMetrics: (metrics: RequestMetrics) => {
+        this.stats.steps += 1;
+        this.stats.totalTokens += Math.max(0, metrics.totalTokens || 0);
+        callbacks.onMetrics?.(metrics);
+      },
+      onToolEvent: (event: AgentToolLifecycleEvent) => {
+        if (event.phase === 'start') {
+          this.stats.toolCalls += 1;
+          if (event.kind === 'edit') this.stats.filesEdited += 1;
+          else if (event.kind === 'command') this.stats.commandsRun += 1;
+          else if (event.tool === 'read_file') this.stats.filesRead += 1;
+          const trace: AgentHarnessToolTrace = {
+            id: event.id,
+            tool: event.tool,
+            kind: event.kind,
+            target: event.target,
+            startedAt: Date.now()
+          };
+          this.activeTools.set(event.id, trace);
+          this.toolTraces.push(trace);
+          if (this.toolTraces.length > 80) this.toolTraces.shift();
+        } else {
+          const existing = this.activeTools.get(event.id);
+          if (existing) {
+            existing.durationMs = event.durationMs ?? Math.max(0, Date.now() - existing.startedAt);
+            existing.ok = event.ok;
+            this.activeTools.delete(event.id);
+          }
+          if (event.durationMs) this.stats.totalToolDurationMs += Math.max(0, event.durationMs);
+          if (event.ok === false) this.stats.failedTools += 1;
+        }
+        callbacks.onToolEvent?.(event);
       }
     };
 
@@ -119,7 +206,8 @@ export class AgentHarness {
         phase: 'completed',
         timestamp: this.completedAt,
         model,
-        durationMs: this.durationMs()
+        durationMs: this.durationMs(),
+        stats: { ...this.stats }
       });
     } catch (error) {
       this.completedAt = Date.now();
@@ -131,7 +219,8 @@ export class AgentHarness {
         timestamp: this.completedAt,
         model,
         durationMs: this.durationMs(),
-        error: this.failure
+        error: this.failure,
+        stats: { ...this.stats }
       });
       throw error;
     } finally {

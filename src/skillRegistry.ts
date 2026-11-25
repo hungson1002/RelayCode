@@ -68,7 +68,7 @@ export async function discoverSkills(workspaceRoot?: string): Promise<AgentSkill
 }
 
 export function selectedSkills(prompt: string, skills: AgentSkill[]): AgentSkill[] {
-  const names = [...prompt.matchAll(/(?:^|\s)\$([A-Za-z0-9][\w.:-]*)/g)].map((match) => match[1]?.toLowerCase());
+  const names = [...prompt.matchAll(/(?:^|[\s([{"'`])\$([A-Za-z][\w.:-]*)/g)].map((match) => match[1]?.toLowerCase());
   return [...new Set(names)]
     .flatMap((name) => skills.filter((skill) => skill.name.toLowerCase() === name));
 }
@@ -87,10 +87,12 @@ export function skillInstructions(prompt: string, skills: AgentSkill[]): string 
 
 export function skillInstructionsFor(selected: AgentSkill[]): string {
   if (!selected.length) return '';
+  const escapeAttr = (value: string) => value.replace(/"/g, '&quot;');
+  const safeBody = (value: string) => value.replace(/<\/skill>/gi, '&lt;/skill&gt;');
   return [
     'The following skill contents are supplied by the IDE host. They are already loaded and do not need to exist inside the current workspace. Follow them directly; never search the workspace for these SKILL.md files or claim that only their names are available. If a selected skill references another relative file, use the read_skill_file tool with that skill name and relative path before following the reference.',
     ...selected.map((skill) =>
-      `<skill name="${skill.name}" source="${skill.source}" path="${skill.path}">\n${skill.content ?? ''}\n</skill>`
+      `<skill name="${escapeAttr(skill.name)}" source="${skill.source}" path="${escapeAttr(skill.path)}">\n${safeBody(skill.content ?? '')}\n</skill>`
     )
   ].join('\n\n');
 }
@@ -107,7 +109,7 @@ async function findSkillFiles(root: string, depth: number): Promise<string[]> {
   if (direct) return [join(root, direct.name)];
   const nested: string[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith('.') && depth < 4) continue;
+    if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
     nested.push(...await findSkillFiles(join(root, entry.name), depth - 1));
   }
   return nested;

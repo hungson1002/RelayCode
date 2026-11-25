@@ -4,9 +4,9 @@ import { dirname, extname, relative, resolve, sep } from 'node:path';
 import * as vscode from 'vscode';
 import type { ProviderClient, ToolCompletionProgress } from './provider';
 import type { ExternalAgentTool } from './mcpManager';
-import type { AgentGoalProgressUpdate, AgentRunCheckpoint, AgentToolCall, RequestTuning, StreamCallbacks } from './types';
+import type { AgentGoalProgressUpdate, AgentRunCheckpoint, AgentToolCall, AgentToolLifecycleEvent, RequestTuning, StreamCallbacks } from './types';
 import { validateCommandPolicy } from './safetyPolicy';
-import { countLineChanges } from './diffHunks';
+import { countLineChanges, isBinaryContent } from './diffHunks';
 import { isGitOnlyRequest, requiresWorkspaceMutation } from './agentIntent';
 import { runShellCommand, shellRuntimeInstruction } from './commandRuntime';
 import { sanitizeModelText, sanitizeVisibleModelText } from './modelText';
@@ -17,7 +17,11 @@ import { captureWorkspaceSnapshot, diffWorkspaceSnapshots, type FileSnapshot } f
 const execFileAsync = promisify(execFile);
 
 const tools: Array<Record<string, unknown>> = [
-  tool('read_file', 'Đọc một file trong workspace.', { path: stringField('Đường dẫn tương đối') }, ['path']),
+  tool('read_file', 'Đọc một file trong workspace. Hỗ trợ đọc theo khoảng dòng (startLine, endLine) cho file lớn để tránh cắt bớt và không cần dùng lệnh shell.', {
+    path: stringField('Đường dẫn tương đối'),
+    startLine: numberField('Dòng bắt đầu (1-based, tùy chọn)'),
+    endLine: numberField('Dòng kết thúc (1-based inclusive, tùy chọn)')
+  }, ['path']),
   tool('stat_path', 'Kiểm tra file hoặc thư mục có tồn tại và trả về loại, kích thước.', { path: stringField('Đường dẫn tương đối') }, ['path']),
   tool('list_directory', 'Liệt kê trực tiếp nội dung một thư mục trong workspace.', { path: stringField('Đường dẫn thư mục tương đối; để trống cho workspace root') }, []),
   tool('read_skill_file', 'Đọc file tham chiếu nằm trong một skill đang được kích hoạt.', {
@@ -25,7 +29,19 @@ const tools: Array<Record<string, unknown>> = [
     path: stringField('Đường dẫn tương đối tính từ thư mục chứa SKILL.md')
   }, ['skill', 'path']),
   tool('list_files', 'Liệt kê file trong workspace theo glob.', { pattern: stringField('Glob, ví dụ src/**/*.ts') }, ['pattern']),
-  tool('search_text', 'Tìm một chuỗi trong các file của workspace.', { query: stringField('Chuỗi cần tìm'), pattern: stringField('Glob tùy chọn, ví dụ **/*.ts') }, ['query']),
+  tool('search_text', 'Tìm một chuỗi hoặc regex trong các file văn bản của workspace.', {
+    query: stringField('Chuỗi hoặc biểu thức cần tìm'),
+    pattern: stringField('Glob tùy chọn, ví dụ **/*.ts'),
+    regex: { type: 'boolean', description: 'Đặt true để tìm theo biểu thức chính quy (regex); mặc định false' }
+  }, ['query']),
+  tool('get_diagnostics', 'Đọc danh sách lỗi và cảnh báo trực tiếp từ LSP/compiler của IDE (TypeScript, ESLint, Python, Rust, v.v.) mà không cần chạy shell chậm.', {
+    path: stringField('Đường dẫn tương đối tùy chọn để lọc một file hoặc thư mục'),
+    severity: { type: 'string', enum: ['error', 'warning', 'all'], description: 'Mức độ cần lọc; mặc định all' }
+  }, []),
+  tool('find_symbol', 'Tìm nhanh định nghĩa class, function, method, interface qua LSP của IDE trong workspace hoặc trong một file cụ thể.', {
+    query: stringField('Tên hoặc một phần tên symbol cần tìm'),
+    path: stringField('Đường dẫn file tương đối tùy chọn để liệt kê symbol của riêng file đó')
+  }, ['query']),
   tool('read_webpage', 'Đọc nội dung chính của một trang web từ URL HTTP(S) để phân tích. Dùng khi người dùng gửi link hoặc yêu cầu tìm hiểu một trang cụ thể.', {
     url: stringField('URL đầy đủ bắt đầu bằng https:// hoặc http://')
   }, ['url']),
@@ -89,6 +105,39 @@ const GOAL_PROGRESS_TOOL = tool('update_goal_progress', 'Persist the current lon
 const IMAGE_MODEL_PATTERN = /(image|imagen|gpt-image|dall-e|flux|stable[- ]?diffusion|sdxl|seedream|recraft)/i;
 const WEBPAGE_MAX_BYTES = 1_000_000;
 const WEBPAGE_MAX_TEXT = 40_000;
+const MAX_AGENT_STEPS = 60;
+
+const PARALLEL_READ_ONLY_TOOLS = new Set([
+  'read_file',
+  'stat_path',
+  'list_directory',
+  'read_skill_file',
+  'list_files',
+  'search_text',
+  'get_diagnostics',
+  'find_symbol',
+  'git_status',
+  'git_diff',
+  'list_models',
+  'web_search',
+  'read_webpage'
+]);
+
+function classifyToolKind(name: string): AgentToolLifecycleEvent['kind'] {
+  if (['write_file', 'apply_patch', 'create_directory', 'delete_file', 'move_file', 'generate_image'].includes(name)) return 'edit';
+  if (['run_command', 'run_tests', 'git_commit', 'git_push'].includes(name)) return 'command';
+  if (['web_search', 'read_webpage'].includes(name)) return 'web';
+  if (name === 'update_goal_progress') return 'goal';
+  if (['read_file', 'stat_path', 'list_directory', 'list_files', 'search_text', 'get_diagnostics', 'find_symbol', 'read_skill_file', 'git_status', 'git_diff', 'list_models'].includes(name)) return 'inspect';
+  return 'mcp';
+}
+
+function extractToolTarget(name: string, args: Record<string, unknown>): string | undefined {
+  const raw = args.path ?? args.to ?? args.from ?? args.command ?? args.query ?? args.url ?? args.pattern ?? args.skill;
+  if (raw === undefined || raw === null) return undefined;
+  const text = String(raw).replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, 120) : undefined;
+}
 
 function shouldEmitProgressCommentary(content: string | null | undefined): content is string {
   const text = content?.replace(/\s+/g, ' ').trim() ?? '';
@@ -192,14 +241,31 @@ function numberField(description: string): Record<string, unknown> {
   return { type: 'number', description };
 }
 
+function isPrivateOrLoopbackHost(rawHost: string): boolean {
+  const host = rawHost.replace(/^\[|\]$/g, '').toLowerCase();
+  if (host === 'localhost' || host === 'localhost.localdomain' || host.endsWith('.local') || host.endsWith('.internal')) return true;
+  if (host === '::1' || host === '::' || /^0*(?::0*){6}:0*1$/.test(host) || /^0*(?::0*){7}$/.test(host)) return true;
+  if (/^(?:fc|fd)[0-9a-f]{2}:/i.test(host) || /^fe[89ab][0-9a-f]:/i.test(host)) return true;
+  const mappedIpv4 = host.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i)?.[1]
+    ?? (host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i)
+      ? (() => {
+          const m = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i)!;
+          const hi = Number.parseInt(m[1]!, 16);
+          const lo = Number.parseInt(m[2]!, 16);
+          return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+        })()
+      : undefined);
+  const ip = mappedIpv4 ?? host;
+  const privateIpv4 = /^(?:0|10|127)\.(?:\d{1,3}\.){2}\d{1,3}$|^169\.254\.(?:\d{1,3}\.)\d{1,3}$|^192\.168\.(?:\d{1,3}\.)\d{1,3}$|^172\.(?:1[6-9]|2\d|3[0-1])\.(?:\d{1,3}\.)\d{1,3}$|^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.(?:\d{1,3}\.)\d{1,3}$/;
+  return privateIpv4.test(ip);
+}
+
 function normalizeWebpageUrl(value: string): URL {
   let url: URL;
   try { url = new URL(value.trim()); } catch { throw new Error('URL không hợp lệ. Hãy dùng URL đầy đủ bắt đầu bằng http:// hoặc https://.'); }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Chỉ cho phép URL HTTP hoặc HTTPS.');
   if (url.username || url.password) throw new Error('URL có thông tin đăng nhập không được phép.');
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  const privateIpv4 = /^(?:10|127)\.(?:\d{1,3}\.){2}\d{1,3}$|^169\.254\.(?:\d{1,3}\.)\d{1,3}$|^192\.168\.(?:\d{1,3}\.)\d{1,3}$|^172\.(?:1[6-9]|2\d|3[0-1])\.(?:\d{1,3}\.)\d{1,3}$/;
-  if (host === 'localhost' || host === 'localhost.localdomain' || host === '::1' || privateIpv4.test(host) || host.endsWith('.local')) {
+  if (isPrivateOrLoopbackHost(url.hostname)) {
     throw new Error('Không thể đọc địa chỉ local hoặc mạng riêng để bảo vệ workspace.');
   }
   return url;
@@ -236,20 +302,68 @@ function webpageText(html: string, url: URL): string {
   return [`URL: ${url.toString()}`, heading ? `Title: ${heading}` : '', '', text].filter(Boolean).join('\n').slice(0, WEBPAGE_MAX_TEXT);
 }
 
+async function readResponseBytesBounded(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const length = Number(response.headers.get('content-length') || 0);
+  if (length > maxBytes) throw new Error('Trang web lớn hơn giới hạn 1 MB.');
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) throw new Error('Trang web lớn hơn giới hạn 1 MB.');
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        void reader.cancel().catch(() => undefined);
+        throw new Error('Trang web lớn hơn giới hạn 1 MB.');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+
 async function readWebpage(value: string, signal?: AbortSignal): Promise<string> {
-  const url = normalizeWebpageUrl(value);
+  let currentUrl = normalizeWebpageUrl(value);
   const controller = new AbortController();
   const abort = () => controller.abort(signal?.reason);
   signal?.addEventListener('abort', abort, { once: true });
   const timeout = setTimeout(() => controller.abort(new Error('Web request timeout after 15 seconds.')), 15_000);
   try {
-    const response = await fetch(url, { redirect: 'follow', signal: controller.signal, headers: { accept: 'text/html,text/plain,application/json,application/xml;q=0.9,*/*;q=0.1', 'user-agent': 'RelayCode/1.0 (+web reader)' } });
-    const finalUrl = normalizeWebpageUrl(response.url || url.toString());
+    let response: Response | undefined;
+    for (let hop = 0; hop < 6; hop++) {
+      response = await fetch(currentUrl, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: { accept: 'text/html,text/plain,application/json,application/xml;q=0.9,*/*;q=0.1', 'user-agent': 'RelayCode/1.0 (+web reader)' }
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) break;
+        currentUrl = normalizeWebpageUrl(new URL(location, currentUrl).toString());
+        continue;
+      }
+      break;
+    }
+    if (!response) throw new Error('Không nhận được phản hồi từ trang web.');
+    if (response.status >= 300 && response.status < 400) throw new Error('Trang web chuyển hướng quá nhiều lần.');
+    const finalUrl = normalizeWebpageUrl(response.url || currentUrl.toString());
     if (!response.ok) throw new Error(`Trang web trả HTTP ${response.status}.`);
-    const length = Number(response.headers.get('content-length') || 0);
-    if (length > WEBPAGE_MAX_BYTES) throw new Error('Trang web lớn hơn giới hạn 1 MB.');
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > WEBPAGE_MAX_BYTES) throw new Error('Trang web lớn hơn giới hạn 1 MB.');
+    const bytes = await readResponseBytesBounded(response, WEBPAGE_MAX_BYTES);
     const body = new TextDecoder().decode(bytes);
     const contentType = (response.headers.get('content-type') || '').toLowerCase();
     if (contentType.includes('html') || /<html[\s>]/i.test(body)) return webpageText(body, finalUrl);
@@ -429,6 +543,9 @@ export class AgentRuntime {
     };
     for (const path of resume?.mutatedPaths ?? []) this.mutatedPaths.add(path);
     const toolFailureCounts = new Map<string, number>();
+    let lastSuccessfulCallKey = '';
+    let identicalSuccessRepeats = 0;
+    let stepBudgetNudged = false;
     const baseInstruction = this.readOnly
       ? 'Bạn là coding planner trong IDE. Đọc workspace và lập kế hoạch thực hiện cụ thể, nhưng không được sửa file hoặc chạy lệnh trong Plan mode. Kế hoạch phải là Markdown có tiêu đề rõ ràng, tóm tắt mục tiêu, phần cần người dùng xác nhận hoặc giả định quan trọng, các thay đổi đề xuất theo file/module, trình tự thực hiện, cách kiểm thử và rủi ro cần lưu ý. Nêu đường dẫn thật sau khi đã kiểm tra workspace; không bịa file. Khi cần trình bày cấu trúc thư mục, dùng đúng một fenced code block ```text, mỗi file hoặc thư mục nằm trên một dòng liên tiếp theo ký hiệu ├── và └──, thư mục luôn kết thúc bằng /, chú thích ngắn đặt sau " # ", tuyệt đối không chèn dòng trống giữa các node. Mỗi node chỉ ghi tên tương đối với thư mục cha; không lặp lại đường dẫn đầy đủ ở từng dòng. Nếu người dùng gửi URL, dùng read_webpage trước khi lập kế hoạch. Không tuyên bố đã thực hiện kế hoạch.'
       : 'Bạn là coding agent trong IDE. Dùng tools để kiểm tra workspace trước khi kết luận. Nếu người dùng gửi URL hoặc yêu cầu đọc một trang web, bắt buộc dùng read_webpage trước khi trả lời thay vì đoán nội dung. Chỉ thao tác trong workspace. Yêu cầu vẽ hoặc trình bày bảng Markdown, viết mô tả, đoạn văn hay nội dung “trong chat/ở đây” là yêu cầu trả lời trực tiếp trong chat: không tạo file và không gọi tool ghi file, trừ khi người dùng nêu rõ file, đường dẫn, workspace, dự án hoặc giao diện cần thay đổi. Không tự tạo file chỉ vì đang ở Agent mode. Nếu người dùng yêu cầu tạo, sửa, thêm hoặc xóa file, bạn bắt buộc phải gọi write_file, apply_patch hoặc generate_image và kiểm tra kết quả; không được chỉ tuyên bố đã hoàn tất. Khi người dùng yêu cầu tạo ảnh, hãy dùng list_models để tìm model image phù hợp rồi gọi generate_image; không tạo ảnh giả bằng SVG/CSS trừ khi người dùng yêu cầu rõ. Nếu API ảnh không được hỗ trợ, hãy tìm pipeline Python tạo ảnh đã có trong workspace và chỉ dùng run_command khi pipeline đó thực sự tồn tại; không tự cài model nặng hoặc tuyên bố đã tạo ảnh khi chưa có file. Sau khi sửa, chạy kiểm tra phù hợp. Phản hồi cuối phải ngắn gọn, tối đa 120 từ: nói chính xác kết quả trước, dùng tối đa 2-4 bullet cho thay đổi chính và kiểm tra đã chạy. Không liệt kê lại toàn bộ file vì Review card đã hiển thị chúng. Không bắt buộc dùng chữ đậm; nếu cần nhấn mạnh thì chỉ dùng cho tối đa 1-2 cụm thật quan trọng trong toàn bộ câu trả lời. Bọc tên hàm/lệnh trong backtick, và chỉ viết liên kết Markdown [tên file](đường/dẫn/file:line) khi một file cụ thể thực sự cần được nhấn mạnh. Không dùng emoji hoặc icon trang trí trong câu trả lời. Nếu chưa thực hiện được, nói rõ chưa hoàn thành và nguyên nhân. Không thuật lại từng bước suy luận, không tự khen kết quả, không mời người dùng yêu cầu thêm và không lặp lại log công cụ.';
@@ -483,6 +600,20 @@ export class AgentRuntime {
       });
     };
     for (let step = resume?.step ?? 0; ; step++) {
+      if (!pendingToolCalls.length && step >= MAX_AGENT_STEPS) {
+        if (!stepBudgetNudged) {
+          stepBudgetNudged = true;
+          messages.push({
+            role: 'user',
+            content: 'RelayCode step-budget notice: you have reached the high step limit for this turn. Stop issuing exploratory tool calls, verify the current state cleanly if needed, and return a concise final summary of completed work and any remaining items.'
+          });
+        } else if (step >= MAX_AGENT_STEPS + 4) {
+          callbacks.onActivityComplete?.();
+          callbacks.onDelta('Agent đã dừng an toàn sau khi chạm giới hạn bước trong một lượt để tránh vòng lặp kéo dài. Hãy kiểm tra kết quả hiện tại hoặc yêu cầu tiếp tục phần còn lại.');
+          callbacks.onStatus('Hoàn tất');
+          return;
+        }
+      }
       if (!pendingToolCalls.length) {
         const steering = this.takeSteeringInstructions();
         if (steering.length) {
@@ -590,6 +721,71 @@ export class AgentRuntime {
       }
       let repairRequested = false;
       for (; nextToolIndex < pendingToolCalls.length;) {
+        // Execute consecutive pure read-only tool calls in parallel (up to 6) for 3-5x faster codebase inspection.
+        const firstPending = pendingToolCalls[nextToolIndex]!;
+        if (
+          PARALLEL_READ_ONLY_TOOLS.has(firstPending.name)
+          && interruptedToolCallId !== firstPending.id
+          && nextToolIndex + 1 < pendingToolCalls.length
+          && PARALLEL_READ_ONLY_TOOLS.has(pendingToolCalls[nextToolIndex + 1]!.name)
+        ) {
+          const batch: AgentToolCall[] = [];
+          for (let cursor = nextToolIndex; cursor < pendingToolCalls.length && batch.length < 6; cursor++) {
+            const candidateCall = pendingToolCalls[cursor]!;
+            if (!PARALLEL_READ_ONLY_TOOLS.has(candidateCall.name) || interruptedToolCallId === candidateCall.id) break;
+            batch.push(candidateCall);
+          }
+          if (batch.length >= 2) {
+            const batchLabels = batch.map((item) => item.name).slice(0, 3).join(', ');
+            callbacks.onStatus(`Đang phân tích song song ${batch.length} tác vụ (${batchLabels})`);
+            await checkpoint(step, `Đang phân tích song song ${batch.length} tác vụ`);
+            const batchResults = await Promise.all(batch.map(async (call) => {
+              let args: Record<string, unknown>;
+              let argumentError = '';
+              try { args = JSON.parse(call.arguments) as Record<string, unknown>; }
+              catch (error) {
+                args = {};
+                argumentError = `ERROR: Invalid JSON arguments for ${call.name}: ${error instanceof Error ? error.message : String(error)}.`;
+              }
+              const toolKind = classifyToolKind(call.name);
+              const toolTarget = extractToolTarget(call.name, args);
+              callbacks.onToolEvent?.({
+                id: call.id,
+                phase: 'start',
+                tool: call.name,
+                kind: toolKind,
+                target: toolTarget,
+                step
+              });
+              const started = Date.now();
+              let result: string;
+              try {
+                result = argumentError || await this.execute(call.name, args, callbacks, activeModel, signal);
+              } catch (error) {
+                if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
+                result = `ERROR: ${error instanceof Error ? error.message : String(error)}`;
+              }
+              const ok = !/^(ERROR|DENIED):?/i.test(result);
+              callbacks.onToolEvent?.({
+                id: call.id,
+                phase: 'end',
+                tool: call.name,
+                kind: toolKind,
+                target: toolTarget,
+                durationMs: Date.now() - started,
+                ok,
+                step
+              });
+              return { id: call.id, result };
+            }));
+            for (const item of batchResults) {
+              messages.push({ role: 'tool', tool_call_id: item.id, content: item.result.slice(0, 30_000) });
+            }
+            nextToolIndex += batch.length;
+            await checkpoint(step, `Đã hoàn thành ${batch.length} tác vụ đọc song song`);
+            continue;
+          }
+        }
         const call = pendingToolCalls[nextToolIndex]!;
         let args: Record<string, unknown>;
         let argumentError = '';
@@ -599,17 +795,34 @@ export class AgentRuntime {
           argumentError = `ERROR: Invalid JSON arguments for ${call.name}: ${error instanceof Error ? error.message : String(error)}.`;
         }
         const toolStatus = this.toolStatus(call.name, args);
+        const toolKind = classifyToolKind(call.name);
+        const toolTarget = extractToolTarget(call.name, args);
+        const callSignature = `${call.name}:${JSON.stringify(args)}`;
         const wasInterrupted = interruptedToolCallId === call.id
           || (!resume?.inFlightToolCallId
             && resume?.pendingToolCalls[resume.nextToolIndex]?.id === call.id
             && resume.lastStatus === toolStatus);
         callbacks.onStatus(wasInterrupted ? `${call.name} có thể đã chạy trước khi IDE bị gián đoạn · đang kiểm tra trạng thái` : toolStatus);
+        callbacks.onToolEvent?.({
+          id: call.id,
+          phase: 'start',
+          tool: call.name,
+          kind: toolKind,
+          target: toolTarget,
+          step
+        });
+        const toolStartedAt = Date.now();
         let result: string;
         let attempt = 0;
         const commandMutationCountBefore = this.commandMutationCount;
         if (wasInterrupted) {
           result = `ERROR: RelayCode was interrupted while ${call.name} was running. The operation may have completed fully or partially. Inspect the current workspace and task status first; do not repeat this operation unless the inspection proves it is still needed.`;
           interruptedToolCallId = undefined;
+        } else if (!argumentError && callSignature === lastSuccessfulCallKey && identicalSuccessRepeats >= 2) {
+          identicalSuccessRepeats = 0;
+          lastSuccessfulCallKey = '';
+          repairRequested = true;
+          result = `ERROR: Loop detected — ${call.name} was called 3 consecutive times with identical arguments. Reuse the previous tool output or choose a different action instead of repeating this call.`;
         } else {
           inFlightToolCallId = call.id;
           await checkpoint(step, toolStatus);
@@ -659,6 +872,27 @@ export class AgentRuntime {
             break;
           }
         }
+        const toolOk = !/^(ERROR|DENIED):?/i.test(result);
+        if (toolOk) {
+          if (callSignature === lastSuccessfulCallKey) identicalSuccessRepeats++;
+          else {
+            lastSuccessfulCallKey = callSignature;
+            identicalSuccessRepeats = 1;
+          }
+        } else {
+          lastSuccessfulCallKey = '';
+          identicalSuccessRepeats = 0;
+        }
+        callbacks.onToolEvent?.({
+          id: call.id,
+          phase: 'end',
+          tool: call.name,
+          kind: toolKind,
+          target: toolTarget,
+          durationMs: Date.now() - toolStartedAt,
+          ok: toolOk,
+          step
+        });
         inFlightToolCallId = undefined;
         if (call.name === 'generate_image' && /^ERROR:?/i.test(result)) {
           callbacks.onStatus(`Tạo ảnh thất bại: ${String(args.path ?? 'image.png').slice(0, 140)}`);
@@ -739,8 +973,15 @@ export class AgentRuntime {
     const projectDirectories = new Set<string>();
     const changedPaths = [...this.mutatedPaths].filter((path) => this.shouldValidatePath(path));
     for (const changedPath of changedPaths.length ? changedPaths : ['.']) {
-      let current = dirname(resolve(this.workspaceRoot, changedPath));
-      if (changedPath === '.') current = resolve(this.workspaceRoot);
+      let current = resolve(this.workspaceRoot, changedPath);
+      if (changedPath !== '.') {
+        try {
+          const stat = await vscode.workspace.fs.stat(vscode.Uri.file(current));
+          if (!(stat.type & vscode.FileType.Directory)) current = dirname(current);
+        } catch {
+          current = dirname(current);
+        }
+      }
       let nestedRepository = false;
       while (this.isWorkspacePath(current)) {
         const relativeDirectory = relative(this.workspaceRoot, current) || '.';
@@ -794,7 +1035,7 @@ export class AgentRuntime {
     if (await exists(directory, 'go.mod')) return ['go test ./...'];
     if (await exists(directory, 'pom.xml')) return ['mvn test'];
     if (await exists(directory, 'gradlew.bat') && process.platform === 'win32') return ['.\\gradlew.bat test'];
-    if (await exists(directory, 'gradlew')) return ['./gradlew test'];
+    if (await exists(directory, 'gradlew') && process.platform !== 'win32') return ['./gradlew test'];
     if (await exists(directory, 'Package.swift')) return ['swift test'];
     if (await exists(directory, 'composer.json')) return ['composer test'];
     if (await exists(directory, 'Gemfile')) return ['bundle exec rspec'];
@@ -804,29 +1045,34 @@ export class AgentRuntime {
     return [];
   }
 
+  private originalUserRequest = '';
+
   private compactMessages(messages: Array<Record<string, unknown>>, maxChars = 120_000): void {
+    if (!this.originalUserRequest) {
+      const firstUser = messages.find((message) => message.role === 'user');
+      this.originalUserRequest = typeof firstUser?.content === 'string'
+        ? firstUser.content.slice(0, 8_000)
+        : '[Original request included structured content.]';
+    }
     const size = () => {
       try { return JSON.stringify(messages).length; } catch { return maxChars + 1; }
     };
     if (size() <= maxChars || messages.length < 12) return;
 
-    const firstUser = messages.find((message) => message.role === 'user');
-    const originalRequest = typeof firstUser?.content === 'string'
-      ? firstUser.content.slice(0, 8_000)
-      : '[Original request included structured content.]';
+    const originalRequest = this.originalUserRequest;
     let keepFrom = Math.max(2, messages.length - 24);
     while (keepFrom < messages.length && messages[keepFrom]?.role === 'tool') keepFrom++;
     const recent = messages.slice(keepFrom);
     messages.splice(1, messages.length - 1,
       {
-        role: 'system',
-        content: `Earlier Agent activity was compacted to keep this long-running task within the model context window. Original request:\n${originalRequest}\nInspect the current workspace and git diff when details from earlier tool calls are needed. Do not recreate work that already exists.`
+        role: 'user',
+        content: `[Compacted earlier Agent activity to stay within context window]\nOriginal request:\n${originalRequest}\nInspect the current workspace and git diff when details from earlier tool calls are needed. Do not recreate work that already exists.`
       },
       ...recent
     );
 
     if (size() <= maxChars) return;
-    for (let index = 1; index < messages.length - 8 && size() > maxChars; index++) {
+    for (let index = 2; index < messages.length - 8 && size() > maxChars; index++) {
       const message = messages[index]!;
       if (typeof message.content === 'string' && message.content.length > 2_000) {
         message.content = `${message.content.slice(0, 2_000)}\n[content compacted]`;
@@ -835,7 +1081,16 @@ export class AgentRuntime {
       for (const call of calls) {
         const fn = call.function as Record<string, unknown> | undefined;
         if (fn && typeof fn.arguments === 'string' && fn.arguments.length > 1_000) {
-          fn.arguments = '{"compacted":true}';
+          try {
+            const parsed = JSON.parse(fn.arguments) as Record<string, unknown>;
+            const compactArgs: Record<string, unknown> = {};
+            for (const [key, val] of Object.entries(parsed)) {
+              compactArgs[key] = typeof val === 'string' && val.length > 240 ? `${val.slice(0, 240)}…[compacted]` : val;
+            }
+            fn.arguments = JSON.stringify(compactArgs);
+          } catch {
+            fn.arguments = '{}';
+          }
         }
       }
     }
@@ -866,6 +1121,10 @@ export class AgentRuntime {
       };
       const onProgress = (progress: ToolCompletionProgress) => {
         touch();
+        if (progress.type === 'thinking') {
+          if (progress.content) callbacks.onThinking?.(progress.content);
+          return;
+        }
         // Buffer model narration until the step is complete. Tool-capable models
         // often emit a long plan before their tool call; streaming it directly
         // makes the Agent verbose and can duplicate the final answer.
@@ -951,6 +1210,8 @@ export class AgentRuntime {
     if (name === 'read_skill_file') return `Đang đọc tài nguyên skill: ${short(args.skill, 'skill')} / ${short(args.path, 'file')}`;
     if (name === 'list_files') return `Đang xem cấu trúc dự án: ${short(args.pattern, '**/*')}`;
     if (name === 'search_text') return `Đang tìm trong dự án: ${short(args.query, 'nội dung')}`;
+    if (name === 'get_diagnostics') return `Đang đọc lỗi IDE: ${short(args.path, 'workspace')}`;
+    if (name === 'find_symbol') return `Đang tìm biểu tượng: ${short(args.query, 'symbol')}`;
     if (name === 'read_webpage') return `Đang đọc trang web: ${short(args.url, 'URL')}`;
     if (name === 'web_search') return `Đang tìm trên web: ${short(args.query, 'từ khóa')}`;
     const external = this.externalTools.find((item) => (item.definition.function as { name?: string } | undefined)?.name === name);
@@ -974,7 +1235,48 @@ export class AgentRuntime {
     }
     if (name === 'read_file') {
       const uri = this.workspaceUri(String(args.path ?? ''));
-      return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+      const maxReadBytes = 4_000_000;
+      try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        if (stat.type & vscode.FileType.Directory) return 'ERROR: path is a directory. Use list_directory instead.';
+        if (stat.size > maxReadBytes) {
+          return `ERROR: File is ${(stat.size / (1024 * 1024)).toFixed(1)} MB (limit 4 MB). Inspect a specific section or smaller file.`;
+        }
+      } catch { /* Let readFile report the exact missing-file error below. */ }
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      if (isBinaryContent(bytes)) {
+        return `[Binary file: ${relative(this.workspaceRoot, uri.fsPath).replace(/\\/g, '/')}, ${bytes.byteLength} bytes]`;
+      }
+      const text = new TextDecoder().decode(bytes);
+      const hasRange = args.startLine !== undefined || args.endLine !== undefined;
+      const allLines = text.split(/\r?\n/);
+      if (hasRange) {
+        const total = allLines.length;
+        const rawStart = Number(args.startLine);
+        const start = Number.isFinite(rawStart) ? Math.max(1, Math.min(total, Math.floor(rawStart))) : 1;
+        const rawEnd = Number(args.endLine);
+        const end = Number.isFinite(rawEnd)
+          ? Math.max(start, Math.min(total, Math.floor(rawEnd)))
+          : Math.min(total, start + 499);
+        const numbered = allLines
+          .slice(start - 1, end)
+          .map((line, index) => `${start + index}: ${line}`)
+          .join('\n');
+        const header = `Showing lines ${start}-${end} of ${total}${end < total ? ` (call read_file with startLine=${end + 1} for more)` : ''}\n`;
+        return `${header}${numbered}`;
+      }
+      if (text.length > 28_000) {
+        const slice: string[] = [];
+        let charCount = 0;
+        for (let index = 0; index < allLines.length; index++) {
+          const formatted = `${index + 1}: ${allLines[index]!}`;
+          if (charCount + formatted.length + 1 > 27_500 && slice.length > 0) break;
+          slice.push(formatted);
+          charCount += formatted.length + 1;
+        }
+        return `Showing lines 1-${slice.length} of ${allLines.length} (file is large; use read_file with startLine=${slice.length + 1} and endLine=${Math.min(allLines.length, slice.length + 500)} to read further without shell commands)\n${slice.join('\n')}`;
+      }
+      return text;
     }
     if (name === 'stat_path') {
       const uri = this.workspaceUri(String(args.path ?? ''));
@@ -997,9 +1299,10 @@ export class AgentRuntime {
       const skill = this.activeSkills.find((item) => item.name.toLowerCase() === skillName);
       if (!skill) return `DENIED: Skill "${skillName || 'unknown'}" chưa được kích hoạt trong cuộc trò chuyện này.`;
       if (!resourcePath) return 'ERROR: path cannot be empty.';
-      const root = resolve(dirname(skill.path));
-      const target = resolve(root, resourcePath);
-      if (target !== root && !target.startsWith(`${root}${sep}`)) {
+      let target: string;
+      try {
+        target = new WorkspaceSandbox(dirname(skill.path)).resolvePath(resourcePath);
+      } catch {
         return 'DENIED: Đường dẫn nằm ngoài thư mục skill.';
       }
       const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(target));
@@ -1007,23 +1310,109 @@ export class AgentRuntime {
       return new TextDecoder().decode(bytes);
     }
     if (name === 'list_files') {
-      const uris = await vscode.workspace.findFiles(String(args.pattern ?? '**/*'), '**/{node_modules,.git,dist,out}/**', 300);
-      return uris.map((uri) => relative(this.workspaceRoot, uri.fsPath)).join('\n');
+      const uris = await vscode.workspace.findFiles(
+        String(args.pattern ?? '**/*'),
+        '**/{node_modules,.git,dist,out,build,coverage,.next,.venv,venv,__pycache__,.cache,.turbo,target}/**',
+        300
+      );
+      return uris.map((uri) => relative(this.workspaceRoot, uri.fsPath).replace(/\\/g, '/')).join('\n');
     }
     if (name === 'search_text') {
       const query = String(args.query ?? '');
       if (!query) return 'No query provided.';
+      const useRegex = args.regex === true;
+      let matcher: RegExp | undefined;
+      if (useRegex) {
+        try { matcher = new RegExp(query, 'i'); }
+        catch (error) { return `ERROR: Invalid regex: ${error instanceof Error ? error.message : String(error)}`; }
+      }
       const pattern = String(args.pattern ?? '**/*');
-      const uris = await vscode.workspace.findFiles(pattern, '**/{node_modules,.git,dist,out}/**', 250);
+      const uris = await vscode.workspace.findFiles(
+        pattern,
+        '**/{node_modules,.git,dist,out,build,coverage,.next,.venv,venv,__pycache__,.cache,.turbo,target}/**',
+        350
+      );
       const hits: string[] = [];
       for (const uri of uris) {
-        if (hits.length >= 100) break;
+        if (hits.length >= 120) break;
         try {
-          const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-          text.split(/\r?\n/).forEach((line, index) => { if (line.includes(query) && hits.length < 100) hits.push(`${relative(this.workspaceRoot, uri.fsPath)}:${index + 1}: ${line.trim().slice(0, 240)}`); });
-        } catch { /* Ignore binary files. */ }
+          const bytes = await vscode.workspace.fs.readFile(uri);
+          if (bytes.byteLength > 1_500_000 || isBinaryContent(bytes)) continue;
+          const text = new TextDecoder().decode(bytes);
+          text.split(/\r?\n/).forEach((line, index) => {
+            const matched = matcher ? matcher.test(line) : line.includes(query);
+            if (matched && hits.length < 120) {
+              hits.push(`${relative(this.workspaceRoot, uri.fsPath).replace(/\\/g, '/')}:${index + 1}: ${line.trim().slice(0, 240)}`);
+            }
+          });
+        } catch { /* Ignore unreadable files. */ }
       }
       return hits.join('\n') || 'No matches.';
+    }
+    if (name === 'get_diagnostics') {
+      const getDiagnostics = (vscode as { languages?: { getDiagnostics?: () => Array<[vscode.Uri, readonly vscode.Diagnostic[]]> } }).languages?.getDiagnostics;
+      if (typeof getDiagnostics !== 'function') return 'IDE diagnostics API is unavailable in this environment.';
+      const filterPath = String(args.path ?? '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+      const severity = String(args.severity ?? 'all').toLowerCase();
+      const entries: string[] = [];
+      for (const [uri, diagnostics] of getDiagnostics()) {
+        const fsPath = uri.fsPath;
+        if (!fsPath || !this.isWorkspacePath(fsPath)) continue;
+        const rel = relative(this.workspaceRoot, fsPath).replace(/\\/g, '/');
+        if (filterPath && rel !== filterPath && !rel.startsWith(`${filterPath.replace(/\/+$/, '')}/`)) continue;
+        for (const item of diagnostics) {
+          const sevValue = Number(item.severity ?? 0);
+          const sevLabel = sevValue === 0 ? 'Error' : sevValue === 1 ? 'Warning' : sevValue === 2 ? 'Info' : 'Hint';
+          if (severity === 'error' && sevValue !== 0) continue;
+          if (severity === 'warning' && sevValue > 1) continue;
+          const line = (item.range?.start?.line ?? 0) + 1;
+          const col = (item.range?.start?.character ?? 0) + 1;
+          const source = item.source ? ` (${item.source})` : '';
+          entries.push(`${rel}:${line}:${col} [${sevLabel}] ${String(item.message ?? '').replace(/\s+/g, ' ').trim()}${source}`);
+          if (entries.length >= 150) break;
+        }
+        if (entries.length >= 150) break;
+      }
+      return entries.length ? entries.join('\n') : 'No IDE diagnostics found.';
+    }
+    if (name === 'find_symbol') {
+      const query = String(args.query ?? '').trim();
+      const targetPath = String(args.path ?? '').trim();
+      const executeCommand = (vscode as { commands?: { executeCommand?: <T>(command: string, ...rest: unknown[]) => Thenable<T> } }).commands?.executeCommand;
+      if (typeof executeCommand !== 'function') return 'IDE symbol provider API is unavailable in this environment.';
+      if (targetPath) {
+        const uri = this.workspaceUri(targetPath);
+        const symbols = await executeCommand<Array<{ name?: string; kind?: number; range?: { start?: { line?: number } }; location?: { range?: { start?: { line?: number } } }; children?: unknown[] }>>('vscode.executeDocumentSymbolProvider', uri);
+        const lines: string[] = [];
+        const needle = query.toLowerCase();
+        const visit = (list: unknown[], depth = 0) => {
+          for (const raw of list) {
+            if (!raw || typeof raw !== 'object' || lines.length >= 120) continue;
+            const sym = raw as { name?: string; range?: { start?: { line?: number } }; location?: { range?: { start?: { line?: number } } }; children?: unknown[] };
+            const symName = String(sym.name ?? '');
+            const line = (sym.range?.start?.line ?? sym.location?.range?.start?.line ?? 0) + 1;
+            if (!needle || symName.toLowerCase().includes(needle)) {
+              lines.push(`${'  '.repeat(Math.min(4, depth))}${symName} (${targetPath}:${line})`);
+            }
+            if (Array.isArray(sym.children) && sym.children.length) visit(sym.children, depth + 1);
+          }
+        };
+        visit(Array.isArray(symbols) ? symbols : []);
+        return lines.join('\n') || 'No matching document symbols found.';
+      }
+      if (!query) return 'ERROR: query cannot be empty when path is omitted.';
+      const symbols = await executeCommand<Array<{ name?: string; containerName?: string; location?: { uri?: vscode.Uri; range?: { start?: { line?: number } } } }>>('vscode.executeWorkspaceSymbolProvider', query);
+      const hits: string[] = [];
+      for (const sym of Array.isArray(symbols) ? symbols : []) {
+        const fsPath = sym.location?.uri?.fsPath;
+        if (!fsPath || !this.isWorkspacePath(fsPath)) continue;
+        const rel = relative(this.workspaceRoot, fsPath).replace(/\\/g, '/');
+        const line = (sym.location?.range?.start?.line ?? 0) + 1;
+        const container = sym.containerName ? ` in ${sym.containerName}` : '';
+        hits.push(`${rel}:${line} · ${sym.name ?? 'symbol'}${container}`);
+        if (hits.length >= 100) break;
+      }
+      return hits.join('\n') || 'No matching workspace symbols found.';
     }
     if (name === 'read_webpage') {
       return readWebpage(String(args.url ?? ''), signal);
@@ -1057,9 +1446,9 @@ export class AgentRuntime {
       const generated = await this.client.generateImage(imageModel, prompt, size, signal);
       const expectedExtension = generated.mimeType === 'image/jpeg' ? '.jpg' : generated.mimeType === 'image/webp' ? '.webp' : '.png';
       if (!['.png', '.jpg', '.jpeg', '.webp'].includes(extname(uri.fsPath).toLowerCase())) {
-        uri = vscode.Uri.file(`${uri.fsPath}${expectedExtension}`);
+        uri = this.workspaceUri(`${uri.fsPath}${expectedExtension}`);
       } else if (generated.mimeType !== 'application/octet-stream' && !extensionMatchesMime(extname(uri.fsPath), generated.mimeType)) {
-        uri = vscode.Uri.file(uri.fsPath.slice(0, -extname(uri.fsPath).length) + expectedExtension);
+        uri = this.workspaceUri(uri.fsPath.slice(0, -extname(uri.fsPath).length) + expectedExtension);
       }
       let original: Uint8Array; let existed = true;
       try { original = await vscode.workspace.fs.readFile(uri); } catch { original = new Uint8Array(); existed = false; }
@@ -1068,6 +1457,7 @@ export class AgentRuntime {
       await vscode.workspace.fs.writeFile(uri, generated.bytes);
       this.onChange({ path: uri.fsPath, original, updated: generated.bytes, existed, added: 1, removed: existed ? 1 : 0 });
       const output = relative(this.workspaceRoot, uri.fsPath).replace(/\\/g, '/');
+      this.mutatedPaths.add(output);
       return `Ảnh đã được tạo: ${output} (${generated.mimeType}, ${generated.bytes.byteLength} bytes)${generated.revisedPrompt ? `\nPrompt đã tinh chỉnh: ${generated.revisedPrompt}` : ''}`;
     }
     if (name === 'write_file') {
@@ -1076,7 +1466,13 @@ export class AgentRuntime {
       if (!await waitForAbortable(this.requestApproval(`Agent muốn sửa ${relative(this.workspaceRoot, uri.fsPath)}`), signal)) return 'DENIED by user';
       let original: Uint8Array; let existed = true;
       try { original = await vscode.workspace.fs.readFile(uri); } catch { original = new Uint8Array(); existed = false; }
-      const updated = new TextEncoder().encode(String(args.content ?? ''));
+      const rawContent = String(args.content ?? '');
+      // Preserve CRLF line endings when editing an existing CRLF file so Git
+      // diffs do not report every single line as changed on Windows.
+      const originalText = existed && !isBinaryContent(original) ? new TextDecoder().decode(original) : '';
+      const preserveCrlf = originalText.includes('\r\n') && !rawContent.includes('\r\n');
+      const finalContent = preserveCrlf ? rawContent.replace(/\n/g, '\r\n') : rawContent;
+      const updated = new TextEncoder().encode(finalContent);
       await this.prepareMutation();
       await vscode.workspace.fs.createDirectory(vscode.Uri.file(dirname(uri.fsPath)));
       await vscode.workspace.fs.writeFile(uri, updated);
@@ -1088,14 +1484,29 @@ export class AgentRuntime {
       const uri = this.workspaceUri(String(args.path ?? ''));
       if (this.readOnly) return 'DENIED: Plan mode chỉ đọc, không được sửa file.';
       if (!await waitForAbortable(this.requestApproval(`Agent muốn sửa ${relative(this.workspaceRoot, uri.fsPath)}`), signal)) return 'DENIED by user';
-      const current = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+      const original = await vscode.workspace.fs.readFile(uri);
+      const current = new TextDecoder().decode(original);
       const oldText = String(args.oldText ?? '');
       const newText = String(args.newText ?? '');
       if (!oldText) return 'ERROR: oldText cannot be empty.';
-      const occurrences = current.split(oldText).length - 1;
-      if (occurrences !== 1) return `ERROR: expected exactly one match, found ${occurrences}.`;
-      const original = new TextEncoder().encode(current);
-      const updated = new TextEncoder().encode(current.replace(oldText, newText));
+      let patched: string;
+      const exactOccurrences = current.split(oldText).length - 1;
+      if (exactOccurrences === 1) {
+        // Callback replacement avoids String.prototype.replace interpreting $&, $`, $', $$ in code!
+        patched = current.replace(oldText, () => newText);
+      } else {
+        const usesCrlf = current.includes('\r\n');
+        const normalizedCurrent = current.replace(/\r\n/g, '\n');
+        const normalizedOld = oldText.replace(/\r\n/g, '\n');
+        const normalizedOccurrences = normalizedCurrent.split(normalizedOld).length - 1;
+        if (normalizedOccurrences !== 1) {
+          return `ERROR: expected exactly one match, found ${Math.max(exactOccurrences, normalizedOccurrences)}.`;
+        }
+        const normalizedNew = newText.replace(/\r\n/g, '\n');
+        const normalizedPatched = normalizedCurrent.replace(normalizedOld, () => normalizedNew);
+        patched = usesCrlf ? normalizedPatched.replace(/\n/g, '\r\n') : normalizedPatched;
+      }
+      const updated = new TextEncoder().encode(patched);
       await this.prepareMutation();
       await vscode.workspace.fs.writeFile(uri, updated);
       const { added, removed } = countLineChanges(original, updated);
@@ -1183,7 +1594,7 @@ export class AgentRuntime {
   }
 
   private commandPolicyError(command: string): string | undefined {
-    if (/\bgit\s+(?:add|commit|push|pull|reset|clean|checkout|restore|stash|merge|rebase|cherry-pick)\b/i.test(command)) {
+    if (/\bgit(?:\.exe)?(?:\s+(?:-[Cc]\s+\S+|--git-dir(?:=\S+|\s+\S+)|--work-tree(?:=\S+|\s+\S+)))*\s+(?:add|commit|push|pull|reset|clean|checkout|restore|stash|merge|rebase|cherry-pick)\b/i.test(command)) {
       return 'Use the dedicated git_status, git_diff, git_commit or git_push tool instead of run_command for Git operations.';
     }
     return validateCommandPolicy(command, this.commandPolicy);
@@ -1269,8 +1680,8 @@ export class AgentRuntime {
     const timeoutSeconds = Number.isFinite(requestedTimeout)
       ? Math.max(toolName === 'run_tests' ? 30 : 5, Math.min(maximumSeconds, requestedTimeout))
       : defaultSeconds;
-    await this.prepareMutation();
     const trackChanges = toolName === 'run_command' && !isReadOnlyCommand(command);
+    if (trackChanges) await this.prepareMutation();
     const before = trackChanges ? await this.captureWorkspaceSnapshot() : undefined;
     try {
       return this.commandRunner
@@ -1282,8 +1693,12 @@ export class AgentRuntime {
           );
     } finally {
       if (before) {
-        const after = await this.captureWorkspaceSnapshot([...before.keys()]);
-        this.registerSnapshotChanges(before, after);
+        try {
+          const after = await this.captureWorkspaceSnapshot([...before.keys()]);
+          this.registerSnapshotChanges(before, after);
+        } catch {
+          // Never mask a command result if workspace snapshot diffing fails.
+        }
       }
     }
   }
@@ -1316,9 +1731,47 @@ export class AgentRuntime {
   }
 }
 
-function isReadOnlyCommand(command: string): boolean {
+const MUTATING_SHELL_FRAGMENT = /(?:^|[^0-9])>>?\s*[^\s&]|\b(?:out-file|set-content|add-content|clear-content|tee-object|tee|new-item|remove-item|move-item|copy-item|rename-item|mkdir|rmdir|touch|rm|mv|cp|del|erase|rd|sc|ni|ri|mi|cpi|rni|sed\s+-i|perl\s+-i)\b/i;
+
+const READ_ONLY_COMMAND_SEGMENT = /^(?:(?:&\s*)?(?:get-content|gc|cat|type|get-childitem|gci|ls|dir|get-item|gi|get-itemproperty|test-path|select-string|sls|resolve-path|get-location|pwd|measure-object|measure|get-filehash|get-process|get-date|get-command|write-output|write-host|echo|select-object|select|where-object|where|\?|sort-object|sort|format-table|ft|format-list|fl|out-string|head|tail|wc|tree|rg|grep|egrep|fgrep|findstr|file|stat|which|where\.exe|whoami|env|printenv|uname|diff|cmp|sha256sum|md5sum|uniq|cut|tr|jq|less|more|codegraph)\b|find\b(?![^\r\n]*(?:-delete\b|-exec\b|-execdir\b|-ok\b))|git(?:\.exe)?(?:\s+(?:-[Cc]\s+\S+|--no-pager))*\s+(?:status|diff|log|show|branch|rev-parse|ls-files|ls-tree|blame|describe|tag|remote|shortlog|grep|cat-file|config\s+(?:--get|--list))\b|(?:npm|pnpm|yarn)(?:\.cmd)?\s+(?:test\b|run\s+(?:test|check|typecheck|lint)\b)|npx(?:\.cmd)?\s+(?:vitest|jest|tsc|eslint)\b|(?:python(?:3)?\s+-m\s+pytest|pytest\b|vitest\b|cargo\s+(?:test|check)\b|go\s+(?:test|vet)\b|dotnet\s+test\b|mvn\s+test\b|tsc\s+--noEmit\b))/i;
+
+export function isReadOnlyCommand(command: string): boolean {
   const value = command.trim();
-  return /^(?:git\s+(?:status|diff|log|show|branch)\b|(?:npm|pnpm|yarn)\s+(?:test\b|run\s+(?:test|check|typecheck|lint|build)\b)|(?:python(?:3)?\s+-m\s+pytest|pytest\b|cargo\s+test\b|go\s+test\b|dotnet\s+test\b|mvn\s+test\b|tsc\s+--noEmit\b))/i.test(value);
+  if (!value || MUTATING_SHELL_FRAGMENT.test(value)) return false;
+  // Split top-level command separators outside quotes so chained mutations
+  // like "git status && Remove-Item foo" are never classified as read-only.
+  const segments: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | undefined;
+  let depth = 0;
+  for (let index = 0; index < value.length; index++) {
+    const ch = value[index]!;
+    const next = value[index + 1];
+    if (quote) {
+      if (quote === '"' && ch === '`') { index++; continue; }
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === '(' || ch === '{' || ch === '[') { depth++; continue; }
+    if (ch === ')' || ch === '}' || ch === ']') { depth = Math.max(0, depth - 1); continue; }
+    if (depth === 0) {
+      if (ch === ';' || ch === '\n' || ch === '\r') {
+        segments.push(value.slice(start, index).trim());
+        start = index + 1;
+      } else if ((ch === '&' && next === '&') || (ch === '|' && next === '|')) {
+        segments.push(value.slice(start, index).trim());
+        index++;
+        start = index + 1;
+      } else if (ch === '|') {
+        segments.push(value.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+  }
+  segments.push(value.slice(start).trim());
+  const nonEmpty = segments.filter(Boolean);
+  return nonEmpty.length > 0 && nonEmpty.every((segment) => READ_ONLY_COMMAND_SEGMENT.test(segment));
 }
 
 function countContentLines(bytes: Uint8Array): number {

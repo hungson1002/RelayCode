@@ -5,7 +5,7 @@ export interface SessionSummaryTurn {
 }
 
 const GREETING_ONLY = /^(?:(?:xin\s+)?chào(?:\s+bạn)?|hello|hi|hey|alo)[.!?,\s-]*$/iu;
-const ERROR_TEXT = /\b(?:error|failed|failure|request failed|lỗi|thất bại|không thành công|chưa hoàn thành)\b/i;
+const ERROR_TEXT = /^(?:error:|request failed:|không thể|chưa hoàn thành|thất bại:)/iu;
 
 function compactText(value: string, max = 360): string {
   return value

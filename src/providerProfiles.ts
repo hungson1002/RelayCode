@@ -203,8 +203,8 @@ export class TelemetryStore {
   }
 
   public async record(profile: ProviderProfile, model: string, metrics: RequestMetrics): Promise<TelemetryRecord> {
-    const cost = profile.inputPricePerMillion !== undefined && profile.outputPricePerMillion !== undefined
-      ? (metrics.inputTokens / 1_000_000) * profile.inputPricePerMillion + (metrics.outputTokens / 1_000_000) * profile.outputPricePerMillion
+    const cost = profile.inputPricePerMillion !== undefined || profile.outputPricePerMillion !== undefined
+      ? (metrics.inputTokens / 1_000_000) * (profile.inputPricePerMillion ?? 0) + (metrics.outputTokens / 1_000_000) * (profile.outputPricePerMillion ?? 0)
       : undefined;
     const record: TelemetryRecord = {
       ...metrics,

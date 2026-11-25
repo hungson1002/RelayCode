@@ -141,6 +141,7 @@ export const MODEL_BRAND_RULES: ReadonlyArray<readonly [string, string]> = [
   ['vertex|google', 'google'],
   ['gpt|openai|codex|(^|[/_-])o[134](?:[/_.-]|$)', 'openai'],
   ['9router', '9router'],
+  ['omniroute', 'omniroute'],
   ['cockpit', 'cockpit']
 ];
 

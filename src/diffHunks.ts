@@ -19,7 +19,28 @@ export interface LineChangeStats {
   removed: number;
 }
 
+const MAX_MYERS_DISTANCE = 2_000;
+const BINARY_SAMPLE_BYTES = 8_192;
+
+export function isBinaryContent(value: Uint8Array): boolean {
+  if (!value.byteLength) return false;
+  const sampleLength = Math.min(value.byteLength, BINARY_SAMPLE_BYTES);
+  let suspicious = 0;
+  for (let index = 0; index < sampleLength; index++) {
+    const byte = value[index]!;
+    if (byte === 0) return true;
+    if (byte < 8 || (byte > 13 && byte < 32 && byte !== 27)) suspicious++;
+  }
+  return suspicious / sampleLength > 0.1;
+}
+
 export function countLineChanges(original: Uint8Array, updated: Uint8Array): LineChangeStats {
+  if (isBinaryContent(original) || isBinaryContent(updated)) {
+    const same = original.byteLength === updated.byteLength
+      && original.every((value, index) => value === updated[index]);
+    if (same) return { added: 0, removed: 0 };
+    return { added: updated.byteLength ? 1 : 0, removed: original.byteLength ? 1 : 0 };
+  }
   const before = lines(original);
   const after = lines(updated);
   let prefix = 0;
@@ -34,10 +55,12 @@ export function countLineChanges(original: Uint8Array, updated: Uint8Array): Lin
   const afterLength = after.length - prefix - suffix;
   if (!beforeLength) return { added: afterLength, removed: 0 };
   if (!afterLength) return { added: 0, removed: beforeLength };
-  const distance = shortestEditDistance(
-    before.slice(prefix, prefix + beforeLength),
-    after.slice(prefix, prefix + afterLength)
-  );
+  const beforeSlice = before.slice(prefix, prefix + beforeLength);
+  const afterSlice = after.slice(prefix, prefix + afterLength);
+  const distance = shortestEditDistance(beforeSlice, afterSlice, MAX_MYERS_DISTANCE);
+  if (distance === undefined) {
+    return countLineChangesLinear(beforeSlice, afterSlice);
+  }
   const delta = afterLength - beforeLength;
   return {
     added: (distance + delta) / 2,
@@ -163,13 +186,14 @@ function diff(before: string[], after: string[]): Op[] {
   return ops;
 }
 
-function shortestEditDistance(before: string[], after: string[]): number {
+function shortestEditDistance(before: string[], after: string[], maxDistance = before.length + after.length): number | undefined {
   const maximum = before.length + after.length;
-  const offset = maximum + 1;
-  const furthest = new Int32Array((maximum * 2) + 3);
+  const limit = Math.min(maximum, maxDistance);
+  const offset = limit + 1;
+  const furthest = new Int32Array((limit * 2) + 3);
   furthest.fill(-1);
   furthest[offset + 1] = 0;
-  for (let distance = 0; distance <= maximum; distance++) {
+  for (let distance = 0; distance <= limit; distance++) {
     for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
       const index = offset + diagonal;
       let x = diagonal === -distance
@@ -185,7 +209,24 @@ function shortestEditDistance(before: string[], after: string[]): number {
       if (x >= before.length && y >= after.length) return distance;
     }
   }
-  return maximum;
+  return limit < maximum ? undefined : maximum;
+}
+
+function countLineChangesLinear(before: string[], after: string[]): LineChangeStats {
+  const counts = new Map<string, number>();
+  for (const line of before) counts.set(line, (counts.get(line) ?? 0) + 1);
+  let common = 0;
+  for (const line of after) {
+    const remaining = counts.get(line) ?? 0;
+    if (remaining > 0) {
+      common++;
+      counts.set(line, remaining - 1);
+    }
+  }
+  return {
+    added: after.length - common,
+    removed: before.length - common
+  };
 }
 
 function lines(value: Uint8Array): string[] {

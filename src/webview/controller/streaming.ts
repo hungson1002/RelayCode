@@ -22,7 +22,7 @@ export const CHAT_CONTROLLER_STREAMING = String.raw`function flushAssistantText(
 
 function appendStreamingAssistantText(chunk) {
   if (!assistantBody || !chunk) return;
-  if (assistantMarkdownRenderedLength > assistantRawText.length) assistantMarkdownRenderedLength = 0;
+  if (!assistantBody.childNodes.length || assistantMarkdownRenderedLength > assistantRawText.length) assistantMarkdownRenderedLength = 0;
   if (!assistantStreamTextNode || !assistantStreamTextNode.isConnected || assistantStreamTextNode.parentElement?.parentElement !== assistantBody) {
     const liveCopy = document.createElement('span');
     liveCopy.className = 'streaming-plain-copy';
@@ -61,7 +61,7 @@ function completedStreamingMarkdownLength(source) {
 
 function appendMaterializedMarkdown(source, beforeNode) {
   const staging = document.createElement('div');
-  renderMarkdownInto(staging, source);
+  renderMarkdownInto(staging, source, assistantBody || staging);
   const first = staging.firstElementChild;
   const previous = beforeNode?.previousElementSibling || assistantBody?.lastElementChild;
   if (first && previous && /^(UL|OL)$/.test(first.tagName) && previous.tagName === first.tagName) {
@@ -188,6 +188,7 @@ function queueAssistantText(delta) {
 function markAssistantOutput() {
   if (assistantHasOutput) return;
   assistantHasOutput = true;
+  if (typeof finishThinkingBlock === 'function') finishThinkingBlock();
   workingStatus = '';
   updateWorkingLabel();
 }
